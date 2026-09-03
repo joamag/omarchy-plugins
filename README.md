@@ -9,6 +9,7 @@ A collection of plugins for the [Omarchy](https://omarchy.org) shell (Omarchy 4.
 | [`joamag.sysmon`](plugins/joamag.sysmon/) | bar-widget | CPU / memory / temperature / GPU / disk in the bar, popup with live meters and top processes |
 | [`joamag.docker`](plugins/joamag.docker/) | bar-widget | Running container count in the bar, popup to start / stop / restart containers or open lazydocker |
 | [`joamag.stocks`](plugins/joamag.stocks/) | bar-widget | S&P 500, NASDAQ, Dow and a stock watchlist in the bar, popup with range charts and sparklines |
+| [`joamag.github`](plugins/joamag.github/) | bar-widget | Review requests, your PRs with CI state, assigned issues and unread notifications via the gh CLI |
 
 ## Development
 

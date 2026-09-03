@@ -1,0 +1,56 @@
+{
+  "schemaVersion": 1,
+  "id": "joamag.github",
+  "name": "GitHub radar",
+  "version": "0.1.0",
+  "author": "João Magalhães",
+  "license": "Apache-2.0",
+  "description": "Review requests, your open pull requests with CI status, assigned issues and unread notifications from GitHub, in the bar and a popup.",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "Panel.qml"
+  },
+  "barWidget": {
+    "displayName": "GitHub radar",
+    "description": "What needs your attention on GitHub: reviews, your PRs and their checks, issues, notifications.",
+    "category": "Development",
+    "allowMultiple": false,
+    "defaultSection": "right",
+    "defaults": {
+      "refreshIntervalSec": 180,
+      "maxRows": 5,
+      "showReviews": true,
+      "showPulls": true,
+      "showIssues": true,
+      "showNotifications": true,
+      "hideWhenQuiet": false
+    },
+    "schema": [
+      {
+        "key": "refreshIntervalSec",
+        "type": "integer",
+        "label": "Refresh interval (seconds)",
+        "min": 60,
+        "max": 3600,
+        "step": 30,
+        "defaultValue": 180
+      },
+      {
+        "key": "maxRows",
+        "type": "integer",
+        "label": "Rows per section",
+        "min": 1,
+        "max": 15,
+        "step": 1,
+        "defaultValue": 5
+      },
+      { "key": "showReviews", "type": "boolean", "label": "Review requests", "defaultValue": true },
+      { "key": "showPulls", "type": "boolean", "label": "My pull requests", "defaultValue": true },
+      { "key": "showIssues", "type": "boolean", "label": "Assigned issues", "defaultValue": true },
+      { "key": "showNotifications", "type": "boolean", "label": "Unread notifications", "defaultValue": true },
+      { "key": "hideWhenQuiet", "type": "boolean", "label": "Hide the widget when nothing needs attention", "defaultValue": false }
+    ]
+  }
+}
