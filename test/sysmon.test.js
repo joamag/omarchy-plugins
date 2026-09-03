@@ -2,6 +2,7 @@
 
 const { describe, it } = require("node:test")
 const assert = require("node:assert/strict")
+const { execSync } = require("node:child_process")
 const { loadModel, runScript, tmpdir, fakeCommand } = require("./helpers")
 
 const Model = loadModel("joamag.sysmon")
@@ -20,6 +21,8 @@ const RAW = [
   "load5\t0.69",
   "load15\t0.99",
   "uptime_sec\t158162",
+  "kernel_release\t7.1.9-arch1-2",
+  "kernel_built\t1787350739",
   "cpu_temp_c\t55.6",
   "gpu_name\tNVIDIA GeForce GTX 1650",
   "gpu_util\t15",
@@ -215,6 +218,32 @@ describe("formatUptime", () => {
   })
 })
 
+describe("kernelRelease", () => {
+  it("returns the running release or an empty string", () => {
+    assert.equal(Model.kernelRelease(snapshot), "7.1.9-arch1-2")
+    assert.equal(Model.kernelRelease(noGpu), "")
+    assert.equal(Model.kernelRelease(null), "")
+  })
+})
+
+describe("kernelBuilt", () => {
+  it("parses the build timestamp or returns NaN", () => {
+    assert.equal(Model.kernelBuilt(snapshot), 1787350739)
+    assert.ok(Number.isNaN(Model.kernelBuilt(noGpu)))
+    assert.ok(Number.isNaN(Model.kernelBuilt(Model.parseSnapshot("kernel_built\tunknown"))))
+    assert.ok(Number.isNaN(Model.kernelBuilt(null)))
+  })
+})
+
+describe("formatDate", () => {
+  it("prints day, month and year in local time", () => {
+    assert.equal(Model.formatDate(new Date(2026, 7, 21, 12).getTime() / 1000), "21 Aug 2026")
+    assert.equal(Model.formatDate(new Date(2027, 0, 1, 12).getTime() / 1000), "1 Jan 2027")
+    assert.equal(Model.formatDate(NaN), "—")
+    assert.equal(Model.formatDate(undefined), "—")
+  })
+})
+
 describe("normalizeMetric", () => {
   it("accepts known metrics case-insensitively and defaults to cpu", () => {
     assert.equal(Model.normalizeMetric("Memory"), "memory")
@@ -284,6 +313,15 @@ describe("stats.sh", () => {
     }
     assert.ok(parsed.procs.length > 0 && parsed.procs.length <= 3)
     assert.ok(parsed.procs.every((p) => /^\d+$/.test(p.pid) && Number.isFinite(p.cpu) && Number.isFinite(p.mem) && p.name !== ""))
+  })
+
+  it("reports the running kernel and a plausible build time", () => {
+    const parsed = Model.parseSnapshot(runScript("joamag.sysmon", "stats.sh", ["0"]).stdout)
+    assert.equal(parsed.kernel_release, execSync("uname -r").toString().trim())
+    const built = Model.kernelBuilt(parsed)
+    assert.ok(Number.isFinite(built), `kernel_built missing or not numeric: ${parsed.kernel_built}`)
+    // Built after Linux 6.0 shipped and not in the future.
+    assert.ok(built > Date.UTC(2022, 9, 1) / 1000 && built <= Date.now() / 1000 + 86400)
   })
 
   it("omits the process list when zero rows are requested", () => {

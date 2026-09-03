@@ -1,6 +1,6 @@
 # joamag.sysmon
 
-System monitor for the Omarchy bar: one headline metric in the bar (CPU by default) and a popup with live meters for CPU, memory, swap, GPU, VRAM and the root disk, the CPU/GPU temperatures, load averages, uptime and the busiest processes.
+System monitor for the Omarchy bar: one headline metric in the bar (CPU by default) and a popup with live meters for CPU, memory, swap, GPU, VRAM and the root disk, the CPU/GPU temperatures, load averages, the busiest processes, and a kernel section with the running release, the day it was built and the uptime.
 
 ## Interactions
 
@@ -32,4 +32,4 @@ omarchy-shell shell call joamag.sysmon cycleMetric
 
 ## Data sources
 
-`stats.sh` reads `/proc/stat`, `/proc/meminfo`, `/proc/loadavg`, `/proc/uptime`, `/sys/class/hwmon` (k10temp, zenpower, coretemp), `nvidia-smi` or the amdgpu sysfs, `df` and `top`. No daemon, no root.
+`stats.sh` reads `/proc/stat`, `/proc/meminfo`, `/proc/loadavg`, `/proc/uptime`, `/sys/class/hwmon` (k10temp, zenpower, coretemp), `nvidia-smi` or the amdgpu sysfs, `df`, `top` and `uname` (the kernel's build timestamp is parsed out of `uname -v`). No daemon, no root.

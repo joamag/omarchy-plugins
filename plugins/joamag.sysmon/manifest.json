@@ -2,10 +2,10 @@
   "schemaVersion": 1,
   "id": "joamag.sysmon",
   "name": "System monitor",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "author": "João Magalhães",
   "license": "Apache-2.0",
-  "description": "CPU, memory, temperature, GPU and disk usage in the bar, with a popup showing live meters and the busiest processes.",
+  "description": "CPU, memory, temperature, GPU and disk usage in the bar, with a popup showing live meters, the busiest processes and the running kernel.",
   "kinds": [
     "bar-widget"
   ],
@@ -29,7 +29,13 @@
         "key": "barMetric",
         "type": "select",
         "label": "Metric shown in the bar",
-        "options": ["cpu", "memory", "temperature", "gpu", "disk"],
+        "options": [
+          "cpu",
+          "memory",
+          "temperature",
+          "gpu",
+          "disk"
+        ],
         "defaultValue": "cpu"
       },
       {

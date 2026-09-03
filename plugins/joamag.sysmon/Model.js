@@ -157,6 +157,26 @@ function formatUptime(seconds) {
   return minutes + "m"
 }
 
+function kernelRelease(s) {
+  return s && s.kernel_release ? String(s.kernel_release) : ""
+}
+
+// Build time of the running kernel as a unix timestamp; NaN when stats.sh
+// could not parse it out of `uname -v`.
+function kernelBuilt(s) {
+  if (!s || s.kernel_built === undefined) return NaN
+  return num(s.kernel_built)
+}
+
+var MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+
+function formatDate(unixSeconds) {
+  var n = num(unixSeconds)
+  if (!isFinite(n)) return "—"
+  var d = new Date(n * 1000)
+  return d.getDate() + " " + MONTHS[d.getMonth()] + " " + d.getFullYear()
+}
+
 function normalizeMetric(metric) {
   var m = String(metric || "").toLowerCase()
   return METRICS.indexOf(m) >= 0 ? m : "cpu"

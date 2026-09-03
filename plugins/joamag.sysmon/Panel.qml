@@ -124,7 +124,7 @@ Panel {
     function cycleMetric(): void { root.cycleMetric() }
     // Build stamp so `omarchy-shell joamag.sysmon version` tells which copy of
     // the code the shell is running after a reload.
-    function version(): string { return "0.1.0" }
+    function version(): string { return "0.2.0" }
   }
 
   onOpenedChanged: {
@@ -330,8 +330,25 @@ Panel {
             width: (parent.width - parent.spacing) / 2
             spacing: Style.spacing.labelGap
             InfoPair { visible: root.gpuAvailable; label: "GPU temp"; value: Model.formatTemp(root.gpuTemp) }
-            InfoPair { label: "Uptime"; value: root.loaded ? Model.formatUptime(root.snapshot.uptime_sec) : "—" }
           }
+        }
+
+        // ---------- Kernel: release, when it was built, how long it has run ----------
+        PanelSeparator { foreground: root.foreground }
+
+        Column {
+          width: parent.width
+          spacing: Style.space(6)
+
+          PanelSectionHeader {
+            text: "KERNEL"
+            foreground: root.foreground
+            fontFamily: root.fontFamily
+          }
+
+          InfoPair { label: "Linux"; value: root.loaded && Model.kernelRelease(root.snapshot) !== "" ? Model.kernelRelease(root.snapshot) : "—" }
+          InfoPair { label: "Released"; value: Model.formatDate(Model.kernelBuilt(root.snapshot)) }
+          InfoPair { label: "Uptime"; value: root.loaded ? Model.formatUptime(root.snapshot.uptime_sec) : "—" }
         }
 
         // ---------- Processes ----------

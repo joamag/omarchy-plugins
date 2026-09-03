@@ -36,6 +36,19 @@ awk '
 awk '{ printf "load1\t%s\nload5\t%s\nload15\t%s\n", $1, $2, $3 }' /proc/loadavg
 awk '{ printf "uptime_sec\t%d\n", $1 }' /proc/uptime
 
+# Running kernel and when it was built. `uname -v` ends with the build
+# timestamp after a distro-specific prefix ("#1 SMP PREEMPT_DYNAMIC Fri, 21 Aug
+# 2026 ..."), so the words are dropped from the front until date(1) accepts
+# the remainder; a format it never accepts simply leaves the key out.
+printf 'kernel_release\t%s\n' "$(uname -r)"
+read -r -a version_words <<<"$(uname -v | tr -d '()')"
+for (( i = 0; i < ${#version_words[@]}; i++ )); do
+  if built=$(date -d "${version_words[*]:i}" +%s 2>/dev/null); then
+    printf 'kernel_built\t%s\n' "$built"
+    break
+  fi
+done
+
 # CPU package temperature: prefer the well-known CPU sensor drivers, fall back
 # to the first hwmon that exposes a temperature at all.
 cpu_temp=""
