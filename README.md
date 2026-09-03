@@ -8,6 +8,7 @@ A collection of plugins for the [Omarchy](https://omarchy.org) shell (Omarchy 4.
 |---|---|---|
 | [`joamag.sysmon`](plugins/joamag.sysmon/) | bar-widget | CPU / memory / temperature / GPU / disk in the bar, popup with live meters and top processes |
 | [`joamag.docker`](plugins/joamag.docker/) | bar-widget | Running container count in the bar, popup to start / stop / restart containers or open lazydocker |
+| [`joamag.stocks`](plugins/joamag.stocks/) | bar-widget | S&P 500, NASDAQ, Dow and a stock watchlist in the bar, popup with range charts and sparklines |
 
 ## Development
 
@@ -38,6 +39,7 @@ Shell log for debugging plugin load errors: `qs log -p /usr/share/omarchy/shell`
 - Bar-widget plugins extend `qs.Ui` `Panel` and follow the first-party popup pattern (`KeyboardPanel` + `PanelKeyCatcher`), so keyboard navigation, tooltips and theming match the built-in widgets.
 - Helper scripts ship inside the plugin folder and are resolved from the QML file location, never from `$OMARCHY_PATH`.
 - Plugins never need root and never write outside `~/.config/omarchy/shell.json` (through the shell's own settings API).
+- Custom properties on `Item`-derived components avoid the built-in anchor line names (`baseline`, `left`, `top`, ...); those are FINAL and make the whole widget fail to load with "Cannot override FINAL property".
 
 ## Publishing a plugin
 

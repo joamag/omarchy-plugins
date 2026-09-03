@@ -1,0 +1,72 @@
+{
+  "schemaVersion": 1,
+  "id": "joamag.stocks",
+  "name": "Stocks",
+  "version": "0.1.0",
+  "author": "João Magalhães",
+  "license": "Apache-2.0",
+  "description": "Market watchlist: one index or stock in the bar, popup with an intraday chart, range switching and sparklines for every symbol.",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "Panel.qml"
+  },
+  "barWidget": {
+    "displayName": "Stocks",
+    "description": "S&P 500, NASDAQ, Dow and a stock watchlist with charts.",
+    "category": "Finance",
+    "allowMultiple": true,
+    "defaultSection": "center",
+    "defaults": {
+      "symbols": "^GSPC,^IXIC,^DJI,AMD,INTC,NVDA,AAPL,MSFT",
+      "barSymbol": "^GSPC",
+      "showPrice": false,
+      "showChange": true,
+      "range": "1d",
+      "refreshIntervalSec": 60
+    },
+    "schema": [
+      {
+        "key": "symbols",
+        "type": "string",
+        "label": "Watchlist (comma separated Yahoo Finance symbols)",
+        "defaultValue": "^GSPC,^IXIC,^DJI,AMD,INTC,NVDA,AAPL,MSFT"
+      },
+      {
+        "key": "barSymbol",
+        "type": "string",
+        "label": "Symbol shown in the bar",
+        "defaultValue": "^GSPC"
+      },
+      {
+        "key": "showPrice",
+        "type": "boolean",
+        "label": "Show the price in the bar",
+        "defaultValue": false
+      },
+      {
+        "key": "showChange",
+        "type": "boolean",
+        "label": "Show the daily change in the bar",
+        "defaultValue": true
+      },
+      {
+        "key": "range",
+        "type": "select",
+        "label": "Default chart range",
+        "options": ["1d", "5d", "1mo", "6mo", "1y"],
+        "defaultValue": "1d"
+      },
+      {
+        "key": "refreshIntervalSec",
+        "type": "integer",
+        "label": "Refresh interval (seconds)",
+        "min": 15,
+        "max": 3600,
+        "step": 15,
+        "defaultValue": 60
+      }
+    ]
+  }
+}

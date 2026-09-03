@@ -124,7 +124,7 @@ Panel {
     function cycleMetric(): void { root.cycleMetric() }
     // Build stamp so `omarchy-shell joamag.sysmon version` tells which copy of
     // the code the shell is running after a reload.
-    function version(): string { return "0.1.0-dev2" }
+    function version(): string { return "0.1.0" }
   }
 
   onOpenedChanged: {
