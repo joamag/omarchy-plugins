@@ -93,7 +93,7 @@ function shortLabel(symbol) {
 // Company names as Yahoo ships them are legal names; trim the suffixes so
 // "Advanced Micro Devices, Inc." fits a row.
 function cleanName(name) {
-  var s = String(name || "")
+  var s = String(name || "").replace(/\s+/g, " ")
   s = s.replace(/,?\s+(Inc\.?|Incorporated|Corporation|Corp\.?|Co\.?|Company|Ltd\.?|Limited|plc|PLC|S\.A\.|SA|N\.V\.|NV|AG|SE|Holdings?)\s*$/g, "")
   return s.trim()
 }
@@ -295,6 +295,49 @@ function formatAxis(unixSeconds, range) {
   case "6mo": return MONTHS[d.getMonth()]
   default: return MONTHS[d.getMonth()] + " " + String(d.getFullYear()).slice(2)
   }
+}
+
+// quotes.sh search output: { query, results: [{symbol, name, exchange, type}] }.
+function parseSearch(raw) {
+  var lines = String(raw || "").split("\n")
+  for (var i = 0; i < lines.length; i++) {
+    var line = lines[i].trim()
+    if (line === "") continue
+    try {
+      var obj = JSON.parse(line)
+      if (obj && Array.isArray(obj.results)) return { query: String(obj.query || ""), results: obj.results, error: obj.error || "" }
+    } catch (e) {
+      // skip
+    }
+  }
+  return { query: "", results: [], error: "" }
+}
+
+// Suggestions the add field shows: matches not already on the watchlist.
+function filterSuggestions(results, symbols) {
+  var out = []
+  for (var i = 0; i < results.length; i++) {
+    var r = results[i]
+    if (!r || !r.symbol) continue
+    if (symbols.indexOf(String(r.symbol).toUpperCase()) >= 0) continue
+    out.push(r)
+  }
+  return out
+}
+
+function suggestionMeta(result) {
+  var parts = []
+  if (result.exchange) parts.push(result.exchange)
+  if (result.type) parts.push(result.type)
+  return parts.join(" · ")
+}
+
+// Timestamp shown while hovering a chart point.
+function formatPointTime(unixSeconds, range) {
+  var d = new Date(num(unixSeconds) * 1000)
+  if (range === "1d") return pad2(d.getHours()) + ":" + pad2(d.getMinutes())
+  if (range === "5d") return DAYS[d.getDay()] + " " + pad2(d.getHours()) + ":" + pad2(d.getMinutes())
+  return d.getDate() + " " + MONTHS[d.getMonth()] + " " + d.getFullYear()
 }
 
 function seriesStats(points) {

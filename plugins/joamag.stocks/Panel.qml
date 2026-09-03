@@ -29,6 +29,27 @@ Panel {
   property double lastUpdated: 0
   property bool cursorActive: false
   property int cursorIndex: 0
+  // Interactive watchlist editing: the add field at the bottom of the list,
+  // the symbol being validated against Yahoo and the last validation error.
+  property bool editing: false
+  property bool validating: false
+  property string pendingSymbol: ""
+  property string addError: ""
+  // Autocomplete for the add field: Yahoo search results for the current
+  // text, and which one the arrow keys have highlighted (-1 = typed text).
+  property var suggestions: []
+  property int suggestionIndex: -1
+  property string searchQuery: ""
+
+  // Chart point under the pointer, or null. While set, the hero shows that
+  // point's price and its change against the previous close.
+  readonly property var hoveredPoint: bigChart.hoverPoint
+  readonly property real hoveredChange: hoveredPoint && root.activeSeries ? hoveredPoint.v - Number(root.activeSeries.prevClose) : NaN
+  readonly property real hoveredChangePct: {
+    if (!hoveredPoint || !root.activeSeries) return NaN
+    var prev = Number(root.activeSeries.prevClose)
+    return isFinite(prev) && prev !== 0 ? (hoveredPoint.v - prev) / prev * 100 : NaN
+  }
 
   readonly property var symbols: Model.parseSymbols(setting("symbols", Model.DEFAULT_SYMBOLS))
   readonly property string barSymbol: {
@@ -64,7 +85,8 @@ Panel {
   readonly property var actions: [
     { label: "Refresh", icon: "󰑐", tooltip: "Refresh quotes", run: function() { root.refresh() } },
     { label: "Pin", icon: "󰐃", tooltip: "Show " + Model.shortLabel(root.activeSymbol) + " in the bar", run: function() { root.pinSymbol(root.activeSymbol) } },
-    { label: "Open", icon: "󰏌", tooltip: "Open " + Model.shortLabel(root.activeSymbol) + " on Yahoo Finance", run: function() { root.openInBrowser(root.activeSymbol) } }
+    { label: "Open", icon: "󰏌", tooltip: "Open " + Model.shortLabel(root.activeSymbol) + " on Yahoo Finance", run: function() { root.openInBrowser(root.activeSymbol) } },
+    { label: "Add", icon: "󰐕", tooltip: "Add a symbol to the watchlist", run: function() { root.startAdding() } }
   ]
 
   // Keyboard cursor walks the watchlist rows first, then the footer actions.
@@ -152,15 +174,166 @@ Panel {
     pinSymbol(Model.nextSymbol(symbols, barSymbol, delta === undefined ? 1 : delta))
   }
 
-  // Persist one inline setting on this widget's shell.json entry, the way the
-  // clock stores its format, so it survives a shell restart.
-  function persistSetting(key, value) {
+  // Persist inline settings on this widget's shell.json entry, the way the
+  // clock stores its format, so they survive a shell restart. The watchlist
+  // lives there too, which is why editing it in the popup and editing the
+  // file are the same thing.
+  function persistSettings(changes) {
     var entry = { id: root.moduleName }
     for (var k in root.settings) if (k !== "id") entry[k] = root.settings[k]
-    entry[key] = value
+    for (var key in changes) entry[key] = changes[key]
     root.settings = entry
     if (root.bar && root.bar.shell && typeof root.bar.shell.updateEntryInline === "function")
       root.bar.shell.updateEntryInline(root.moduleName, entry)
+  }
+
+  function persistSetting(key, value) {
+    var changes = {}
+    changes[key] = value
+    persistSettings(changes)
+  }
+
+  // ---- Watchlist editing -------------------------------------------------
+
+  function saveSymbols(list) {
+    var cleaned = Model.parseSymbols(list)
+    var changes = { symbols: cleaned.join(",") }
+    if (cleaned.indexOf(barSymbol) < 0) changes.barSymbol = cleaned[0]
+    persistSettings(changes)
+    if (cleaned.indexOf(selectedSymbol) < 0) selectedSymbol = cleaned[0]
+    if (cursorIndex >= cursorCount) cursorIndex = Math.max(0, cursorCount - 1)
+  }
+
+  function addSymbol(symbol) {
+    var s = String(symbol || "").trim().toUpperCase()
+    if (s === "" || symbols.indexOf(s) >= 0) return false
+    saveSymbols(symbols.concat([s]))
+    return true
+  }
+
+  function removeSymbol(symbol) {
+    var idx = symbols.indexOf(symbol)
+    if (idx < 0) return false
+    if (symbols.length <= 1) {
+      lastError = "Keep at least one symbol in the watchlist"
+      return false
+    }
+    var next = symbols.slice()
+    next.splice(idx, 1)
+    saveSymbols(next)
+    return true
+  }
+
+  function moveSymbol(symbol, delta) {
+    var idx = symbols.indexOf(symbol)
+    var target = idx + delta
+    if (idx < 0 || target < 0 || target >= symbols.length) return
+    var next = symbols.slice()
+    next.splice(idx, 1)
+    next.splice(target, 0, symbol)
+    saveSymbols(next)
+    cursorActive = true
+    cursorIndex = target
+  }
+
+  function cursorSymbol() {
+    return cursorActive && cursorIndex < symbols.length ? symbols[cursorIndex] : activeSymbol
+  }
+
+  function startAdding() {
+    editing = true
+    addError = ""
+    addField.text = ""
+    clearSuggestions()
+    Qt.callLater(function() { addField.forceActiveFocus() })
+  }
+
+  function cancelAdding() {
+    editing = false
+    validating = false
+    pendingSymbol = ""
+    addError = ""
+    clearSuggestions()
+    Qt.callLater(function() { if (keyCatcher) keyCatcher.forceActiveFocus() })
+  }
+
+  function clearSuggestions() {
+    suggestions = []
+    suggestionIndex = -1
+    searchQuery = ""
+    searchDebounce.stop()
+  }
+
+  // Debounced Yahoo symbol search for whatever is in the add field.
+  function runSearch() {
+    var query = String(addField.text || "").trim()
+    if (!editing || query.length < 1) { clearSuggestions(); return }
+    if (searchProc.running) { searchDebounce.restart(); return }
+    searchQuery = query
+    searchProc.command = [root.scriptPath, "search", query]
+    searchProc.running = true
+  }
+
+  function applySearch(raw) {
+    var result = Model.parseSearch(raw)
+    // Ignore answers for text the user has already typed past.
+    if (!editing || result.query !== String(addField.text || "").trim()) return
+    suggestions = Model.filterSuggestions(result.results, symbols)
+    if (suggestionIndex >= suggestions.length) suggestionIndex = suggestions.length - 1
+  }
+
+  function moveSuggestion(delta) {
+    if (suggestions.length === 0) { suggestionIndex = -1; return }
+    suggestionIndex = Math.max(-1, Math.min(suggestions.length - 1, suggestionIndex + delta))
+  }
+
+  function chooseSuggestion(index) {
+    if (index < 0 || index >= suggestions.length) return
+    commitAdd(String(suggestions[index].symbol))
+  }
+
+  // Enter in the add field: check the symbol exists on Yahoo before it lands
+  // in the list, so a typo shows an error instead of a dead row. A highlighted
+  // suggestion takes precedence over the typed text.
+  function commitAdd(symbolOverride) {
+    var symbol = String(symbolOverride || addField.text || "").trim().toUpperCase()
+    if (symbol === "") { cancelAdding(); return }
+    if (symbols.indexOf(symbol) >= 0) {
+      addError = Model.shortLabel(symbol) + " is already in the watchlist"
+      return
+    }
+    if (validateProc.running) return
+    pendingSymbol = symbol
+    validating = true
+    addError = ""
+    validateProc.command = [root.scriptPath, "quotes", symbol]
+    validateProc.running = true
+  }
+
+  function applyValidation(raw) {
+    var list = Model.parseLines(raw)
+    var symbol = pendingSymbol
+    validating = false
+    pendingSymbol = ""
+    if (symbol === "" || !editing) return
+    if (list.length === 0 || list[0].error) {
+      addError = "Unknown symbol " + symbol + (list.length > 0 && list[0].error ? " · " + list[0].error : "")
+      return
+    }
+    // Seed the quote so the new row shows data right away, then persist.
+    var next = {}
+    for (var key in quotes) next[key] = quotes[key]
+    next[symbol] = list[0]
+    quotes = next
+    addSymbol(symbol)
+    selectedSymbol = symbol
+    cursorActive = true
+    cursorIndex = Math.max(0, symbols.indexOf(symbol))
+    ensureSeries()
+    // Stay in the field so several symbols can be typed in a row.
+    addField.text = ""
+    clearSuggestions()
+    addField.forceActiveFocus()
   }
 
   function pinSymbol(symbol) {
@@ -201,7 +374,9 @@ Panel {
     function toggle(): void { root.toggle() }
     function refresh(): void { root.refresh() }
     function cycleSymbol(): void { root.cycleSymbol(1) }
-    function version(): string { return "0.1.0" }
+    function addSymbol(symbol: string): string { return root.addSymbol(symbol) ? "ok" : "exists" }
+    function removeSymbol(symbol: string): string { return root.removeSymbol(String(symbol || "").trim().toUpperCase()) ? "ok" : "unknown" }
+    function version(): string { return "0.2.0" }
   }
 
   onOpenedChanged: {
@@ -211,6 +386,8 @@ Panel {
       cursorIndex = Math.max(0, symbols.indexOf(barSymbol))
       refresh()
       ensureSeries()
+    } else if (editing) {
+      cancelAdding()
     }
   }
 
@@ -233,6 +410,24 @@ Panel {
       // The selection may have moved while this fetch ran.
       Qt.callLater(root.ensureSeries)
     }
+  }
+
+  Process {
+    id: validateProc
+    stdout: StdioCollector { waitForEnd: true; onStreamFinished: root.applyValidation(text) }
+    onExited: if (root.validating) root.applyValidation("")
+  }
+
+  Process {
+    id: searchProc
+    stdout: StdioCollector { waitForEnd: true; onStreamFinished: root.applySearch(text) }
+  }
+
+  Timer {
+    id: searchDebounce
+    interval: 220
+    repeat: false
+    onTriggered: root.runSearch()
   }
 
   Timer {
@@ -278,6 +473,8 @@ Panel {
     PanelKeyCatcher {
       id: keyCatcher
       anchors.fill: parent
+      blocked: root.editing
+      onDeleteRequested: if (root.cursorActive && root.cursorIndex < root.symbols.length) root.removeSymbol(root.symbols[root.cursorIndex])
       onMoveRequested: function(dx, dy) {
         if (dy !== 0) { root.moveCursor(dy); return }
         // Left/right steps the range while the cursor sits on the chart or
@@ -292,6 +489,9 @@ Panel {
         if (text === "o") root.openInBrowser(root.activeSymbol)
         else if (text === "p") root.pinSymbol(root.activeSymbol)
         else if (text === "r") root.refresh()
+        else if (text === "a") root.startAdding()
+        else if (text === "J") root.moveSymbol(root.cursorSymbol(), 1)
+        else if (text === "K") root.moveSymbol(root.cursorSymbol(), -1)
       }
 
       Column {
@@ -331,9 +531,12 @@ Panel {
                 var parts = []
                 var secondary = Model.secondaryLabel(root.activeSymbol, root.activeQuote)
                 if (secondary) parts.push(secondary)
-                var state = Model.marketStateLabel(root.activeQuote)
-                if (state) parts.push(state)
-                if (root.quotesLoading) parts.push("Updating")
+                if (root.hoveredPoint) parts.push("At " + Model.formatPointTime(root.hoveredPoint.t, root.range))
+                else {
+                  var state = Model.marketStateLabel(root.activeQuote)
+                  if (state) parts.push(state)
+                  if (root.quotesLoading) parts.push("Updating")
+                }
                 return parts.join(" · ").toUpperCase()
               }
               color: Qt.darker(root.foreground, 1.4)
@@ -354,7 +557,9 @@ Panel {
 
             Text {
               textFormat: Text.PlainText
-              text: Model.formatPrice(root.activeQuote)
+              text: root.hoveredPoint
+                ? Model.formatPrice(root.hoveredPoint.v, root.activeQuote ? root.activeQuote.currency : "", root.activeSymbol)
+                : Model.formatPrice(root.activeQuote)
               color: root.foreground
               font.family: root.fontFamily
               font.pixelSize: Style.font.displayLarge
@@ -364,8 +569,15 @@ Panel {
 
             Text {
               textFormat: Text.PlainText
-              text: Model.hasQuote(root.activeQuote) ? Model.trendGlyph(Model.change(root.activeQuote)) + " " + Model.formatChange(root.activeQuote) : "—"
-              color: root.trendColor(Model.change(root.activeQuote))
+              text: {
+                if (root.hoveredPoint) {
+                  if (!isFinite(root.hoveredChange)) return "—"
+                  var sign = root.hoveredChange > 0 ? "+" : ""
+                  return Model.trendGlyph(root.hoveredChange) + " " + sign + Model.formatNumber(root.hoveredChange, Model.priceDecimals(root.hoveredPoint.v)) + " (" + Model.formatPct(root.hoveredChangePct) + ")"
+                }
+                return Model.hasQuote(root.activeQuote) ? Model.trendGlyph(Model.change(root.activeQuote)) + " " + Model.formatChange(root.activeQuote) : "—"
+              }
+              color: root.trendColor(root.hoveredPoint ? root.hoveredChange : Model.change(root.activeQuote))
               font.family: root.fontFamily
               font.pixelSize: Style.font.bodySmall
               font.bold: true
@@ -457,6 +669,69 @@ Panel {
             font.family: root.fontFamily
             font.pixelSize: Style.font.bodySmall
           }
+
+          // Hover crosshair: hairline and dot on the nearest point, with a
+          // small bubble carrying time and price. The hero above mirrors it.
+          MouseArea {
+            anchors.fill: parent
+            hoverEnabled: true
+            acceptedButtons: Qt.NoButton
+            cursorShape: bigChart.points.length > 0 ? Qt.CrossCursor : Qt.ArrowCursor
+            onPositionChanged: function(mouse) { bigChart.hoverIndex = bigChart.indexAt(mouse.x) }
+            onExited: bigChart.hoverIndex = -1
+          }
+
+          Rectangle {
+            visible: root.hoveredPoint !== null
+            x: root.hoveredPoint ? Math.round(root.hoveredPoint.x) : 0
+            y: bigChart.padTop
+            width: 1
+            height: parent.height - bigChart.padTop - bigChart.padBottom
+            color: Util.alpha(root.foreground, 0.35)
+          }
+
+          Rectangle {
+            visible: root.hoveredPoint !== null
+            x: root.hoveredPoint ? root.hoveredPoint.x - width / 2 : 0
+            y: root.hoveredPoint ? root.hoveredPoint.y - height / 2 : 0
+            width: Style.space(9)
+            height: Style.space(9)
+            radius: width / 2
+            color: Color.popups.background
+            border.width: 2
+            border.color: root.trendColor(root.activeRangePct)
+          }
+
+          Rectangle {
+            id: hoverBubble
+            visible: root.hoveredPoint !== null
+            width: hoverBubbleText.implicitWidth + Style.space(12)
+            height: hoverBubbleText.implicitHeight + Style.space(6)
+            // Centered on the point, kept inside the chart, flipped below the
+            // point when there is no room above it.
+            x: root.hoveredPoint ? Math.max(0, Math.min(parent.width - width, root.hoveredPoint.x - width / 2)) : 0
+            y: {
+              if (!root.hoveredPoint) return 0
+              var above = root.hoveredPoint.y - height - Style.space(10)
+              return above >= bigChart.padTop ? above : root.hoveredPoint.y + Style.space(10)
+            }
+            radius: Math.min(4, Style.cornerRadius)
+            color: Color.tooltip.background
+            border.width: 1
+            border.color: Util.alpha(root.foreground, 0.35)
+
+            Text {
+              id: hoverBubbleText
+              anchors.centerIn: parent
+              textFormat: Text.PlainText
+              text: root.hoveredPoint
+                ? Model.formatPointTime(root.hoveredPoint.t, root.range) + "  " + Model.formatPrice(root.hoveredPoint.v, root.activeQuote ? root.activeQuote.currency : "", root.activeSymbol) + "  " + Model.trendGlyph(root.hoveredChangePct) + Model.formatPct(Math.abs(root.hoveredChangePct), false)
+                : ""
+              color: Color.tooltip.text
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+            }
+          }
         }
 
         // ---------- Range picker ----------
@@ -512,6 +787,164 @@ Panel {
               symbol: modelData
               rowIndex: index
             }
+          }
+
+          Item { width: 1; height: Style.space(4) }
+
+          // Add field, opened from the footer or with `a`. Enter validates the
+          // symbol against Yahoo before it lands in the list.
+          Column {
+            visible: root.editing
+            width: parent.width
+            spacing: Style.space(4)
+
+            Row {
+              width: parent.width
+              spacing: Style.space(8)
+
+              TextField {
+                id: addField
+                width: parent.width - addHint.width - parent.spacing
+                enabled: !root.validating
+                placeholderText: "Symbol, e.g. TSLA or ^PSI20"
+                foreground: root.foreground
+                font.family: root.fontFamily
+                onTextChanged: {
+                  root.addError = ""
+                  root.suggestionIndex = -1
+                  if (root.editing && !root.validating) searchDebounce.restart()
+                }
+
+                Keys.onPressed: function(event) {
+                  if (event.key === Qt.Key_Escape) {
+                    root.cancelAdding()
+                    event.accepted = true
+                  } else if (event.key === Qt.Key_Down) {
+                    root.moveSuggestion(1)
+                    event.accepted = true
+                  } else if (event.key === Qt.Key_Up) {
+                    root.moveSuggestion(-1)
+                    event.accepted = true
+                  } else if (event.key === Qt.Key_Tab && root.suggestions.length > 0) {
+                    // Tab completes the highlighted (or first) suggestion into the field.
+                    var idx = root.suggestionIndex >= 0 ? root.suggestionIndex : 0
+                    addField.text = String(root.suggestions[idx].symbol)
+                    root.suggestionIndex = idx
+                    event.accepted = true
+                  } else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
+                    if (root.suggestionIndex >= 0) root.chooseSuggestion(root.suggestionIndex)
+                    else root.commitAdd()
+                    event.accepted = true
+                  }
+                }
+              }
+
+              Text {
+                id: addHint
+                anchors.verticalCenter: parent.verticalCenter
+                textFormat: Text.PlainText
+                text: root.validating ? "Checking…" : "Enter adds · Esc done"
+                color: root.foreground
+                opacity: 0.5
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+              }
+            }
+
+            Text {
+              visible: root.addError !== ""
+              textFormat: Text.PlainText
+              text: root.addError
+              color: root.downColor
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+              elide: Text.ElideRight
+              width: parent.width
+            }
+
+            // Autocomplete matches: symbol, name, exchange. Click or Enter adds.
+            Repeater {
+              model: root.suggestions
+
+              CursorSurface {
+                id: suggestionRow
+                required property var modelData
+                required property int index
+
+                width: parent.width
+                implicitHeight: suggestionInner.implicitHeight + Style.spacing.lg
+                hasCursor: root.suggestionIndex === index
+                foreground: root.foreground
+
+                Row {
+                  id: suggestionInner
+                  anchors.left: parent.left
+                  anchors.right: parent.right
+                  anchors.verticalCenter: parent.verticalCenter
+                  anchors.leftMargin: Style.space(8)
+                  anchors.rightMargin: Style.space(8)
+                  spacing: Style.space(8)
+
+                  Text {
+                    textFormat: Text.PlainText
+                    text: String(suggestionRow.modelData.symbol)
+                    color: root.foreground
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.bodySmall
+                    font.bold: true
+                    width: Style.space(84)
+                    elide: Text.ElideRight
+                    anchors.verticalCenter: parent.verticalCenter
+                  }
+
+                  Text {
+                    textFormat: Text.PlainText
+                    text: Model.cleanName(suggestionRow.modelData.name)
+                    color: root.foreground
+                    opacity: 0.7
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.bodySmall
+                    elide: Text.ElideRight
+                    width: parent.width - Style.space(84) - suggestionMeta.width - parent.spacing * 2
+                    anchors.verticalCenter: parent.verticalCenter
+                  }
+
+                  Text {
+                    id: suggestionMeta
+                    textFormat: Text.PlainText
+                    text: Model.suggestionMeta(suggestionRow.modelData)
+                    color: root.foreground
+                    opacity: 0.45
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.caption
+                    horizontalAlignment: Text.AlignRight
+                    width: Math.min(implicitWidth, Style.space(120))
+                    elide: Text.ElideRight
+                    anchors.verticalCenter: parent.verticalCenter
+                  }
+                }
+
+                MouseArea {
+                  anchors.fill: parent
+                  hoverEnabled: true
+                  cursorShape: Qt.PointingHandCursor
+                  onContainsMouseChanged: if (containsMouse) root.suggestionIndex = suggestionRow.index
+                  onClicked: root.chooseSuggestion(suggestionRow.index)
+                }
+              }
+            }
+          }
+
+          Text {
+            visible: !root.editing
+            textFormat: Text.PlainText
+            text: "a add · x remove · J / K reorder · or edit symbols in shell.json"
+            color: root.foreground
+            opacity: 0.35
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.caption
+            elide: Text.ElideRight
+            width: parent.width
           }
         }
 
@@ -594,7 +1027,8 @@ Panel {
       anchors.right: parent.right
       anchors.verticalCenter: parent.verticalCenter
       anchors.leftMargin: Style.space(8)
-      anchors.rightMargin: Style.space(8)
+      // Leaves room for the remove control at the right edge.
+      anchors.rightMargin: Style.space(8) + Style.space(18) + Style.space(6)
       spacing: Style.space(10)
 
       Column {
@@ -689,6 +1123,36 @@ Panel {
         else root.selectSymbol(row.symbol)
       }
     }
+
+    // Remove control at the row's right edge, revealed while the row holds
+    // the cursor. Declared after the row MouseArea so it receives the click.
+    Rectangle {
+      visible: row.hasCursor && root.symbols.length > 1
+      width: Style.space(18)
+      height: Style.space(18)
+      anchors.right: parent.right
+      anchors.rightMargin: Style.space(8)
+      anchors.verticalCenter: parent.verticalCenter
+      radius: Math.min(4, Style.cornerRadius)
+      color: removeArea.containsMouse ? Style.hoverFillFor(root.foreground, Color.accent) : "transparent"
+
+      Text {
+        anchors.centerIn: parent
+        textFormat: Text.PlainText
+        text: "✕"
+        color: removeArea.containsMouse ? root.downColor : Qt.darker(root.foreground, 1.4)
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.bodySmall
+      }
+
+      MouseArea {
+        id: removeArea
+        anchors.fill: parent
+        hoverEnabled: true
+        cursorShape: Qt.PointingHandCursor
+        onClicked: root.removeSymbol(row.symbol)
+      }
+    }
   }
 
   // Canvas line chart with a soft area fill, a dashed previous-close
@@ -711,6 +1175,19 @@ Panel {
     readonly property var geometry: Model.chartGeometry(points, width, height, referenceValue, padTop, padBottom)
     readonly property real minValue: geometry.min
     readonly property real maxValue: geometry.max
+
+    // Index of the point under the pointer (-1 when not hovering) and that
+    // point's geometry, for the crosshair drawn by the host.
+    property int hoverIndex: -1
+    readonly property var hoverPoint: hoverIndex >= 0 && hoverIndex < geometry.points.length ? geometry.points[hoverIndex] : null
+
+    function indexAt(x) {
+      var n = geometry.points.length
+      if (n === 0 || width <= 0) return -1
+      return Math.max(0, Math.min(n - 1, Math.round(x / width * (n - 1))))
+    }
+
+    onPointsChanged: hoverIndex = -1
 
     // Qt's Context2D wants CSS color strings; QML color values carry r,g,b,a
     // as 0..1 floats.

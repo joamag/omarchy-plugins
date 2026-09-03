@@ -5,6 +5,7 @@
 #
 #   quotes.sh quotes SYMBOL [SYMBOL...]   intraday (1d, 5 minute) data per symbol
 #   quotes.sh series SYMBOL RANGE         closes for RANGE: 1d 5d 1mo 6mo 1y 5y
+#   quotes.sh search QUERY                symbol suggestions for the add field
 #
 # Each object carries symbol, name, currency, price, prevClose, high, low,
 # state and points ([unix time, close] pairs). Failures become
@@ -83,6 +84,23 @@ fetch() {
   printf '%s\n' "$out"
 }
 
+# Symbol search for autocomplete: one JSON line with up to eight matches,
+# each with symbol, name, exchange and type.
+search() {
+  local query="$1"
+  curl -sS --max-time 6 -A "$UA" \
+    "https://query2.finance.yahoo.com/v1/finance/search?q=$(urlencode "$query")&quotesCount=8&newsCount=0&listsCount=0&enableFuzzyQuery=false" 2>/dev/null |
+    jq -c --arg query "$query" '
+      { query: $query,
+        results: [ (.quotes // [])[]
+                   | select(.symbol != null)
+                   | { symbol: .symbol,
+                       name: (.shortname // .longname // .symbol),
+                       exchange: (.exchDisp // ""),
+                       type: (.typeDisp // .quoteType // "") } ] }' 2>/dev/null ||
+    printf '{"query":%s,"results":[],"error":"search failed"}\n' "$(json_string "$query")"
+}
+
 mode=${1:-}
 shift || true
 
@@ -103,8 +121,12 @@ case "$mode" in
     [[ -n ${1:-} ]] || exit 1
     fetch "$1" "${2:-1mo}"
     ;;
+  search)
+    [[ -n ${1:-} ]] || exit 1
+    search "$1"
+    ;;
   *)
-    echo "Usage: quotes.sh quotes SYMBOL... | series SYMBOL RANGE" >&2
+    echo "Usage: quotes.sh quotes SYMBOL... | series SYMBOL RANGE | search QUERY" >&2
     exit 1
     ;;
 esac
