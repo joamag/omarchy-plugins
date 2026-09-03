@@ -80,7 +80,7 @@ if (( gql_rc != 0 )) || ! jq -e '.data.viewer.login' "$tmp/graphql.json" >/dev/n
   message=$(jq -r '.errors[0].message // empty' "$tmp/graphql.json" 2>/dev/null)
   [[ -n $message ]] || message=$(head -c 300 "$tmp/graphql.err" | tr '\n' ' ')
   [[ -n $message ]] || message="GitHub request failed"
-  jq -n --arg m "$message" '{state: "error", error: $m}'
+  jq -cn --arg m "$message" '{state: "error", error: $m}'
   exit 0
 fi
 

@@ -37,9 +37,14 @@ var ALIASES = {
   "^TNX": "US 10Y"
 }
 
-var CURRENCY_SYMBOLS = { USD: "$", EUR: "€", GBP: "£", GBp: "p", JPY: "¥", CHF: "CHF ", CAD: "C$", AUD: "A$", HKD: "HK$", INR: "₹", BRL: "R$" }
+var CURRENCY_SYMBOLS = { USD: "$", EUR: "€", GBP: "£", JPY: "¥", CHF: "CHF ", CAD: "C$", AUD: "A$", HKD: "HK$", INR: "₹", BRL: "R$" }
+// London quotes come in pence, which reads as a suffix ("120.50p"), not a prefix.
+var CURRENCY_SUFFIXES = { GBp: "p" }
 
 function num(value) {
+  // Number(null) is 0, which would turn a missing previous close into a
+  // full-price gain; only real numbers and numeric strings count.
+  if (value === null || value === undefined || value === "") return NaN
   var n = Number(value)
   return isFinite(n) ? n : NaN
 }
@@ -158,10 +163,18 @@ function groupThousands(intText) {
   return out
 }
 
+// Rounds half away from zero on the decimal representation, so 458.015 shows
+// as 458.02 the way the exchange prints it, not the 458.01 toFixed gives for
+// the binary value just below it.
+function roundTo(value, decimals) {
+  var shifted = Number(Math.abs(value) + "e" + decimals)
+  return Number(Math.round(shifted) + "e-" + decimals)
+}
+
 function formatNumber(value, decimals) {
   var n = num(value)
   if (!isFinite(n)) return "—"
-  var fixed = Math.abs(n).toFixed(decimals)
+  var fixed = roundTo(n, decimals).toFixed(decimals)
   var parts = fixed.split(".")
   var text = groupThousands(parts[0]) + (parts.length > 1 ? "." + parts[1] : "")
   return (n < 0 ? "-" : "") + text
@@ -182,7 +195,10 @@ function formatPrice(quoteOrValue, currency, symbol) {
   var text = formatNumber(value, priceDecimals(value))
   if (text === "—" || isIndex(sym)) return text
   var prefix = CURRENCY_SYMBOLS[cur]
-  return prefix !== undefined ? prefix + text : text + (cur ? " " + cur : "")
+  if (prefix !== undefined) return prefix + text
+  var suffix = CURRENCY_SUFFIXES[cur]
+  if (suffix !== undefined) return text + suffix
+  return text + (cur ? " " + cur : "")
 }
 
 function formatPct(value, withSign) {

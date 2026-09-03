@@ -16,6 +16,9 @@
 #   isabella.sh cancel DATE TASK_ID        cancel for the day (or lift a cancellation)
 #   isabella.sh delay DATE TASK_ID         push to tomorrow
 #   isabella.sh login                      force a fresh session
+#   isabella.sh configure                  write the credentials file from
+#                                          ISABELLA_SET_URL / _USERNAME /
+#                                          _PASSWORD, then fetch today
 #
 # Credentials live in $ISABELLA_ENV (default ~/.config/omarchy/isabella.env) as
 # ISABELLA_URL, ISABELLA_USERNAME and ISABELLA_PASSWORD lines; the file is
@@ -35,17 +38,46 @@ trap 'rm -rf "$tmp"' EXIT
 
 emit() { jq -cn "$@"; }
 
-# KEY=VALUE lines only, quotes stripped; anything else is ignored so the file
-# cannot execute code inside the shell.
+command=${1:-day}
+shift || true
+
+# The popup's credentials form hands the values over in the environment
+# (readable only by the same user, unlike argv) and asks for the file to be
+# (re)written before the usual day fetch runs.
+if [[ $command == configure ]]; then
+  set_url=${ISABELLA_SET_URL%/}
+  if [[ -z $set_url || -z ${ISABELLA_SET_USERNAME:-} || -z ${ISABELLA_SET_PASSWORD:-} ]]; then
+    emit '{state: "error", error: "URL, username and password are all required"}'
+    exit 0
+  fi
+  mkdir -p "$(dirname "$ENV_FILE")"
+  printf 'ISABELLA_URL=%s\nISABELLA_USERNAME=%s\nISABELLA_PASSWORD=%s\n' \
+    "$set_url" "$ISABELLA_SET_USERNAME" "$ISABELLA_SET_PASSWORD" >"$ENV_FILE.tmp" &&
+    mv "$ENV_FILE.tmp" "$ENV_FILE" || {
+    emit --arg file "$ENV_FILE" '{state: "error", error: ("could not write " + $file)}'
+    exit 0
+  }
+  chmod 600 "$ENV_FILE"
+  rm -f "$JAR"
+  unset ISABELLA_URL ISABELLA_USERNAME ISABELLA_PASSWORD
+  command=day
+fi
+
+# KEY=VALUE lines only; anything else is ignored so the file cannot execute
+# code inside the shell. Only whole-line comments are recognised and only a
+# pair of matching wrapping quotes is removed, so a password containing `#` or
+# a quote survives the round trip.
 if [[ -f $ENV_FILE ]]; then
   while IFS= read -r line || [[ -n $line ]]; do
-    line=${line%%#*}
-    [[ $line =~ ^[[:space:]]*(ISABELLA_URL|ISABELLA_USERNAME|ISABELLA_PASSWORD)[[:space:]]*=[[:space:]]*(.*)$ ]] || continue
+    [[ $line =~ ^[[:space:]]*# ]] && continue
+    [[ $line =~ ^[[:space:]]*(ISABELLA_URL|ISABELLA_USERNAME|ISABELLA_PASSWORD)[[:space:]]*=(.*)$ ]] || continue
     key=${BASH_REMATCH[1]}
     value=${BASH_REMATCH[2]}
+    value=${value#"${value%%[![:space:]]*}"}
     value=${value%"${value##*[![:space:]]}"}
-    value=${value#\"}; value=${value%\"}
-    value=${value#\'}; value=${value%\'}
+    if [[ ${#value} -ge 2 && ( ( $value == \"*\" ) || ( $value == \'*\' ) ) ]]; then
+      value=${value:1:${#value}-2}
+    fi
     [[ -n ${!key:-} ]] || printf -v "$key" '%s' "$value"
   done <"$ENV_FILE"
 fi
@@ -56,8 +88,9 @@ missing=()
 [[ -n ${ISABELLA_USERNAME:-} ]] || missing+=("ISABELLA_USERNAME")
 [[ -n ${ISABELLA_PASSWORD:-} ]] || missing+=("ISABELLA_PASSWORD")
 if (( ${#missing[@]} > 0 )); then
-  emit --arg file "$ENV_FILE" --argjson missing "$(printf '%s\n' "${missing[@]}" | jq -R . | jq -sc .)" \
-    '{state: "unconfigured", file: $file, missing: $missing}'
+  emit --arg file "$ENV_FILE" --arg url "$URL" --arg user "${ISABELLA_USERNAME:-}" \
+    --argjson missing "$(printf '%s\n' "${missing[@]}" | jq -R . | jq -sc .)" \
+    '{state: "unconfigured", file: $file, url: $url, username: $user, missing: $missing}'
   exit 0
 fi
 
@@ -104,7 +137,7 @@ finish() {
       fi
       ;;
     401 | 403)
-      emit '{state: "unauthorized"}'
+      emit --arg url "$URL" --arg user "$ISABELLA_USERNAME" '{state: "unauthorized", url: $url, username: $user}'
       ;;
     000)
       detail=$(head -c 200 "$tmp/curl.err" | tr '\n' ' ')
@@ -121,9 +154,6 @@ finish() {
   esac
 }
 
-command=${1:-day}
-shift || true
-
 case "$command" in
   day)
     date=${1:-$(date +%F)}
@@ -138,10 +168,10 @@ case "$command" in
     finish "$date" "$(call POST "/api/day/$date/toggle" "$(emit --argjson id "$id" '{subtask: $id}')")"
     ;;
   login)
-    if login; then emit --arg url "$URL" '{state: "ok", url: $url}'; else emit '{state: "unauthorized"}'; fi
+    if login; then emit --arg url "$URL" '{state: "ok", url: $url}'; else emit --arg url "$URL" --arg user "$ISABELLA_USERNAME" '{state: "unauthorized", url: $url, username: $user}'; fi
     ;;
   *)
-    echo "Usage: isabella.sh day [DATE] | toggle DATE ID | subtoggle DATE ID | cancel DATE ID | delay DATE ID | login" >&2
+    echo "Usage: isabella.sh day [DATE] | toggle DATE ID | subtoggle DATE ID | cancel DATE ID | delay DATE ID | login | configure" >&2
     exit 1
     ;;
 esac

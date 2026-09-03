@@ -87,13 +87,17 @@ function toggleCommand(container) {
 }
 
 // Drop the registry and digest from an image reference so "ghcr.io/acme/api:1.2"
-// reads as "acme/api:1.2" in a narrow column.
+// reads as "acme/api:1.2" in a narrow column. Like docker itself, the first
+// path segment is a registry when it carries a dot or a port, or is localhost.
 function shortImage(image) {
   var s = String(image || "")
   var at = s.indexOf("@")
   if (at > 0) s = s.slice(0, at)
   var slash = s.indexOf("/")
-  if (slash > 0 && s.slice(0, slash).indexOf(".") >= 0) s = s.slice(slash + 1)
+  if (slash > 0) {
+    var head = s.slice(0, slash)
+    if (head.indexOf(".") >= 0 || head.indexOf(":") >= 0 || head === "localhost") s = s.slice(slash + 1)
+  }
   return s
 }
 

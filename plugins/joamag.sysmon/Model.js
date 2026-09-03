@@ -26,6 +26,8 @@ function clamp(value, low, high) {
 }
 
 function num(value) {
+  // Number(null) is 0; a missing field must stay unknown rather than zero.
+  if (value === null || value === undefined || value === "") return NaN
   var n = Number(value)
   return isFinite(n) ? n : NaN
 }

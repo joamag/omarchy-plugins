@@ -28,13 +28,28 @@ Panel {
   property string busyKey: ""
   property bool cursorActive: false
   property int cursorIndex: 0
+  // Credentials handed to isabella.sh configure through the environment for
+  // the duration of that one run; cleared as soon as it exits.
+  property var pendingCredentials: null
 
   readonly property int refreshIntervalSec: Math.max(30, Math.round(Number(setting("refreshIntervalSec", 300)) || 300))
   readonly property string barMode: String(setting("barMode", "both") || "both")
   readonly property bool hideOnRestDays: setting("hideOnRestDays", false) === true
   readonly property string credentialsFile: String(setting("credentialsFile", "") || "")
   readonly property string scriptPath: String(Qt.resolvedUrl("isabella.sh")).replace(/^file:\/\//, "")
-  readonly property var scriptEnvironment: credentialsFile !== "" ? ({ ISABELLA_ENV: credentialsFile }) : ({})
+  readonly property var scriptEnvironment: {
+    var env = {}
+    if (credentialsFile !== "") env.ISABELLA_ENV = credentialsFile
+    if (pendingCredentials) {
+      env.ISABELLA_SET_URL = pendingCredentials.url
+      env.ISABELLA_SET_USERNAME = pendingCredentials.username
+      env.ISABELLA_SET_PASSWORD = pendingCredentials.password
+    }
+    return env
+  }
+  readonly property bool needsCredentials: Model.needsCredentials(result)
+  // Typing in the sign-in form must not drive the checklist cursor.
+  readonly property bool formFocused: urlField.activeFocus || usernameField.activeFocus || passwordField.activeFocus
 
   readonly property bool loaded: result !== null
   readonly property bool ok: Model.isOk(result)
@@ -79,6 +94,13 @@ Panel {
   function applyResult(raw) {
     var next = Model.parseResult(raw)
     busyKey = ""
+    if (pendingCredentials) {
+      pendingCredentials = null
+      if (next.state === "unauthorized") formError = "Isabella rejected that username or password"
+      else if (next.state === "unreachable") formError = "Saved, but " + String(next.url || "the server") + " did not answer"
+      else if (next.state === "error") formError = String(next.error || "Sign-in failed")
+      else passwordField.text = ""
+    }
     // A failed refresh keeps the last checklist on screen when the script
     // could not hand back a cached one itself.
     if (!Model.hasDay(next) && Model.hasDay(result) && next.state !== "unconfigured" && next.state !== "unauthorized") {
@@ -135,6 +157,34 @@ Panel {
     var target = url !== "" ? url : "https://isabella.bemisc.com"
     root.bar.run("omarchy-launch-browser '" + target.replace(/'/g, "") + "'")
     root.close()
+  }
+
+  // Sign-in form: write the credentials file through the script and land on
+  // today's checklist in the same round trip.
+  function submitCredentials() {
+    var url = String(urlField.text || "").trim()
+    var username = String(usernameField.text || "").trim()
+    var password = String(passwordField.text || "")
+    if (url === "" || username === "" || password === "") {
+      formError = "URL, username and password are all required"
+      return
+    }
+    if (url.indexOf("://") < 0) url = "https://" + url
+    formError = ""
+    pendingCredentials = { url: url, username: username, password: password }
+    if (!run(["configure"])) pendingCredentials = null
+  }
+
+  property string formError: ""
+
+  function focusForm() {
+    var prefill = Model.prefill(result, "https://isabella.bemisc.com")
+    if (urlField.text === "") urlField.text = prefill.url
+    if (usernameField.text === "") usernameField.text = prefill.username
+    Qt.callLater(function() {
+      if (usernameField.text === "") usernameField.forceActiveFocus()
+      else passwordField.forceActiveFocus()
+    })
   }
 
   function editCredentials() {
@@ -210,8 +260,11 @@ Panel {
       // Reopening lands on today again; a browsed day is not remembered.
       if (!isToday) day = Model.todayIso()
       refresh()
+      if (needsCredentials) focusForm()
     }
   }
+
+  onNeedsCredentialsChanged: if (needsCredentials && opened) focusForm()
 
   visible: !(hideOnRestDays && ok && counts.total === 0)
   implicitWidth: visible ? button.implicitWidth : 0
@@ -224,6 +277,7 @@ Panel {
     onExited: {
       root.loading = false
       root.busyKey = ""
+      root.pendingCredentials = null
       if (root.refreshPending) {
         root.refreshPending = false
         Qt.callLater(root.refresh)
@@ -276,6 +330,7 @@ Panel {
     PanelKeyCatcher {
       id: keyCatcher
       anchors.fill: parent
+      blocked: root.formFocused
       onMoveRequested: function(dx, dy) {
         if (dy !== 0) { root.moveCursor(dy); return }
         if (root.cursorActive && root.cursorIndex >= root.rows.length) root.moveCursor(dx)
@@ -457,18 +512,76 @@ Panel {
             width: parent.width
           }
 
-          Button {
-            visible: root.loaded && (root.result.state === "unconfigured" || root.result.state === "unauthorized")
+          // Sign-in form: URL, username, password. Enter in any field submits,
+          // Esc closes the popup like everywhere else.
+          Column {
+            visible: root.needsCredentials
             width: parent.width
-            height: actionRow.cellHeight
-            iconText: "󰏫"
-            iconSize: Style.font.title
-            text: "Edit credentials file"
-            fontSize: Style.font.bodySmall
-            foreground: root.foreground
-            fontFamily: root.fontFamily
-            bordered: true
-            onClicked: root.editCredentials()
+            spacing: Style.space(6)
+
+            CredentialField {
+              id: urlField
+              placeholderText: "https://isabella.example.com"
+              onAccepted: usernameField.forceActiveFocus()
+            }
+
+            CredentialField {
+              id: usernameField
+              placeholderText: "Username"
+              onAccepted: passwordField.forceActiveFocus()
+            }
+
+            CredentialField {
+              id: passwordField
+              placeholderText: "Password"
+              password: true
+              onAccepted: root.submitCredentials()
+            }
+
+            Text {
+              visible: root.formError !== ""
+              textFormat: Text.PlainText
+              text: root.formError
+              color: Color.urgent
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+              wrapMode: Text.WordWrap
+              width: parent.width
+            }
+
+            Row {
+              width: parent.width
+              spacing: Style.space(6)
+
+              Button {
+                width: (parent.width - parent.spacing) / 2
+                height: actionRow.cellHeight
+                iconText: root.pendingCredentials ? "󰑐" : "󰍁"
+                iconSpinning: root.pendingCredentials !== null
+                iconSize: Style.font.title
+                text: root.pendingCredentials ? "Signing in" : "Sign in"
+                fontSize: Style.font.bodySmall
+                foreground: root.foreground
+                fontFamily: root.fontFamily
+                bordered: true
+                enabled: root.pendingCredentials === null
+                onClicked: root.submitCredentials()
+              }
+
+              Button {
+                width: (parent.width - parent.spacing) / 2
+                height: actionRow.cellHeight
+                iconText: "󰏫"
+                iconSize: Style.font.title
+                text: "Edit file"
+                tooltipText: "Open the credentials file in your editor"
+                fontSize: Style.font.bodySmall
+                foreground: root.foreground
+                fontFamily: root.fontFamily
+                bordered: true
+                onClicked: root.editCredentials()
+              }
+            }
           }
         }
 
@@ -554,6 +667,25 @@ Panel {
             }
           }
         }
+      }
+    }
+  }
+
+  // Text input of the sign-in form. Enter moves on or submits; Esc hands the
+  // key back to the panel so it closes like everywhere else.
+  component CredentialField: TextField {
+    id: field
+    width: parent.width
+    foreground: root.foreground
+    font.family: root.fontFamily
+    enabled: root.pendingCredentials === null
+    onTextChanged: root.formError = ""
+
+    // Return is handled by TextField itself (the `accepted` signal).
+    Keys.onPressed: function(event) {
+      if (event.key === Qt.Key_Escape) {
+        root.close()
+        event.accepted = true
       }
     }
   }

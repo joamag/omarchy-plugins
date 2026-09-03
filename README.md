@@ -30,7 +30,10 @@ Checks:
 ```bash
 bin/validate-all   # omarchy plugin validate + repo conventions (id namespace, README)
 bin/lint           # qmllint syntax pass over every QML file
+bin/test           # unit tests with coverage (Node's built-in runner, no dependencies)
 ```
+
+Tests live in `test/`, one file per plugin (`test/<name>.test.js`) plus `test/helpers.js` and API fixtures under `test/fixtures/`. Each file walks the plugin's `Model.js` functions in declaration order, then drives the plugin's shell script end to end against fakes on `PATH` (`gh`, `docker`, `curl`) or an in-process HTTP server, so no network or credentials are needed. Coverage is measured over the `Model.js` libraries and gated at 90% lines and functions; the QML panels only run inside omarchy-shell and are covered by `bin/lint` plus a manual pass.
 
 Editing `~/.config/omarchy/shell.json` by hand needs `omarchy-shell shell reloadConfig` before widgets see the new settings. Shell log for debugging plugin load errors: `qs log -p /usr/share/omarchy/shell`. Each plugin answers `omarchy-shell <id> version` so you can confirm which build the shell is running.
 

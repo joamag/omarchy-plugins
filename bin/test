@@ -1,0 +1,29 @@
+#!/bin/bash
+
+# Run the plugin test suite with Node's built-in runner and coverage report.
+# Coverage is measured over the QML JavaScript libraries (plugins/*/Model.js);
+# the shell scripts are exercised end to end by the same tests but bash has
+# no line coverage here, and the QML panels only run inside omarchy-shell.
+#
+# Usage: bin/test [--watch] [node --test options] [test files...]
+
+set -euo pipefail
+
+repo=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+cd "$repo"
+
+command -v node >/dev/null || { echo "test: node is required (mise install node, or pacman -S nodejs)" >&2; exit 1; }
+
+if [[ ${1:-} == --watch ]]; then
+  shift
+  exec node --test --watch "$@" test/
+fi
+
+exec node --test \
+  --experimental-test-coverage \
+  --test-coverage-include='plugins/**/Model.js' \
+  --test-coverage-lines=90 \
+  --test-coverage-functions=90 \
+  --test-coverage-branches=80 \
+  "$@" \
+  test/

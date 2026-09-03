@@ -1,0 +1,3 @@
+abc123def456	postgres-db	postgres:16	exited	Exited (0) 2 hours ago	
+fed654cba321	api	ghcr.io/acme/api@sha256:deadbeef	running	Up 3 hours	0.0.0.0:8080->80/tcp
+0011aabbccdd	cache	redis	paused	Up 1 hour (Paused)	

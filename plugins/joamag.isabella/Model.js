@@ -270,11 +270,24 @@ function stateTitle(result) {
 function stateDetail(result) {
   switch (result ? result.state : "") {
   case "unconfigured":
-    return "Fill in " + (result.file || "~/.config/omarchy/isabella.env") + " with ISABELLA_URL, ISABELLA_USERNAME and ISABELLA_PASSWORD" + (result.missing ? " (missing: " + result.missing.join(", ") + ")" : "") + "."
-  case "unauthorized": return "Check the username and password in ~/.config/omarchy/isabella.env."
+    return "Sign in below, or fill in " + (result.file || "~/.config/omarchy/isabella.env") + " with ISABELLA_URL, ISABELLA_USERNAME and ISABELLA_PASSWORD" + (result.missing && result.missing.length > 0 ? " (missing: " + result.missing.join(", ") + ")" : "") + "."
+  case "unauthorized": return "Isabella rejected the username or password. Sign in again below."
   case "unreachable": return (result.error || "No response") + (hasDay(result) ? ". Showing the last checklist that was fetched." : "")
   case "error": return result.error || ""
   default: return ""
+  }
+}
+
+// Whether the popup should show the sign-in form instead of a checklist.
+function needsCredentials(result) {
+  return !!result && (result.state === "unconfigured" || result.state === "unauthorized")
+}
+
+// Values the sign-in form starts from: whatever the script already knows.
+function prefill(result, fallbackUrl) {
+  return {
+    url: result && result.url ? String(result.url) : String(fallbackUrl || ""),
+    username: result && result.username ? String(result.username) : ""
   }
 }
 

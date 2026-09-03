@@ -1,0 +1,34 @@
+[
+  {
+    "id": "101",
+    "unread": true,
+    "reason": "review_requested",
+    "updated_at": "2026-09-03T15:00:00Z",
+    "subject": { "title": "Add retry to the uploader", "url": "https://api.github.com/repos/hivesolutions/netius/pulls/128", "type": "PullRequest" },
+    "repository": { "full_name": "hivesolutions/netius", "html_url": "https://github.com/hivesolutions/netius" }
+  },
+  {
+    "id": "102",
+    "unread": true,
+    "reason": "ci_activity",
+    "updated_at": "2026-09-03T14:00:00Z",
+    "subject": { "title": "main: build failed", "url": "https://api.github.com/repos/joamag/boytacean/commits/abc123", "type": "CheckSuite" },
+    "repository": { "full_name": "joamag/boytacean", "html_url": "https://github.com/joamag/boytacean" }
+  },
+  {
+    "id": "103",
+    "unread": true,
+    "reason": "subscribed",
+    "updated_at": "2026-09-02T09:00:00Z",
+    "subject": { "title": "v1.2.0", "url": null, "type": "Release" },
+    "repository": { "full_name": "joamag/omarchy-plugins", "html_url": "https://github.com/joamag/omarchy-plugins" }
+  },
+  {
+    "id": "104",
+    "unread": false,
+    "reason": "mention",
+    "updated_at": "2026-09-01T09:00:00Z",
+    "subject": { "title": "Already read", "url": "https://api.github.com/repos/joamag/isabella/issues/4", "type": "Issue" },
+    "repository": { "full_name": "joamag/isabella", "html_url": "https://github.com/joamag/isabella" }
+  }
+]

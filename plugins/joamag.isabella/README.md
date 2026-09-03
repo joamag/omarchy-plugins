@@ -11,7 +11,9 @@ Today's [Isabella](https://github.com/joamag/isabella) checklist in the Omarchy 
 
 ## Setup
 
-Credentials live outside the repository and outside `shell.json`, in `~/.config/omarchy/isabella.env` (owner-only permissions):
+The first time the popup opens it shows a sign-in form: instance URL, username and password. Sign in writes the credentials file below (owner-only permissions), logs in and switches straight to the checklist; a rejected login brings the form back with the values kept. The same form appears whenever the file is incomplete or the login stops working.
+
+Credentials live outside the repository and outside `shell.json`, in `~/.config/omarchy/isabella.env`, which you can also write by hand:
 
 ```
 ISABELLA_URL=https://isabella.example.com
@@ -19,7 +21,7 @@ ISABELLA_USERNAME=admin
 ISABELLA_PASSWORD=...
 ```
 
-A `member` account is enough to view and tick. The widget logs in through `/api/auth/login`, keeps the session cookie in `~/.cache/omarchy/isabella/` and logs in again when it expires. The last fetched day is cached there too, so the popup still shows the checklist when the server is unreachable (marked CACHED).
+Whole-line `#` comments are allowed and a value may be wrapped in quotes; a password containing `#` or quotes needs no escaping. A `member` account is enough to view and tick. The widget logs in through `/api/auth/login`, keeps the session cookie in `~/.cache/omarchy/isabella/` and logs in again when it expires. The last fetched day is cached there too, so the popup still shows the checklist when the server is unreachable (marked CACHED).
 
 ## Settings
 
