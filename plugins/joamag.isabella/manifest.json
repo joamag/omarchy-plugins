@@ -1,0 +1,63 @@
+{
+  "schemaVersion": 1,
+  "id": "joamag.isabella",
+  "name": "Isabella",
+  "version": "0.1.0",
+  "author": "João Magalhães",
+  "license": "Apache-2.0",
+  "description": "Today's Isabella checklist: pending and done task counts in the bar, a popup to tick, cancel or delay tasks and peek at other days.",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "Panel.qml"
+  },
+  "barWidget": {
+    "displayName": "Isabella",
+    "description": "House task checklist from an Isabella instance, with ticking from the popup.",
+    "category": "Home",
+    "allowMultiple": false,
+    "defaultSection": "right",
+    "defaults": {
+      "refreshIntervalSec": 300,
+      "barMode": "both",
+      "hideOnRestDays": false,
+      "credentialsFile": ""
+    },
+    "schema": [
+      {
+        "key": "refreshIntervalSec",
+        "type": "integer",
+        "label": "Refresh interval (seconds)",
+        "min": 30,
+        "max": 3600,
+        "step": 30,
+        "defaultValue": 300
+      },
+      {
+        "key": "barMode",
+        "type": "select",
+        "label": "Numbers shown in the bar",
+        "options": [
+          "both",
+          "pending",
+          "done",
+          "none"
+        ],
+        "defaultValue": "both"
+      },
+      {
+        "key": "hideOnRestDays",
+        "type": "boolean",
+        "label": "Hide the widget on days without scheduled tasks",
+        "defaultValue": false
+      },
+      {
+        "key": "credentialsFile",
+        "type": "string",
+        "label": "Credentials file (empty = ~/.config/omarchy/isabella.env)",
+        "defaultValue": ""
+      }
+    ]
+  }
+}

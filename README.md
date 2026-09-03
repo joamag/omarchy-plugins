@@ -10,6 +10,7 @@ A collection of plugins for the [Omarchy](https://omarchy.org) shell (Omarchy 4.
 | [`joamag.docker`](plugins/joamag.docker/) | bar-widget | Running container count in the bar, popup to start / stop / restart containers or open lazydocker |
 | [`joamag.stocks`](plugins/joamag.stocks/) | bar-widget | S&P 500, NASDAQ, Dow and a stock watchlist in the bar, popup with range charts and sparklines |
 | [`joamag.github`](plugins/joamag.github/) | bar-widget | Review requests, your PRs with CI state, assigned issues and unread notifications via the gh CLI |
+| [`joamag.isabella`](plugins/joamag.isabella/) | bar-widget | Today's Isabella house checklist: pending and done counts, tick / cancel / delay from the popup |
 
 ## Development
 
@@ -31,7 +32,7 @@ bin/validate-all   # omarchy plugin validate + repo conventions (id namespace, R
 bin/lint           # qmllint syntax pass over every QML file
 ```
 
-Shell log for debugging plugin load errors: `qs log -p /usr/share/omarchy/shell`. Each plugin answers `omarchy-shell <id> version` so you can confirm which build the shell is running.
+Editing `~/.config/omarchy/shell.json` by hand needs `omarchy-shell shell reloadConfig` before widgets see the new settings. Shell log for debugging plugin load errors: `qs log -p /usr/share/omarchy/shell`. Each plugin answers `omarchy-shell <id> version` so you can confirm which build the shell is running.
 
 ## Conventions
 
