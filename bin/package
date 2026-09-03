@@ -1,0 +1,55 @@
+#!/bin/bash
+
+# Build one installable tarball per plugin under dist/ and, when the Omarchy
+# validator is on PATH, prove each archive unpacks into a folder the shell
+# would accept. A summary table lands in dist/summary.md for CI.
+#
+# Usage: bin/package [out-dir]   (default: dist)
+
+set -euo pipefail
+
+repo=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+out=${1:-$repo/dist}
+mkdir -p "$out"
+
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+
+have_validator=0
+command -v omarchy-plugin-validate >/dev/null && have_validator=1
+
+{
+  echo "| Plugin | Version | Archive | Size | Validated |"
+  echo "|---|---|---|---|---|"
+} >"$out/summary.md"
+
+status=0
+for dir in "$repo"/plugins/*/; do
+  id=$(basename "$dir")
+  [[ -f "$dir/manifest.json" ]] || continue
+  version=$(jq -r '.version // "0.0.0"' "$dir/manifest.json")
+  archive="$out/$id-$version.tar.gz"
+
+  # Reproducible content: sorted entries, fixed owner, no editor leftovers.
+  tar --sort=name --owner=0 --group=0 --numeric-owner \
+    --exclude='*.orig' --exclude='*.bak' --exclude='*.bak.*' --exclude='*.swp' \
+    -czf "$archive" -C "$repo/plugins" "$id"
+
+  validated="skipped"
+  if (( have_validator )); then
+    rm -rf "${tmp:?}/$id"
+    tar -xzf "$archive" -C "$tmp"
+    if omarchy-plugin-validate "$tmp/$id"; then
+      validated="yes"
+    else
+      validated="no"
+      status=1
+    fi
+  fi
+
+  size=$(du -h "$archive" | cut -f1)
+  echo "| $id | $version | $(basename "$archive") | $size | $validated |" >>"$out/summary.md"
+  printf '%-8s %s (%s, validated: %s)\n' "packaged" "$(basename "$archive")" "$size" "$validated"
+done
+
+exit $status

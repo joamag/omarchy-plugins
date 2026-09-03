@@ -75,7 +75,8 @@ if command -v nvidia-smi >/dev/null 2>&1; then
 else
   for card in /sys/class/drm/card*/device; do
     [[ -r $card/gpu_busy_percent ]] || continue
-    printf 'gpu_name\t%s\n' "$(<"$card/../../hwmon"/hwmon*/name 2>/dev/null | head -n 1 || echo GPU)"
+    name=$(cat "$card"/hwmon/hwmon*/name 2>/dev/null | head -n 1)
+    printf 'gpu_name\t%s\n' "${name:-GPU}"
     printf 'gpu_util\t%s\n' "$(<"$card/gpu_busy_percent")"
     if [[ -r $card/mem_info_vram_used && -r $card/mem_info_vram_total ]]; then
       printf 'gpu_mem_used_mb\t%d\n' "$(( $(<"$card/mem_info_vram_used") / 1048576 ))"

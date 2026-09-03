@@ -1,5 +1,7 @@
 # joamag's Omarchy plugins
 
+[![Main Workflow](https://github.com/joamag/omarchy-plugins/actions/workflows/main.yml/badge.svg)](https://github.com/joamag/omarchy-plugins/actions/workflows/main.yml)
+
 A collection of plugins for the [Omarchy](https://omarchy.org) shell (Omarchy 4.x, `omarchy-shell` on Quickshell). Each plugin lives in its own folder under `plugins/` and follows the standard `manifest.json` contract, so any folder can be dropped into `~/.config/omarchy/plugins/<id>/` or published as its own git repository for `omarchy plugin add`.
 
 ## Plugins
@@ -31,7 +33,10 @@ Checks:
 bin/validate-all   # omarchy plugin validate + repo conventions (id namespace, README)
 bin/lint           # qmllint syntax pass over every QML file
 bin/test           # unit tests with coverage (Node's built-in runner, no dependencies)
+bin/package        # one installable tarball per plugin under dist/, validated after unpacking
 ```
+
+`bin/lint` also runs ShellCheck over every script when it is installed. The same four commands run on every push in the [Main Workflow](.github/workflows/main.yml): validate against the upstream Omarchy validator, lint, tests on Node 22 / 24 / 26 with junit results as artifacts, then packaging with the tarballs uploaded as the `plugins` artifact.
 
 Tests live in `test/`, one file per plugin (`test/<name>.test.js`) plus `test/helpers.js` and API fixtures under `test/fixtures/`. Each file walks the plugin's `Model.js` functions in declaration order, then drives the plugin's shell script end to end against fakes on `PATH` (`gh`, `docker`, `curl`) or an in-process HTTP server, so no network or credentials are needed. Coverage is measured over the `Model.js` libraries and gated at 90% lines and functions; the QML panels only run inside omarchy-shell and are covered by `bin/lint` plus a manual pass.
 

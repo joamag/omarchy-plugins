@@ -1,0 +1,124 @@
+name: Main Workflow
+on:
+  - push
+  - workflow_dispatch
+jobs:
+  build-validate:
+    name: Build Validate
+    timeout-minutes: 30
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      # the manifest schema belongs to omarchy itself, so the check runs
+      # the validator of the upstream tree rather than a copy that could
+      # drift from what the shell actually accepts
+      - name: Install Omarchy tooling
+        run: |
+          git clone --depth 1 https://github.com/basecamp/omarchy.git "$RUNNER_TEMP/omarchy"
+          echo "$RUNNER_TEMP/omarchy/bin" >> "$GITHUB_PATH"
+          echo "OMARCHY_PATH=$RUNNER_TEMP/omarchy" >> "$GITHUB_ENV"
+      - name: Run validate
+        run: |
+          mkdir -p validate
+          ./bin/validate-all | tee validate/summary.txt
+      - name: Report validate
+        if: always()
+        run: |
+          {
+            echo "## Validate"
+            echo '```'
+            cat validate/summary.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+  build-lint:
+    name: Build Lint
+    timeout-minutes: 30
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y qt6-declarative-dev-tools shellcheck
+      - name: Run lint
+        run: |
+          mkdir -p lint
+          ./bin/lint | tee lint/summary.txt
+      - name: Report lint
+        if: always()
+        run: |
+          {
+            echo "## Lint"
+            echo '```'
+            cat lint/summary.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+  build-test:
+    name: Build Test
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: [22, 24, 26]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ matrix.node-version }}
+      # the runner writes the human report to the log and a junit file
+      # for the artifact; the coverage table is the last thing it prints
+      - name: Run test
+        run: |
+          mkdir -p test-results
+          ./bin/test \
+            --test-reporter=spec --test-reporter-destination=stdout \
+            --test-reporter=junit --test-reporter-destination=test-results/test-results.xml \
+            | tee test-results/test.log
+      - name: Report test
+        if: always()
+        run: |
+          {
+            echo "## Test (Node ${{ matrix.node-version }})"
+            echo '```'
+            grep -E "^ℹ (tests|suites|pass|fail|skipped|duration_ms)|Model.js|all files|^ℹ file" test-results/test.log || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: test-results-node-${{ matrix.node-version }}
+          path: |
+            test-results/test-results.xml
+            test-results/test.log
+          if-no-files-found: ignore
+  build-package:
+    name: Build Package
+    timeout-minutes: 30
+    needs: [build-validate, build-lint, build-test]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install Omarchy tooling
+        run: |
+          git clone --depth 1 https://github.com/basecamp/omarchy.git "$RUNNER_TEMP/omarchy"
+          echo "$RUNNER_TEMP/omarchy/bin" >> "$GITHUB_PATH"
+          echo "OMARCHY_PATH=$RUNNER_TEMP/omarchy" >> "$GITHUB_ENV"
+      # every archive is unpacked and validated again, so what gets
+      # uploaded is exactly what a plugin folder in the shell would be
+      - name: Run package
+        run: |
+          ./bin/package dist
+      - name: Report package
+        if: always()
+        run: |
+          {
+            echo "## Package"
+            cat dist/summary.md
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: plugins
+          path: dist/*.tar.gz
+          if-no-files-found: error

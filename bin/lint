@@ -1,6 +1,7 @@
 #!/bin/bash
 
-# Syntax-check every QML file in the repo with Qt's qmllint. Only [syntax]
+# Syntax-check every QML file in the repo with Qt's qmllint, then lint the
+# bash scripts with ShellCheck when it is installed. Only [syntax] qmllint
 # findings fail the run: the shell's qs.* modules and Quickshell types do not
 # resolve outside the running shell, so the resolution warnings are noise.
 #
@@ -13,6 +14,17 @@ qmllint=$(command -v /usr/lib/qt6/bin/qmllint || command -v qmllint6 || command 
   echo "lint: qmllint not found (pacman -S qt6-declarative)" >&2
   exit 1
 }
+
+# A qmllint that stopped tagging syntax errors would make every file pass, so
+# it has to flag a known-bad probe before its verdicts count for anything.
+probe=$(mktemp --suffix=.qml)
+trap 'rm -f "$probe"' EXIT
+printf 'import QtQuick\nItem { x: }\n' >"$probe"
+probe_output=$("$qmllint" "$probe" 2>&1 || true)
+if ! grep -q '\[syntax\]' <<<"$probe_output"; then
+  echo "lint: $qmllint did not flag a syntax error in the probe, refusing to trust it" >&2
+  exit 1
+fi
 
 files=("$@")
 if (( ${#files[@]} == 0 )); then
@@ -29,5 +41,21 @@ for file in "${files[@]}"; do
     echo "ok       ${file#"$repo"/}"
   fi
 done
+
+# Bash scripts: bin/ tooling and every script a plugin ships. Skipped with a
+# note when shellcheck is missing, so a bare machine can still lint the QML.
+if (( $# == 0 )); then
+  if command -v shellcheck >/dev/null; then
+    scripts=()
+    while IFS= read -r f; do scripts+=("$f"); done < <(find "$repo/bin" "$repo/plugins" -type f \( -name '*.sh' -o -path "$repo/bin/*" \) | sort)
+    if shellcheck -S warning "${scripts[@]}"; then
+      echo "ok       shellcheck (${#scripts[@]} scripts)"
+    else
+      status=1
+    fi
+  else
+    echo "skipped  shellcheck not installed (pacman -S shellcheck)"
+  fi
+fi
 
 exit $status

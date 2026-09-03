@@ -16,6 +16,7 @@ Thumbs.db
 *.rej
 *.tmp
 /scratch
+/dist
 
 # Qt / QML tooling caches
 .qmlls.ini
