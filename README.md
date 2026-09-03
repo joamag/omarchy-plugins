@@ -13,6 +13,7 @@ A collection of plugins for the [Omarchy](https://omarchy.org) shell (Omarchy 4.
 | [`joamag.stocks`](plugins/joamag.stocks/) | bar-widget | S&P 500, NASDAQ, Dow and a stock watchlist in the bar, popup with range charts and sparklines |
 | [`joamag.github`](plugins/joamag.github/) | bar-widget | Review requests, your PRs with CI state, assigned issues and unread notifications via the gh CLI |
 | [`joamag.isabella`](plugins/joamag.isabella/) | bar-widget | Today's Isabella house checklist: pending and done counts, tick / cancel / delay from the popup |
+| [`joamag.disks`](plugins/joamag.disks/) | bar-widget | Usage per mount with meters, removable media mount / unmount / eject, trash and package cache cleanup |
 
 ## Development
 

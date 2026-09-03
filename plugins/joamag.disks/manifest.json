@@ -1,0 +1,54 @@
+{
+  "schemaVersion": 1,
+  "id": "joamag.disks",
+  "name": "Disks",
+  "version": "0.1.0",
+  "author": "João Magalhães",
+  "license": "Apache-2.0",
+  "description": "Disk usage per mount in the bar and a popup with usage meters, removable drive mount and eject, trash and package cache cleanup.",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "Panel.qml"
+  },
+  "barWidget": {
+    "displayName": "Disks",
+    "description": "Usage per mount, removable drives, trash and package cache cleanup.",
+    "category": "System",
+    "allowMultiple": false,
+    "defaultSection": "right",
+    "defaults": {
+      "barMode": "percent",
+      "warnPct": 90,
+      "refreshIntervalSec": 30
+    },
+    "schema": [
+      {
+        "key": "barMode",
+        "type": "select",
+        "label": "Number shown in the bar (root filesystem)",
+        "options": ["percent", "free", "used", "none"],
+        "defaultValue": "percent"
+      },
+      {
+        "key": "warnPct",
+        "type": "integer",
+        "label": "Usage that turns a mount urgent (percent)",
+        "min": 50,
+        "max": 99,
+        "step": 1,
+        "defaultValue": 90
+      },
+      {
+        "key": "refreshIntervalSec",
+        "type": "integer",
+        "label": "Refresh interval (seconds)",
+        "min": 5,
+        "max": 600,
+        "step": 5,
+        "defaultValue": 30
+      }
+    ]
+  }
+}
