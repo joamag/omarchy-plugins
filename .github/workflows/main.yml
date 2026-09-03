@@ -2,6 +2,12 @@ name: Main Workflow
 on:
   - push
   - workflow_dispatch
+# every step pipes its output through tee for the summary, and the default
+# shell of a step drops the exit status of the command before the pipe,
+# bash with pipefail is what makes a failing tool fail the step
+defaults:
+  run:
+    shell: bash
 jobs:
   build-validate:
     name: Build Validate

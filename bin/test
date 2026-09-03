@@ -14,9 +14,14 @@ cd "$repo"
 
 command -v node >/dev/null || { echo "test: node is required (mise install node, or pacman -S nodejs)" >&2; exit 1; }
 
+# Test files are listed explicitly: Node 22 does not accept a directory
+# argument to --test, it tries to load it as a module.
+files=(test/*.test.js)
+(( ${#files[@]} > 0 )) || { echo "test: no test files found under test/" >&2; exit 1; }
+
 if [[ ${1:-} == --watch ]]; then
   shift
-  exec node --test --watch "$@" test/
+  exec node --test --watch "$@" "${files[@]}"
 fi
 
 exec node --test \
@@ -26,4 +31,4 @@ exec node --test \
   --test-coverage-functions=90 \
   --test-coverage-branches=80 \
   "$@" \
-  test/
+  "${files[@]}"
