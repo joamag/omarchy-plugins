@@ -1,0 +1,29 @@
+#!/bin/bash
+
+# Remove the dev symlinks created by bin/dev-link. Only removes symlinks that
+# point back into this repository, never a real plugin checkout.
+#
+# Usage: bin/dev-unlink [plugin-id...]   (no args = every linked plugin)
+
+set -euo pipefail
+
+repo=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+target_dir="$HOME/.config/omarchy/plugins"
+
+ids=("$@")
+if (( ${#ids[@]} == 0 )); then
+  for dir in "$repo"/plugins/*/; do
+    ids+=("$(basename "$dir")")
+  done
+fi
+
+for id in "${ids[@]}"; do
+  dst="$target_dir/$id"
+  [[ -L $dst ]] || continue
+  case "$(readlink -f "$dst")" in
+    "$repo"/plugins/*) rm "$dst"; echo "unlinked $id" ;;
+    *) echo "dev-unlink: $dst does not point into this repo, skipping" >&2 ;;
+  esac
+done
+
+"$repo/bin/reload" --rescan

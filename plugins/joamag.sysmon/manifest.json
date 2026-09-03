@@ -1,0 +1,61 @@
+{
+  "schemaVersion": 1,
+  "id": "joamag.sysmon",
+  "name": "System monitor",
+  "version": "0.1.0",
+  "author": "João Magalhães",
+  "license": "Apache-2.0",
+  "description": "CPU, memory, temperature, GPU and disk usage in the bar, with a popup showing live meters and the busiest processes.",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "Panel.qml"
+  },
+  "barWidget": {
+    "displayName": "System monitor",
+    "description": "CPU, memory, temperature, GPU and disk meters with top processes.",
+    "category": "System",
+    "allowMultiple": true,
+    "defaultSection": "right",
+    "defaults": {
+      "barMetric": "cpu",
+      "showLabel": true,
+      "refreshIntervalSec": 3,
+      "processCount": 6
+    },
+    "schema": [
+      {
+        "key": "barMetric",
+        "type": "select",
+        "label": "Metric shown in the bar",
+        "options": ["cpu", "memory", "temperature", "gpu", "disk"],
+        "defaultValue": "cpu"
+      },
+      {
+        "key": "showLabel",
+        "type": "boolean",
+        "label": "Show percentage next to the icon",
+        "defaultValue": true
+      },
+      {
+        "key": "refreshIntervalSec",
+        "type": "integer",
+        "label": "Refresh interval (seconds)",
+        "min": 1,
+        "max": 60,
+        "step": 1,
+        "defaultValue": 3
+      },
+      {
+        "key": "processCount",
+        "type": "integer",
+        "label": "Processes listed in the popup",
+        "min": 0,
+        "max": 15,
+        "step": 1,
+        "defaultValue": 6
+      }
+    ]
+  }
+}

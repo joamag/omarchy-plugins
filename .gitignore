@@ -1,0 +1,29 @@
+# Editor and OS noise
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+/.idea
+/.vscode
+/.claude
+*.code-workspace
+
+# Backup and scratch copies left behind by editors or plugin clones
+*.orig
+*.bak
+*.bak.*
+*.rej
+*.tmp
+/scratch
+
+# Qt / QML tooling caches
+.qmlls.ini
+*.qmlc
+*.jsc
+.qmlcache/
+qmlcache/
+
+# Local environment files
+.env
+.env.*

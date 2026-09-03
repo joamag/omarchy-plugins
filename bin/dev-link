@@ -1,0 +1,39 @@
+#!/bin/bash
+
+# Symlink every plugin under plugins/ into ~/.config/omarchy/plugins so the
+# running omarchy-shell discovers it, then ask the shell to rescan.
+#
+# Usage: bin/dev-link [plugin-id...]   (no args = every plugin)
+
+set -euo pipefail
+
+repo=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+target_dir="$HOME/.config/omarchy/plugins"
+mkdir -p "$target_dir"
+
+ids=("$@")
+if (( ${#ids[@]} == 0 )); then
+  for dir in "$repo"/plugins/*/; do
+    [[ -f "$dir/manifest.json" ]] || continue
+    ids+=("$(basename "$dir")")
+  done
+fi
+
+for id in "${ids[@]}"; do
+  src="$repo/plugins/$id"
+  dst="$target_dir/$id"
+  [[ -f "$src/manifest.json" ]] || { echo "dev-link: no plugin at $src" >&2; exit 1; }
+  omarchy-plugin-validate "$src"
+  if [[ -L $dst ]]; then
+    ln -sfn "$src" "$dst"
+    echo "relinked $id"
+  elif [[ -e $dst ]]; then
+    echo "dev-link: $dst exists and is not a symlink, refusing to replace it" >&2
+    exit 1
+  else
+    ln -s "$src" "$dst"
+    echo "linked   $id -> $dst"
+  fi
+done
+
+"$repo/bin/reload" --rescan

@@ -1,0 +1,50 @@
+{
+  "schemaVersion": 1,
+  "id": "joamag.docker",
+  "name": "Docker",
+  "version": "0.1.0",
+  "author": "João Magalhães",
+  "license": "Apache-2.0",
+  "description": "Running container count in the bar, with a popup to start, stop and restart containers or open lazydocker.",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "Panel.qml"
+  },
+  "barWidget": {
+    "displayName": "Docker",
+    "description": "Container list with start, stop and restart, plus a lazydocker shortcut.",
+    "category": "Development",
+    "allowMultiple": false,
+    "defaultSection": "right",
+    "defaults": {
+      "showCount": true,
+      "refreshIntervalSec": 10,
+      "hideWhenIdle": false
+    },
+    "schema": [
+      {
+        "key": "showCount",
+        "type": "boolean",
+        "label": "Show running container count next to the icon",
+        "defaultValue": true
+      },
+      {
+        "key": "refreshIntervalSec",
+        "type": "integer",
+        "label": "Refresh interval (seconds)",
+        "min": 2,
+        "max": 300,
+        "step": 1,
+        "defaultValue": 10
+      },
+      {
+        "key": "hideWhenIdle",
+        "type": "boolean",
+        "label": "Hide the widget while no container is running",
+        "defaultValue": false
+      }
+    ]
+  }
+}

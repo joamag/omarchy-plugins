@@ -1,0 +1,33 @@
+#!/bin/bash
+
+# Syntax-check every QML file in the repo with Qt's qmllint. Only [syntax]
+# findings fail the run: the shell's qs.* modules and Quickshell types do not
+# resolve outside the running shell, so the resolution warnings are noise.
+#
+# Usage: bin/lint [file.qml...]
+
+set -uo pipefail
+
+repo=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+qmllint=$(command -v /usr/lib/qt6/bin/qmllint || command -v qmllint6 || command -v qmllint) || {
+  echo "lint: qmllint not found (pacman -S qt6-declarative)" >&2
+  exit 1
+}
+
+files=("$@")
+if (( ${#files[@]} == 0 )); then
+  while IFS= read -r f; do files+=("$f"); done < <(find "$repo/plugins" -name '*.qml' | sort)
+fi
+
+status=0
+for file in "${files[@]}"; do
+  output=$("$qmllint" -I /usr/share/omarchy/shell "$file" 2>&1)
+  if grep -q '\[syntax\]' <<<"$output"; then
+    grep -A2 '\[syntax\]' <<<"$output"
+    status=1
+  else
+    echo "ok       ${file#"$repo"/}"
+  fi
+done
+
+exit $status

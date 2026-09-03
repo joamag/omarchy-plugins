@@ -1,0 +1,23 @@
+#!/bin/bash
+
+# Reload plugin code in the running shell.
+#
+# `omarchy-shell shell rescanPlugins` re-reads manifests but the QML engine
+# keeps the already-compiled components, so edited QML never reaches the
+# screen that way. The only reliable path is restarting the shell, which
+# omarchy-restart-shell does in about a second while preserving the session.
+#
+# Usage: bin/reload            restart the shell (code + manifests)
+#        bin/reload --rescan   manifests only, no restart
+
+set -euo pipefail
+
+if [[ ${1:-} == --rescan ]]; then
+  omarchy-shell shell ping >/dev/null 2>&1 || { echo "reload: omarchy-shell is not running" >&2; exit 1; }
+  omarchy-shell shell rescanPlugins >/dev/null
+  echo "shell rescanned plugins"
+  exit 0
+fi
+
+omarchy-restart-shell
+echo "shell restarted"

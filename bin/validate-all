@@ -1,0 +1,35 @@
+#!/bin/bash
+
+# Run omarchy-plugin-validate over every plugin in the repo and enforce the
+# repo conventions on top: ids live in the joamag.* namespace and each plugin
+# ships a README.md.
+
+set -uo pipefail
+
+repo=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+status=0
+
+for dir in "$repo"/plugins/*/; do
+  id=$(basename "$dir")
+  manifest_id=$(jq -r '.id // ""' "$dir/manifest.json" 2>/dev/null)
+
+  if ! omarchy-plugin-validate "$dir"; then
+    status=1
+    continue
+  fi
+  if [[ $manifest_id != "$id" ]]; then
+    echo "validate-all: $id: manifest id '$manifest_id' does not match folder name" >&2
+    status=1
+  fi
+  if [[ $id != joamag.* ]]; then
+    echo "validate-all: $id: plugin ids must use the joamag.* namespace" >&2
+    status=1
+  fi
+  if [[ ! -f "$dir/README.md" ]]; then
+    echo "validate-all: $id: missing README.md" >&2
+    status=1
+  fi
+  echo "ok       $id"
+done
+
+exit $status
