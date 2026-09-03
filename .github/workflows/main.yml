@@ -40,12 +40,15 @@ jobs:
     name: Build Lint
     timeout-minutes: 30
     runs-on: ubuntu-latest
+    # omarchy only runs on arch, so the qml is checked with the qmllint of
+    # arch's current qt6 rather than the older one ubuntu ships, whose
+    # output the probe in bin/lint rightly refuses to trust
+    container: archlinux:latest
     steps:
-      - uses: actions/checkout@v7
       - name: Install dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y qt6-declarative-dev-tools shellcheck
+          pacman -Syu --noconfirm --needed git qt6-declarative shellcheck
+      - uses: actions/checkout@v7
       - name: Run lint
         run: |
           mkdir -p lint
