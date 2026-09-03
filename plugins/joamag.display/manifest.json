@@ -1,0 +1,69 @@
+{
+  "schemaVersion": 1,
+  "id": "joamag.display",
+  "name": "Display",
+  "version": "0.2.0",
+  "author": "João Magalhães",
+  "license": "Apache-2.0",
+  "description": "Brightness and contrast over DDC/CI plus a true gamma exponent and colour temperature on the compositor ramp, with the scale, text size and monitor controls of the built-in Display widget.",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "Panel.qml"
+  },
+  "barWidget": {
+    "displayName": "Display",
+    "description": "Brightness, contrast, gamma and colour temperature, with scale and text size.",
+    "category": "System",
+    "allowMultiple": false,
+    "defaultSection": "right",
+    "defaults": {
+      "showContrast": true,
+      "showGamma": true,
+      "showTemperature": true,
+      "wheelStep": 5,
+      "refreshIntervalSec": 5,
+      "gamma": 1,
+      "temperature": 6500
+    },
+    "schema": [
+      {
+        "key": "showContrast",
+        "type": "boolean",
+        "label": "Contrast slider (needs a monitor that answers DDC/CI)",
+        "defaultValue": true
+      },
+      {
+        "key": "showGamma",
+        "type": "boolean",
+        "label": "Gamma slider, 0.30 to 2.80 (applies to every display)",
+        "defaultValue": true
+      },
+      {
+        "key": "showTemperature",
+        "type": "boolean",
+        "label": "Colour temperature slider, the night light (every display)",
+        "defaultValue": true
+      },
+      {
+        "key": "wheelStep",
+        "type": "integer",
+        "label": "Brightness step when scrolling on the bar (percent)",
+        "min": 1,
+        "max": 25,
+        "step": 1,
+        "defaultValue": 5
+      },
+      {
+        "key": "refreshIntervalSec",
+        "type": "integer",
+        "label": "Refresh interval while the popup is open (seconds)",
+        "min": 2,
+        "max": 60,
+        "step": 1,
+        "defaultValue": 5
+      }
+    ]
+  }
+}
