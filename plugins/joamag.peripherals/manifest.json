@@ -1,0 +1,60 @@
+{
+  "schemaVersion": 1,
+  "id": "joamag.peripherals",
+  "name": "Peripherals",
+  "version": "0.1.0",
+  "author": "João Magalhães",
+  "license": "Apache-2.0",
+  "description": "Battery of the wireless mouse, keyboard and headset in the bar, with a popup listing every device, its charge and the time it has left.",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "Panel.qml"
+  },
+  "barWidget": {
+    "displayName": "Peripherals",
+    "description": "Wireless mouse, keyboard and headset batteries.",
+    "category": "System",
+    "allowMultiple": false,
+    "defaultSection": "right",
+    "defaults": {
+      "showLevel": true,
+      "warnPct": 20,
+      "hideWhenHealthy": false,
+      "refreshIntervalSec": 60
+    },
+    "schema": [
+      {
+        "key": "showLevel",
+        "type": "boolean",
+        "label": "Show the emptiest device's level next to the icon",
+        "defaultValue": true
+      },
+      {
+        "key": "warnPct",
+        "type": "integer",
+        "label": "Charge at or below which a device turns urgent (percent)",
+        "min": 5,
+        "max": 50,
+        "step": 5,
+        "defaultValue": 20
+      },
+      {
+        "key": "hideWhenHealthy",
+        "type": "boolean",
+        "label": "Hide the widget while no device is low",
+        "defaultValue": false
+      },
+      {
+        "key": "refreshIntervalSec",
+        "type": "integer",
+        "label": "Fallback refresh interval (seconds); changes are picked up as they happen",
+        "min": 10,
+        "max": 600,
+        "step": 10,
+        "defaultValue": 60
+      }
+    ]
+  }
+}
