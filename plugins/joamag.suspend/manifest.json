@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "id": "joamag.suspend",
+  "name": "Suspend",
+  "version": "0.1.0",
+  "author": "João Magalhães",
+  "license": "Apache-2.0",
+  "description": "Suspends the machine after a period of idle. Honours Stay Awake, Wayland idle inhibitors, systemd sleep inhibitors and Omarchy's suspend toggle.",
+  "kinds": [
+    "service"
+  ],
+  "keepLoaded": true,
+  "entryPoints": {
+    "service": "Service.qml"
+  }
+}
