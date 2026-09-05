@@ -1,0 +1,64 @@
+{
+  "schemaVersion": 1,
+  "id": "joamag.home",
+  "name": "Home",
+  "version": "0.1.0",
+  "author": "João Magalhães",
+  "license": "Apache-2.0",
+  "description": "Home Assistant in the bar: lights lit and the thermostat's target, with a popup to switch lights, dim them, set the air conditioning and run scenes. Signs in with your usual account.",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "Panel.qml"
+  },
+  "barWidget": {
+    "displayName": "Home",
+    "description": "Lights, switches, air conditioning and scenes from Home Assistant.",
+    "category": "Home",
+    "allowMultiple": false,
+    "defaultSection": "right",
+    "defaults": {
+      "entities": "",
+      "barMode": "both",
+      "refreshIntervalSec": 30,
+      "credentialsFile": "",
+      "tab": "all"
+    },
+    "schema": [
+      {
+        "key": "entities",
+        "type": "string",
+        "label": "Entities to show (comma separated ids; empty = every climate, light and switch)",
+        "defaultValue": ""
+      },
+      {
+        "key": "barMode",
+        "type": "select",
+        "label": "Shown in the bar",
+        "options": [
+          "both",
+          "lights",
+          "climate",
+          "none"
+        ],
+        "defaultValue": "both"
+      },
+      {
+        "key": "refreshIntervalSec",
+        "type": "integer",
+        "label": "Refresh interval (seconds)",
+        "min": 10,
+        "max": 600,
+        "step": 10,
+        "defaultValue": 30
+      },
+      {
+        "key": "credentialsFile",
+        "type": "string",
+        "label": "Credentials file (empty = ~/.config/omarchy/home.env)",
+        "defaultValue": ""
+      }
+    ]
+  }
+}

@@ -1,0 +1,14 @@
+[
+  {"entity_id": "sensor.outside_temperature", "state": "17.4", "attributes": {"friendly_name": "Outside", "unit_of_measurement": "°C"}, "last_changed": "2026-09-04T01:00:00+00:00"},
+  {"entity_id": "light.kitchen", "state": "on", "attributes": {"friendly_name": "Kitchen", "brightness": 204, "supported_color_modes": ["brightness"]}, "last_changed": "2026-09-04T01:00:00+00:00"},
+  {"entity_id": "light.bedroom", "state": "off", "attributes": {"friendly_name": "Bedroom", "supported_color_modes": ["brightness"]}, "last_changed": "2026-09-04T01:00:00+00:00"},
+  {"entity_id": "light.porch", "state": "on", "attributes": {"friendly_name": "Porch", "supported_color_modes": ["onoff"]}, "last_changed": "2026-09-04T01:00:00+00:00"},
+  {"entity_id": "light.attic", "state": "unavailable", "attributes": {"friendly_name": "Attic"}, "last_changed": "2026-09-04T01:00:00+00:00"},
+  {"entity_id": "climate.living_room", "state": "cool", "attributes": {"friendly_name": "Living room AC", "hvac_modes": ["off", "cool", "heat", "heat_cool", "fan_only"], "current_temperature": 24.5, "temperature": 22, "target_temp_step": 0.5, "min_temp": 16, "max_temp": 30, "hvac_action": "cooling"}, "last_changed": "2026-09-04T01:00:00+00:00"},
+  {"entity_id": "climate.office", "state": "off", "attributes": {"friendly_name": "Office AC", "hvac_modes": ["off", "cool", "heat"], "current_temperature": 23, "temperature": 21, "min_temp": 16, "max_temp": 30}, "last_changed": "2026-09-04T01:00:00+00:00"},
+  {"entity_id": "switch.coffee", "state": "off", "attributes": {"friendly_name": "Coffee machine"}, "last_changed": "2026-09-04T01:00:00+00:00"},
+  {"entity_id": "fan.office", "state": "on", "attributes": {"friendly_name": "Office fan"}, "last_changed": "2026-09-04T01:00:00+00:00"},
+  {"entity_id": "cover.garage", "state": "closed", "attributes": {"friendly_name": "Garage door"}, "last_changed": "2026-09-04T01:00:00+00:00"},
+  {"entity_id": "scene.movie_night", "state": "2026-09-03T21:00:00+00:00", "attributes": {"friendly_name": "Movie night"}, "last_changed": "2026-09-04T01:00:00+00:00"},
+  {"entity_id": "script.goodnight", "state": "off", "attributes": {"friendly_name": "Goodnight"}, "last_changed": "2026-09-04T01:00:00+00:00"}
+]
