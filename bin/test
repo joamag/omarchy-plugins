@@ -1,9 +1,10 @@
 #!/bin/bash
 
 # Run the plugin test suite with Node's built-in runner and coverage report.
-# Coverage is measured over the QML JavaScript libraries (plugins/*/Model.js);
-# the shell scripts are exercised end to end by the same tests but bash has
-# no line coverage here, and the QML panels only run inside omarchy-shell.
+# Coverage is measured over the QML JavaScript libraries (plugins/*/Model.js)
+# and the to-do widget's MCP server (plugins/*/mcp.js); the shell scripts are
+# exercised end to end by the same tests but bash has no line coverage here,
+# and the QML panels only run inside omarchy-shell.
 #
 # Usage: bin/test [--watch] [node --test options] [test files...]
 
@@ -27,6 +28,7 @@ fi
 exec node --test \
   --experimental-test-coverage \
   --test-coverage-include='plugins/**/Model.js' \
+  --test-coverage-include='plugins/**/mcp.js' \
   --test-coverage-lines=90 \
   --test-coverage-functions=90 \
   --test-coverage-branches=80 \

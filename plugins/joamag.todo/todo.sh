@@ -6,7 +6,8 @@
 #   todo.sh list                        the file
 #     file   PATH
 #     task   line  done  priority  created  completed  text
-#   todo.sh add TEXT                    append a task, dated today
+#   todo.sh add [--by NAME] TEXT        append a task, dated today; --by signs
+#                                       it with an @NAME context
 #   todo.sh toggle LINE TEXT            tick or untick line LINE
 #   todo.sh remove LINE TEXT            delete line LINE
 #   todo.sh priority LINE TEXT A|B|C|-  set or clear the priority of line LINE
@@ -121,8 +122,17 @@ case "$command" in
     list
     ;;
   add)
+    # --by NAME: who is adding it. An LLM signing as @claude gets a context
+    # tag the widget shows on the row and the file keeps, and nothing else.
+    by=""
+    if [[ ${1:-} == --by ]]; then
+      by=$(printf '%s' "${2:-}" | tr -cd 'A-Za-z0-9_.-')
+      [[ -n $by ]] || fail "--by needs a name"
+      shift 2
+    fi
     text=$(printf '%s' "${1:-}" | tr -d '\r\n' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
     [[ -n $text ]] || fail "nothing to add"
+    if [[ -n $by ]] && ! [[ " $text " == *" @$by "* ]]; then text="$text @$by"; fi
     ensure_file
     # A typed "(A) buy milk" keeps its priority in front of today's date.
     if [[ $text =~ ^\(([A-Z])\)\ (.*)$ ]]; then
@@ -181,7 +191,7 @@ case "$command" in
     list
     ;;
   *)
-    echo "Usage: todo.sh [list | add TEXT | toggle LINE TEXT | remove LINE TEXT | priority LINE TEXT A-Z|- | archive]" >&2
+    echo "Usage: todo.sh [list | add [--by NAME] TEXT | toggle LINE TEXT | remove LINE TEXT | priority LINE TEXT A-Z|- | archive]" >&2
     exit 1
     ;;
 esac

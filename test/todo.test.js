@@ -5,7 +5,9 @@ const { describe, it } = require("node:test")
 const assert = require("node:assert/strict")
 const fs = require("node:fs")
 const path = require("node:path")
+const { spawn } = require("node:child_process")
 const { loadModel, runScript, tmpdir } = require("./helpers")
+const mcp = require("../plugins/joamag.todo/mcp.js")
 
 const Model = loadModel("joamag.todo")
 
@@ -327,6 +329,16 @@ describe("todo.sh", () => {
     assert.equal(raw(), `${today} Buy milk +groceries\n(A) ${today} Call the bank @phone\n`)
   })
 
+  it("signs a task with --by and never twice", (t) => {
+    const { list, raw, run } = setup(t, [])
+    assert.equal(list(["add", "--by", "claude", "Review the PR +omarchy"]).tasks[0].contexts.join(), "claude")
+    list(["add", "--by", "claude", "Already signed @claude"])
+    list(["add", "--by", "c l/a;u de", "Odd name"])
+    assert.equal(raw(), `${today} Review the PR +omarchy @claude\n${today} Already signed @claude\n${today} Odd name @claude\n`)
+    assert.equal(run(["add", "--by", "", "No name"]).stdout, "error\t--by needs a name\n")
+    assert.equal(run(["add", "--by", "claude"]).stdout, "error\tnothing to add\n")
+  })
+
   it("refuses to add nothing", (t) => {
     const { run, raw } = setup(t, [])
     assert.equal(run(["add", "   "]).stdout, "error\tnothing to add\n")
@@ -403,5 +415,133 @@ describe("todo.sh", () => {
     const result = run(["bogus"])
     assert.equal(result.status, 1)
     assert.match(result.stderr, /Usage: todo.sh/)
+  })
+})
+
+// The MCP server, in process for the handlers and over stdio for the
+// transport, against a scratch todo.txt each time.
+describe("mcp.js", () => {
+  function scratch(t, lines = []) {
+    const dir = tmpdir(t)
+    const file = path.join(dir, "todo.txt")
+    fs.writeFileSync(file, lines.join("\n") + (lines.length ? "\n" : ""))
+    const previous = { file: process.env.TODO_FILE, author: process.env.TODO_AUTHOR }
+    process.env.TODO_FILE = file
+    delete process.env.TODO_AUTHOR
+    t.after(() => {
+      if (previous.file === undefined) delete process.env.TODO_FILE; else process.env.TODO_FILE = previous.file
+      if (previous.author === undefined) delete process.env.TODO_AUTHOR; else process.env.TODO_AUTHOR = previous.author
+    })
+    return { file, raw: () => fs.readFileSync(file, "utf8") }
+  }
+
+  const call = (name, args) => mcp.handle({ jsonrpc: "2.0", id: 9, method: "tools/call", params: { name, arguments: args } }).result
+
+  it("initialises with the client's protocol version, or its own", () => {
+    const reply = mcp.handle({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2024-11-05", capabilities: {} } })
+    assert.equal(reply.id, 1)
+    assert.equal(reply.result.protocolVersion, "2024-11-05")
+    assert.deepEqual(reply.result.capabilities, { tools: {} })
+    assert.equal(reply.result.serverInfo.name, "joamag-todo")
+    assert.equal(mcp.handle({ jsonrpc: "2.0", id: 2, method: "initialize" }).result.protocolVersion, mcp.PROTOCOL)
+  })
+
+  it("answers ping, ignores notifications and rejects the rest", () => {
+    assert.deepEqual(mcp.handle({ jsonrpc: "2.0", id: 3, method: "ping" }).result, {})
+    assert.equal(mcp.handle({ jsonrpc: "2.0", method: "notifications/initialized" }), null)
+    assert.equal(mcp.handle({ jsonrpc: "2.0", id: 4, method: "resources/list" }).error.code, -32601)
+    assert.equal(mcp.handle({ id: 5, method: "ping" }).error.code, -32600)
+    assert.equal(mcp.handle(null).error.code, -32600)
+  })
+
+  it("lists three tools with the arguments they need", () => {
+    const tools = mcp.handle({ jsonrpc: "2.0", id: 6, method: "tools/list" }).result.tools
+    assert.deepEqual(tools.map((tool) => tool.name), ["todo_add", "todo_list", "todo_complete"])
+    assert.deepEqual(tools[0].inputSchema.required, ["text"])
+    assert.deepEqual(tools[2].inputSchema.required, ["line", "text"])
+    assert.match(tools[0].description, /@claude/)
+  })
+
+  it("adds a task signed as claude, with a priority when asked", (t) => {
+    const { raw } = scratch(t)
+    const reply = call("todo_add", { text: "Renew the domain +admin", priority: "b" })
+    assert.equal(reply.isError, false)
+    assert.match(reply.content[0].text, /^Added on line 1: Renew the domain \+admin @claude/)
+    assert.match(raw(), /^\(B\) \d{4}-\d{2}-\d{2} Renew the domain \+admin @claude\n$/)
+  })
+
+  it("signs as whoever the call or the environment says", (t) => {
+    const { raw } = scratch(t)
+    call("todo_add", { text: "From a colleague", by: "codex" })
+    process.env.TODO_AUTHOR = "assistant"
+    call("todo_add", { text: "From the environment" })
+    call("todo_add", { text: "Left alone @assistant" })
+    assert.deepEqual(raw().split("\n").filter(Boolean).map((l) => l.replace(/^\S+ /, "")), ["From a colleague @codex", "From the environment @assistant", "Left alone @assistant"])
+  })
+
+  it("refuses a bad add without touching the file", (t) => {
+    const { raw } = scratch(t)
+    assert.equal(call("todo_add", { text: "  " }).isError, true)
+    assert.equal(call("todo_add", { text: "x", priority: "urgent" }).isError, true)
+    assert.equal(call("todo_add", {}).isError, true)
+    assert.equal(raw(), "")
+  })
+
+  it("lists the tasks with their line numbers, or says the list is empty", (t) => {
+    scratch(t, ["(A) 2026-09-01 Call the bank @phone", "Plain", "x 2026-09-03 Done thing"])
+    const listing = call("todo_list", {}).content[0].text
+    assert.equal(listing, "TO DO (2)\n  [ ] (A) Call the bank  @phone  (line 1)\n  [ ] Plain  (line 2)\nDONE (1)\n  [x] Done thing  (line 3)")
+    scratch(t)
+    assert.equal(call("todo_list", {}).content[0].text, "The list is empty.")
+  })
+
+  it("ticks a task by line and text, the title without tags being enough", (t) => {
+    const { raw } = scratch(t, ["Call the bank @phone +admin", "Plain"])
+    const reply = call("todo_complete", { line: 1, text: "Call the bank" })
+    assert.equal(reply.isError, false)
+    assert.match(raw().split("\n")[0], /^x \d{4}-\d{2}-\d{2} Call the bank @phone \+admin$/)
+    assert.match(reply.content[0].text, /^Done: Call the bank @phone \+admin/)
+  })
+
+  it("refuses to tick the wrong line, a done line or a bad line", (t) => {
+    const { raw } = scratch(t, ["One", "x 2026-09-03 Two"])
+    const before = raw()
+    assert.match(call("todo_complete", { line: 1, text: "Something else" }).content[0].text, /line 1 has changed/)
+    assert.match(call("todo_complete", { line: 2, text: "Two" }).content[0].text, /already done/)
+    assert.equal(call("todo_complete", { line: 0, text: "One" }).isError, true)
+    assert.equal(call("todo_complete", { line: "one", text: "One" }).isError, true)
+    assert.equal(call("todo_complete", { line: 1.5, text: "One" }).isError, true)
+    assert.equal(call("todo_complete", { line: 1, text: "" }).isError, true)
+    assert.equal(call("todo_complete", { line: 9, text: "One" }).isError, true)
+    assert.equal(raw(), before)
+  })
+
+  it("takes the line number as a numeric string, as a model may hand it back", (t) => {
+    const { raw } = scratch(t, ["One"])
+    assert.equal(call("todo_complete", { line: "1", text: "One" }).isError, false)
+    assert.match(raw(), /^x /)
+  })
+
+  it("names an unknown tool as an error", () => {
+    assert.equal(call("todo_delete", {}).isError, true)
+  })
+
+  it("speaks newline-delimited JSON-RPC over stdio", async (t) => {
+    const { file } = scratch(t)
+    const child = spawn(process.execPath, [path.join(__dirname, "..", "plugins", "joamag.todo", "mcp.js")], { env: { ...process.env, TODO_FILE: file }, stdio: ["pipe", "pipe", "inherit"] })
+    t.after(() => child.kill())
+    let out = ""
+    child.stdout.on("data", (chunk) => { out += chunk })
+    child.stdin.write(JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: mcp.PROTOCOL } }) + "\n")
+    child.stdin.write(JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }) + "\n")
+    child.stdin.write("this is not json\n")
+    child.stdin.write(JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "todo_add", arguments: { text: "Over the wire" } } }) + "\n")
+    child.stdin.end()
+    await new Promise((resolve) => child.on("close", resolve))
+    const replies = out.trim().split("\n").map((line) => JSON.parse(line))
+    assert.deepEqual(replies.map((r) => r.id), [1, null, 2])
+    assert.equal(replies[1].error.code, -32700)
+    assert.equal(replies[2].result.isError, false)
+    assert.match(fs.readFileSync(file, "utf8"), /Over the wire @claude\n$/)
   })
 })
