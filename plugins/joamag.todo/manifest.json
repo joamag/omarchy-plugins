@@ -1,0 +1,68 @@
+{
+  "schemaVersion": 1,
+  "id": "joamag.todo",
+  "name": "To do",
+  "version": "0.1.0",
+  "author": "João Magalhães",
+  "license": "Apache-2.0",
+  "description": "A to-do list in the bar, kept in a plain todo.txt file: how many are left, and a popup to add, tick, prioritise and archive tasks.",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "Panel.qml"
+  },
+  "barWidget": {
+    "displayName": "To do",
+    "description": "Tasks from a todo.txt file, with ticking and adding from the popup.",
+    "category": "Productivity",
+    "allowMultiple": false,
+    "defaultSection": "right",
+    "defaults": {
+      "file": "",
+      "barMode": "pending",
+      "hideWhenEmpty": false,
+      "doneLimit": 5,
+      "refreshIntervalSec": 60
+    },
+    "schema": [
+      {
+        "key": "file",
+        "type": "string",
+        "label": "todo.txt file (empty = ~/.local/share/omarchy/todo.txt)",
+        "defaultValue": ""
+      },
+      {
+        "key": "barMode",
+        "type": "select",
+        "label": "Number shown in the bar",
+        "options": ["pending", "none"],
+        "defaultValue": "pending"
+      },
+      {
+        "key": "hideWhenEmpty",
+        "type": "boolean",
+        "label": "Hide the widget while nothing is left to do",
+        "defaultValue": false
+      },
+      {
+        "key": "doneLimit",
+        "type": "integer",
+        "label": "Done tasks kept visible in the popup (0 hides them)",
+        "min": 0,
+        "max": 50,
+        "step": 1,
+        "defaultValue": 5
+      },
+      {
+        "key": "refreshIntervalSec",
+        "type": "integer",
+        "label": "Fallback refresh interval (seconds); the file is watched for changes",
+        "min": 10,
+        "max": 600,
+        "step": 10,
+        "defaultValue": 60
+      }
+    ]
+  }
+}
