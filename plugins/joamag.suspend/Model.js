@@ -1,17 +1,46 @@
 .pragma library
 
-// Pure helpers for the suspend service: reading its entry from shell.json,
-// validating the idle timeout and interpreting what suspend.sh reported.
+// Pure helpers for the suspend plugin: reading its entry from shell.json,
+// validating the idle timeout, the presets the popup offers, and interpreting
+// what suspend.sh reported.
 
 var DEFAULT_TIMEOUT_SECONDS = 1800
 
-// The service has no bar widget, so its settings live inline on the
-// `{ "id": "joamag.suspend", ... }` entry in shell.json's `plugins[]`.
+// One glyph says whether the machine will sleep on its own: the sleeping
+// face, or the same face crossed out.
+var ICON_ARMED = "󰒲"
+var ICON_OFF = "󰒳"
+
+// The timeouts the popup offers at a click; anything else goes in the field.
+var PRESETS = [
+  { label: "15 min", seconds: 900 },
+  { label: "30 min", seconds: 1800 },
+  { label: "1 h", seconds: 3600 },
+  { label: "3 h", seconds: 10800 },
+  { label: "Never", seconds: 0 }
+]
+
+var MAX_TIMEOUT_SECONDS = 86400
+
+// The plugin's `{ "id": "joamag.suspend", ... }` entry in shell.json. Enabled
+// as a bar widget it sits in the bar layout, which is where the popup writes
+// it; enabled as a service alone it sits in `plugins[]`. The bar wins when
+// both exist, since that is the one with a control on it.
 function pluginEntry(config, id) {
-  if (!config || !Array.isArray(config.plugins)) return null
-  for (var i = 0; i < config.plugins.length; i++) {
-    var entry = config.plugins[i]
-    if (entry && typeof entry === "object" && String(entry.id || "") === id) return entry
+  if (!config || typeof config !== "object") return null
+  var layout = config.bar && config.bar.layout && typeof config.bar.layout === "object" ? config.bar.layout : null
+  var sections = ["left", "center", "right"]
+  for (var s = 0; s < sections.length; s++) {
+    var list = layout && Array.isArray(layout[sections[s]]) ? layout[sections[s]] : []
+    for (var i = 0; i < list.length; i++) {
+      var entry = list[i]
+      if (entry && typeof entry === "object" && String(entry.id || "") === id) return entry
+    }
+  }
+  if (!Array.isArray(config.plugins)) return null
+  for (var j = 0; j < config.plugins.length; j++) {
+    var plugin = config.plugins[j]
+    if (plugin && typeof plugin === "object" && String(plugin.id || "") === id) return plugin
   }
   return null
 }
@@ -62,4 +91,87 @@ function describeTimeout(seconds) {
   if (seconds % 3600 === 0) return (seconds / 3600) + " h"
   if (seconds % 60 === 0) return (seconds / 60) + " min"
   return seconds + " s"
+}
+
+// Which preset a timeout is, or -1 when it is a custom value.
+function presetIndex(seconds) {
+  var n = Number(seconds)
+  for (var i = 0; i < PRESETS.length; i++) if (PRESETS[i].seconds === n) return i
+  return -1
+}
+
+// A typed duration as seconds: "45" is minutes, "45m", "1h", "1.5 h" and
+// "2h30" are what they say, "0", "off" and "never" disarm. NaN for anything
+// else; at least a minute, at most a day.
+function parseDuration(text) {
+  var s = String(text || "").trim().toLowerCase()
+  if (s === "") return NaN
+  if (s === "0" || s === "off" || s === "never" || s === "none") return 0
+  var m = s.match(/^(\d+(?:[.,]\d+)?)\s*(h|hr|hrs|hour|hours|m|min|mins|minute|minutes|s|sec|secs|second|seconds)?(?:\s*(\d+)\s*(m|min|mins)?)?$/)
+  if (!m) return NaN
+  var value = Number(m[1].replace(",", "."))
+  var unit = m[2] || "m"
+  var seconds
+  if (unit.charAt(0) === "h") seconds = value * 3600 + (m[3] ? Number(m[3]) * 60 : 0)
+  else if (unit.charAt(0) === "s") seconds = value
+  else seconds = value * 60
+  if (!isFinite(seconds) || seconds <= 0) return NaN
+  seconds = Math.round(seconds)
+  if (seconds < 60) seconds = 60
+  if (seconds > MAX_TIMEOUT_SECONDS) seconds = MAX_TIMEOUT_SECONDS
+  return seconds
+}
+
+// The timeout the way the bar shows it: "30m", "1h", "1h 30m", "off".
+function shortTimeout(seconds) {
+  var n = Number(seconds)
+  if (!(n > 0)) return "off"
+  if (n < 60) return n + "s"
+  var h = Math.floor(n / 3600)
+  var m = Math.round((n % 3600) / 60)
+  if (h === 0) return m + "m"
+  return m === 0 ? h + "h" : h + "h " + m + "m"
+}
+
+function barIcon(armed) {
+  return armed ? ICON_ARMED : ICON_OFF
+}
+
+// Text on the bar button: the icon that says armed or not, then the timeout
+// when wanted and the bar is horizontal.
+function barText(armed, seconds, showLabel, vertical) {
+  var icon = barIcon(armed)
+  if (!showLabel || vertical || !armed) return icon
+  return icon + " " + shortTimeout(seconds)
+}
+
+// What suspend.sh last decided, in a sentence: "skipped, stay awake is on".
+function verdictLabel(verdict, reason) {
+  var r = String(reason || "")
+  switch (String(verdict || "")) {
+  case "suspend": return "last time it slept"
+  case "skip":
+    switch (r) {
+    case "stay-awake": return "skipped, stay awake is on"
+    case "suspend-off": return "skipped, suspend is off in the menu"
+    case "inhibited": return "skipped, something is holding sleep"
+    case "other-users": return "skipped, another user is logged in"
+    default: return "skipped" + (r ? ", " + r : "")
+    }
+  case "error": return "failed" + (r ? ": " + r : "")
+  default: return ""
+  }
+}
+
+function heroStatus(armed, seconds, idle, stayAwake) {
+  var parts = [armed ? "SLEEPS AFTER " + describeTimeout(seconds).toUpperCase() : "NEVER SLEEPS"]
+  if (stayAwake) parts.push("STAY AWAKE ON")
+  else if (armed && idle) parts.push("IDLE NOW")
+  return parts.join(" · ")
+}
+
+function tooltip(armed, seconds, verdict, reason) {
+  var text = armed ? "Sleeps after " + describeTimeout(seconds) + " idle" : "Auto sleep is off"
+  var last = verdictLabel(verdict, reason)
+  return "Suspend · " + text + (last ? " · " + last : "")
 }

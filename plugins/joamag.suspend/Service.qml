@@ -18,13 +18,15 @@ Item {
   property var manifest: null
 
   readonly property string pluginId: "joamag.suspend"
-  readonly property string pluginVersion: "0.1.0"
+  readonly property string pluginVersion: "0.2.0"
   readonly property string scriptPath: String(Qt.resolvedUrl("suspend.sh")).replace(/^file:\/\//, "")
 
   readonly property var entry: Model.pluginEntry(shell ? shell.shellConfig : null, pluginId)
   readonly property int timeoutSeconds: Model.timeoutSeconds(entry, Model.DEFAULT_TIMEOUT_SECONDS)
   readonly property bool dryRun: Model.dryRun(entry)
   readonly property bool armed: timeoutSeconds > 0
+  // For the bar widget, which binds to this service directly.
+  readonly property bool idle: idleMonitor.isIdle
 
   property string lastVerdict: ""
   property string lastReason: ""

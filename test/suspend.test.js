@@ -30,6 +30,14 @@ describe("pluginEntry", () => {
     assert.deepEqual(Model.pluginEntry(CONFIG, "joamag.suspend"), { id: "joamag.suspend", timeoutSec: 600, dryRun: true })
   })
 
+  it("finds the entry in the bar layout when the widget is enabled, and prefers it", () => {
+    const bar = { bar: { layout: { left: [], center: [null, "x"], right: [{ id: "omarchy.clock" }, { id: "joamag.suspend", timeoutSec: 900 }] } } }
+    assert.deepEqual(Model.pluginEntry(bar, "joamag.suspend"), { id: "joamag.suspend", timeoutSec: 900 })
+    const both = { ...bar, plugins: CONFIG.plugins }
+    assert.equal(Model.pluginEntry(both, "joamag.suspend").timeoutSec, 900)
+    assert.equal(Model.pluginEntry({ bar: { layout: "nope" }, plugins: CONFIG.plugins }, "joamag.suspend").timeoutSec, 600)
+  })
+
   it("is null without a config, a plugins array or a matching id", () => {
     assert.equal(Model.pluginEntry(null, "joamag.suspend"), null)
     assert.equal(Model.pluginEntry({ plugins: "nope" }, "joamag.suspend"), null)
@@ -91,6 +99,119 @@ describe("describeTimeout", () => {
     assert.equal(Model.describeTimeout(7200), "2 h")
     assert.equal(Model.describeTimeout(1800), "30 min")
     assert.equal(Model.describeTimeout(90), "90 s")
+  })
+})
+
+describe("PRESETS", () => {
+  it("offers the five choices the popup shows, never last", () => {
+    assert.deepEqual(Model.PRESETS.map((p) => p.seconds), [900, 1800, 3600, 10800, 0])
+    assert.equal(Model.PRESETS[4].label, "Never")
+  })
+})
+
+describe("presetIndex", () => {
+  it("finds a preset by its seconds and calls anything else custom", () => {
+    assert.equal(Model.presetIndex(1800), 1)
+    assert.equal(Model.presetIndex("3600"), 2)
+    assert.equal(Model.presetIndex(0), 4)
+    assert.equal(Model.presetIndex(2700), -1)
+    assert.equal(Model.presetIndex(NaN), -1)
+  })
+})
+
+describe("parseDuration", () => {
+  it("reads minutes by default and the usual units", () => {
+    assert.equal(Model.parseDuration("45"), 2700)
+    assert.equal(Model.parseDuration("45m"), 2700)
+    assert.equal(Model.parseDuration("45 min"), 2700)
+    assert.equal(Model.parseDuration("1h"), 3600)
+    assert.equal(Model.parseDuration("1.5 h"), 5400)
+    assert.equal(Model.parseDuration("1,5h"), 5400)
+    assert.equal(Model.parseDuration("2h30"), 9000)
+    assert.equal(Model.parseDuration("2 hours 15 min"), 8100)
+    assert.equal(Model.parseDuration("90s"), 90)
+    assert.equal(Model.parseDuration(" 20 "), 1200)
+  })
+
+  it("switches off for zero and its words", () => {
+    assert.equal(Model.parseDuration("0"), 0)
+    assert.equal(Model.parseDuration("off"), 0)
+    assert.equal(Model.parseDuration("Never"), 0)
+    assert.equal(Model.parseDuration("none"), 0)
+  })
+
+  it("keeps a timeout between a minute and a day", () => {
+    assert.equal(Model.parseDuration("30 sec"), 60)
+    assert.equal(Model.parseDuration("48h"), 86400)
+    assert.equal(Model.parseDuration("0.1"), 60)
+  })
+
+  it("rejects anything it cannot read", () => {
+    for (const bad of ["", "   ", "abc", "-5", "1h2h", "5 days", "h", null, undefined]) {
+      assert.ok(Number.isNaN(Model.parseDuration(bad)), `expected NaN for ${JSON.stringify(bad)}`)
+    }
+  })
+})
+
+describe("shortTimeout", () => {
+  it("is what fits in a bar", () => {
+    assert.equal(Model.shortTimeout(0), "off")
+    assert.equal(Model.shortTimeout(-1), "off")
+    assert.equal(Model.shortTimeout(45), "45s")
+    assert.equal(Model.shortTimeout(900), "15m")
+    assert.equal(Model.shortTimeout(3600), "1h")
+    assert.equal(Model.shortTimeout(5400), "1h 30m")
+    assert.equal(Model.shortTimeout(10800), "3h")
+    assert.equal(Model.shortTimeout("1800"), "30m")
+  })
+})
+
+describe("barIcon", () => {
+  it("is the sleeping face, crossed out when off", () => {
+    assert.equal(Model.barIcon(true), Model.ICON_ARMED)
+    assert.equal(Model.barIcon(false), Model.ICON_OFF)
+    assert.notEqual(Model.ICON_ARMED, Model.ICON_OFF)
+  })
+})
+
+describe("barText", () => {
+  it("adds the timeout only when armed, wanted and horizontal", () => {
+    assert.equal(Model.barText(true, 1800, true, false), `${Model.ICON_ARMED} 30m`)
+    assert.equal(Model.barText(true, 1800, false, false), Model.ICON_ARMED)
+    assert.equal(Model.barText(true, 1800, true, true), Model.ICON_ARMED)
+    assert.equal(Model.barText(false, 0, true, false), Model.ICON_OFF)
+  })
+})
+
+describe("verdictLabel", () => {
+  it("puts the last outcome into words", () => {
+    assert.equal(Model.verdictLabel("suspend", "idle"), "last time it slept")
+    assert.equal(Model.verdictLabel("skip", "stay-awake"), "skipped, stay awake is on")
+    assert.equal(Model.verdictLabel("skip", "suspend-off"), "skipped, suspend is off in the menu")
+    assert.equal(Model.verdictLabel("skip", "inhibited"), "skipped, something is holding sleep")
+    assert.equal(Model.verdictLabel("skip", "other-users"), "skipped, another user is logged in")
+    assert.equal(Model.verdictLabel("skip", "odd"), "skipped, odd")
+    assert.equal(Model.verdictLabel("skip", ""), "skipped")
+    assert.equal(Model.verdictLabel("error", "boom"), "failed: boom")
+    assert.equal(Model.verdictLabel("error", ""), "failed")
+    assert.equal(Model.verdictLabel("", ""), "")
+  })
+})
+
+describe("heroStatus", () => {
+  it("says when it sleeps, or that it never will, and what is holding it", () => {
+    assert.equal(Model.heroStatus(true, 1800, false, false), "SLEEPS AFTER 30 MIN")
+    assert.equal(Model.heroStatus(true, 3600, true, false), "SLEEPS AFTER 1 H · IDLE NOW")
+    assert.equal(Model.heroStatus(true, 1800, true, true), "SLEEPS AFTER 30 MIN · STAY AWAKE ON")
+    assert.equal(Model.heroStatus(false, 0, true, false), "NEVER SLEEPS")
+  })
+})
+
+describe("tooltip", () => {
+  it("summarises the timeout and the last outcome", () => {
+    assert.equal(Model.tooltip(true, 1800, "", ""), "Suspend · Sleeps after 30 min idle")
+    assert.equal(Model.tooltip(true, 900, "skip", "inhibited"), "Suspend · Sleeps after 15 min idle · skipped, something is holding sleep")
+    assert.equal(Model.tooltip(false, 0, "suspend", "idle"), "Suspend · Auto sleep is off · last time it slept")
   })
 })
 

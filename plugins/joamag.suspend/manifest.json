@@ -2,15 +2,45 @@
   "schemaVersion": 1,
   "id": "joamag.suspend",
   "name": "Suspend",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "author": "João Magalhães",
   "license": "Apache-2.0",
-  "description": "Suspends the machine after a period of idle. Honours Stay Awake, Wayland idle inhibitors, systemd sleep inhibitors and Omarchy's suspend toggle.",
+  "description": "Suspends the machine after a period of idle, set from a bar widget with presets or a typed duration. Honours Stay Awake, Wayland idle inhibitors, systemd sleep inhibitors and Omarchy's suspend toggle.",
   "kinds": [
-    "service"
+    "service",
+    "bar-widget"
   ],
   "keepLoaded": true,
   "entryPoints": {
-    "service": "Service.qml"
+    "service": "Service.qml",
+    "barWidget": "Panel.qml"
+  },
+  "barWidget": {
+    "displayName": "Suspend",
+    "description": "Sleep after 15 min, 30 min, 1 h, 3 h, never, or any duration you type.",
+    "category": "System",
+    "allowMultiple": false,
+    "defaultSection": "right",
+    "defaults": {
+      "timeoutSec": 1800,
+      "showLabel": true
+    },
+    "schema": [
+      {
+        "key": "timeoutSec",
+        "type": "integer",
+        "label": "Seconds of idle before suspending (0 = never)",
+        "min": 0,
+        "max": 86400,
+        "step": 300,
+        "defaultValue": 1800
+      },
+      {
+        "key": "showLabel",
+        "type": "boolean",
+        "label": "Show the timeout next to the icon",
+        "defaultValue": true
+      }
+    ]
   }
 }
