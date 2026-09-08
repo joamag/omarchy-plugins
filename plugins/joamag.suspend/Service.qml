@@ -28,6 +28,16 @@ Item {
   // For the bar widget, which binds to this service directly.
   readonly property bool idle: idleMonitor.isIdle
 
+  // The compositor's idle notification is registered when the monitor is
+  // enabled and carries the timeout it had at that moment; changing `timeout`
+  // afterwards does not re-register it, so the monitor goes deaf. Since the
+  // timeout always changes at least once at startup (the default gives way to
+  // the configured value once shell.json is read), the monitor has to be
+  // cycled off and on after every change, one event loop turn later so the
+  // new timeout is in place first.
+  property bool rearming: true
+  readonly property bool monitorOn: armed && !rearming
+
   property string lastVerdict: ""
   property string lastReason: ""
   property string lastEventAt: ""
@@ -59,16 +69,24 @@ Item {
       fired: root.fired,
       lastVerdict: root.lastVerdict,
       lastReason: root.lastReason,
-      lastEventAt: root.lastEventAt
+      lastEventAt: root.lastEventAt,
+      // The monitor's own view, so a service that has gone deaf is visible
+      // from `omarchy-shell joamag.suspend status` rather than only in hindsight.
+      monitorEnabled: idleMonitor.enabled,
+      monitorTimeout: idleMonitor.timeout
     })
   }
 
   IdleMonitor {
     id: idleMonitor
-    enabled: root.armed
+    enabled: root.monitorOn
     timeout: root.timeoutSeconds
     respectInhibitors: true
-    onIsIdleChanged: if (idleMonitor.isIdle) root.fire("idle")
+    onIsIdleChanged: {
+      root.logEvent("idle-monitor: " + (idleMonitor.isIdle ? "idle" : "active")
+        + " (enabled=" + idleMonitor.enabled + " timeout=" + idleMonitor.timeout + ")")
+      if (idleMonitor.isIdle) root.fire("idle")
+    }
   }
 
   Process {
@@ -91,6 +109,22 @@ Item {
     function version(): string { return root.pluginVersion }
   }
 
-  onTimeoutSecondsChanged: logEvent("timeout " + Model.describeTimeout(timeoutSeconds) + (dryRun ? " (dry run)" : ""))
-  Component.onCompleted: logEvent("service ready, timeout " + Model.describeTimeout(timeoutSeconds) + (dryRun ? " (dry run)" : ""))
+  onTimeoutSecondsChanged: {
+    logEvent("timeout " + Model.describeTimeout(timeoutSeconds) + (dryRun ? " (dry run)" : ""))
+    root.rearming = true
+    rearmTimer.restart()
+  }
+
+  // Lets the new timeout settle, then re-enables the monitor so it registers
+  // a fresh idle notification with it.
+  Timer {
+    id: rearmTimer
+    interval: 50
+    repeat: false
+    onTriggered: root.rearming = false
+  }
+  Component.onCompleted: {
+    logEvent("service ready, timeout " + Model.describeTimeout(timeoutSeconds) + (dryRun ? " (dry run)" : ""))
+    rearmTimer.restart()
+  }
 }
