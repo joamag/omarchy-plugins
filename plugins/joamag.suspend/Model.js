@@ -133,6 +133,52 @@ function shortTimeout(seconds) {
   return m === 0 ? h + "h" : h + "h " + m + "m"
 }
 
+// The compositor's idle notification cannot carry a long timeout on its own.
+// Launching the screensaver and locking the session both register as activity
+// and reset it, and a locked session reports active for as long as it stays
+// locked, so a monitor set to half an hour never reaches its threshold. The
+// monitor is therefore only asked to notice that the user has stopped touching
+// the machine, on a short window that nothing else pre-empts, and the time
+// away is accumulated from there.
+var DETECTION_FLOOR_SECONDS = 5
+var DETECTION_CEILING_SECONDS = 60
+
+function detectionSeconds(timeoutSeconds) {
+  var n = Number(timeoutSeconds)
+  if (!isFinite(n) || n <= 0) return DETECTION_CEILING_SECONDS
+  return Math.max(DETECTION_FLOOR_SECONDS, Math.min(DETECTION_CEILING_SECONDS, Math.floor(n)))
+}
+
+// Seconds since the user was first seen to be away, or 0 when they are not.
+function awaySeconds(awaySince, now) {
+  var since = Number(awaySince)
+  var at = Number(now)
+  if (!isFinite(since) || since <= 0 || !isFinite(at) || at < since) return 0
+  return Math.floor((at - since) / 1000)
+}
+
+// A suspend that was skipped, because an update was holding sleep or the
+// machine was told to stay awake, is worth trying again while the user is
+// still away rather than waiting for them to come back and leave again.
+var RETRY_SECONDS = 300
+
+// Whether another suspend may be attempted during the same absence: either
+// none has been tried yet, or a skipped one has waited out its retry.
+function mayAttempt(alreadyFired, retryAfter, now) {
+  if (!alreadyFired) return true
+  var at = Number(retryAfter)
+  var when = Number(now)
+  if (!isFinite(at) || at <= 0 || !isFinite(when)) return false
+  return when >= at
+}
+
+// Whether the machine has now been left alone for the whole timeout.
+function isDue(awaySince, now, timeoutSeconds) {
+  var timeout = Number(timeoutSeconds)
+  if (!isFinite(timeout) || timeout <= 0) return false
+  return awaySeconds(awaySince, now) >= timeout
+}
+
 function barIcon(armed) {
   return armed ? ICON_ARMED : ICON_OFF
 }

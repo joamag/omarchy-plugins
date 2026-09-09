@@ -153,6 +153,87 @@ describe("parseDuration", () => {
   })
 })
 
+describe("detectionSeconds", () => {
+  it("keeps the detection window short enough that nothing pre-empts it", () => {
+    // The screensaver is the first thing that would reset the compositor's
+    // idle clock, and it is never configured below a minute in practice.
+    assert.equal(Model.detectionSeconds(1800), 60)
+    assert.equal(Model.detectionSeconds(3600), 60)
+    assert.equal(Model.detectionSeconds(90), 60)
+  })
+
+  it("never asks for a longer window than the timeout itself", () => {
+    assert.equal(Model.detectionSeconds(30), 30)
+    assert.equal(Model.detectionSeconds(5), 5)
+    assert.equal(Model.detectionSeconds(90.9), 60)
+  })
+
+  it("floors the window and falls back for a value that is not a timeout", () => {
+    assert.equal(Model.detectionSeconds(1), Model.DETECTION_FLOOR_SECONDS)
+    assert.equal(Model.detectionSeconds(0), 60)
+    assert.equal(Model.detectionSeconds(-5), 60)
+    assert.equal(Model.detectionSeconds("soon"), 60)
+    assert.equal(Model.detectionSeconds(undefined), 60)
+  })
+})
+
+describe("awaySeconds", () => {
+  const now = 1_800_000_000_000
+
+  it("counts whole seconds since the absence began", () => {
+    assert.equal(Model.awaySeconds(now - 90_000, now), 90)
+    assert.equal(Model.awaySeconds(now - 1_500, now), 1)
+    assert.equal(Model.awaySeconds(now, now), 0)
+  })
+
+  it("is zero when nobody is away, or the clock disagrees", () => {
+    assert.equal(Model.awaySeconds(0, now), 0)
+    assert.equal(Model.awaySeconds(-1, now), 0)
+    assert.equal(Model.awaySeconds(now + 5_000, now), 0)
+    assert.equal(Model.awaySeconds("x", now), 0)
+    assert.equal(Model.awaySeconds(now, "x"), 0)
+  })
+})
+
+describe("mayAttempt", () => {
+  const now = 1_800_000_000_000
+
+  it("allows the first attempt of an absence", () => {
+    assert.equal(Model.mayAttempt(false, 0, now), true)
+    assert.equal(Model.mayAttempt(false, now + 1000, now), true)
+  })
+
+  it("holds off after an attempt until the retry falls due", () => {
+    assert.equal(Model.mayAttempt(true, 0, now), false)
+    assert.equal(Model.mayAttempt(true, now + 1000, now), false)
+    assert.equal(Model.mayAttempt(true, now, now), true)
+    assert.equal(Model.mayAttempt(true, now - 1000, now), true)
+  })
+
+  it("never retries on a nonsense retry time", () => {
+    assert.equal(Model.mayAttempt(true, -1, now), false)
+    assert.equal(Model.mayAttempt(true, "soon", now), false)
+    assert.equal(Model.mayAttempt(true, now - 1000, "x"), false)
+  })
+})
+
+describe("isDue", () => {
+  const now = 1_800_000_000_000
+
+  it("is due once the absence has lasted the whole timeout", () => {
+    assert.equal(Model.isDue(now - 1_800_000, now, 1800), true)
+    assert.equal(Model.isDue(now - 1_799_000, now, 1800), false)
+    assert.equal(Model.isDue(now - 60_000, now, 60), true)
+  })
+
+  it("is never due while disarmed or with nobody away", () => {
+    assert.equal(Model.isDue(now - 1_800_000, now, 0), false)
+    assert.equal(Model.isDue(now - 1_800_000, now, -1), false)
+    assert.equal(Model.isDue(0, now, 1800), false)
+    assert.equal(Model.isDue(now - 1_800_000, now, "soon"), false)
+  })
+})
+
 describe("shortTimeout", () => {
   it("is what fits in a bar", () => {
     assert.equal(Model.shortTimeout(0), "off")

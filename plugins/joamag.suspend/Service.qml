@@ -4,12 +4,16 @@ import Quickshell.Io
 import Quickshell.Wayland
 import "Model.js" as Model
 
-// Headless service that suspends the machine after `timeoutSec` seconds of
-// idle. The compositor's idle notifier is the clock, the same one the shell's
-// own screensaver and lock run on, so any Wayland idle inhibitor (video
-// playback, a game) holds the countdown. suspend.sh applies the remaining
-// checks at fire time: Omarchy's Stay Awake, the suspend toggle and systemd's
-// block inhibitors.
+// Headless service that suspends the machine after `timeoutSec` seconds away
+// from it. The compositor's idle notifier says when the user stopped touching
+// the machine, but it cannot be trusted to time the whole wait: starting the
+// screensaver and locking the session both count as activity and reset it, and
+// a locked session reports active for as long as it stays locked. So the wait
+// is accumulated here from three signals, any one of which means the user is
+// still away, and only a genuine return clears it. A Wayland idle inhibitor
+// (video playback, a game) holds the countdown, and suspend.sh applies the
+// remaining checks at fire time: Omarchy's Stay Awake, the suspend toggle and
+// systemd's block inhibitors.
 Item {
   id: root
 
@@ -25,8 +29,31 @@ Item {
   readonly property int timeoutSeconds: Model.timeoutSeconds(entry, Model.DEFAULT_TIMEOUT_SECONDS)
   readonly property bool dryRun: Model.dryRun(entry)
   readonly property bool armed: timeoutSeconds > 0
+  // Short enough that nothing else pre-empts it; the wait itself is counted
+  // by this service, not by the monitor.
+  readonly property int detectionSeconds: Model.detectionSeconds(timeoutSeconds)
+
+  // The shell's own idle and lock services, when they are loaded. They are the
+  // only things that still know the user is away once the compositor has been
+  // reset by the screensaver or the lock.
+  readonly property var idleService: shell && shell.serviceFor ? shell.serviceFor("omarchy.idle") : null
+  readonly property var lockService: shell && shell.serviceFor ? shell.serviceFor("omarchy.lock") : null
+  readonly property bool sessionLocked: !!lockService && lockService.locked === true
+  readonly property bool inIdleCycle: !!idleService && idleService.idledThisCycle === true
+  // Someone typing a password or presenting a finger is back, whatever the
+  // compositor thinks, so the machine is not taken out from under them.
+  readonly property bool authenticating: !!lockService
+    && (lockService.authenticatingPassword === true || lockService.fingerprintAuthenticating === true)
+
+  readonly property bool away: !authenticating && (idleMonitor.isIdle || inIdleCycle || sessionLocked)
+  property double awaySince: 0
+  // One suspend per absence, except that a skipped one is retried after a
+  // while: whatever was holding sleep may well have finished.
+  property bool firedThisAway: false
+  property double retryAfter: 0
+
   // For the bar widget, which binds to this service directly.
-  readonly property bool idle: idleMonitor.isIdle
+  readonly property bool idle: away
 
   // The compositor's idle notification is registered when the monitor is
   // enabled and carries the timeout it had at that moment; changing `timeout`
@@ -62,7 +89,10 @@ Item {
   function statusJson() {
     return JSON.stringify({
       armed: root.armed,
-      idle: idleMonitor.isIdle,
+      idle: root.away,
+      awaySeconds: Model.awaySeconds(root.awaySince, Date.now()),
+      sessionLocked: root.sessionLocked,
+      inIdleCycle: root.inIdleCycle,
       timeoutSec: root.timeoutSeconds,
       timeout: Model.describeTimeout(root.timeoutSeconds),
       dryRun: root.dryRun,
@@ -73,19 +103,67 @@ Item {
       // The monitor's own view, so a service that has gone deaf is visible
       // from `omarchy-shell joamag.suspend status` rather than only in hindsight.
       monitorEnabled: idleMonitor.enabled,
-      monitorTimeout: idleMonitor.timeout
+      monitorTimeout: idleMonitor.timeout,
+      monitorIdle: idleMonitor.isIdle
     })
   }
 
   IdleMonitor {
     id: idleMonitor
     enabled: root.monitorOn
-    timeout: root.timeoutSeconds
+    timeout: root.detectionSeconds
     respectInhibitors: true
-    onIsIdleChanged: {
-      root.logEvent("idle-monitor: " + (idleMonitor.isIdle ? "idle" : "active")
-        + " (enabled=" + idleMonitor.enabled + " timeout=" + idleMonitor.timeout + ")")
-      if (idleMonitor.isIdle) root.fire("idle")
+    onIsIdleChanged: root.logEvent("idle-monitor: " + (idleMonitor.isIdle ? "idle" : "active"))
+  }
+
+  onAwayChanged: {
+    if (away) {
+      returnTimer.stop()
+      if (root.awaySince > 0) return
+      // When the monitor is what noticed, it needed its detection window to
+      // do so, and the absence started that much earlier. When the lock or the
+      // shell's idle cycle got there first, the absence is counted from now,
+      // which is late rather than early.
+      root.awaySince = Date.now() - (idleMonitor.isIdle ? root.detectionSeconds * 1000 : 0)
+      root.firedThisAway = false
+      logEvent("away (monitor=" + idleMonitor.isIdle + " cycle=" + inIdleCycle + " locked=" + sessionLocked + ")")
+    } else {
+      // The three signals hand over to each other rather than overlapping: the
+      // shell cancels its idle cycle a few hundred milliseconds before the lock
+      // reports itself locked, and in that gap nothing claims the user is away.
+      // Believing a return only after it has held for a moment keeps the count
+      // running across the handover instead of restarting it there.
+      returnTimer.restart()
+    }
+  }
+
+  Timer {
+    id: returnTimer
+    interval: 3000
+    repeat: false
+    onTriggered: {
+      if (root.away) return
+      root.awaySince = 0
+      root.firedThisAway = false
+      root.retryAfter = 0
+      root.logEvent("back at the machine")
+    }
+  }
+
+  // Counts the absence out. The monitor cannot do it, so this is what actually
+  // decides when the machine has been left alone for the whole timeout.
+  Timer {
+    id: awayTimer
+    interval: 5000
+    running: root.armed
+    repeat: true
+    onTriggered: {
+      if (!root.away || root.awaySince <= 0) return
+      if (!Model.mayAttempt(root.firedThisAway, root.retryAfter, Date.now())) return
+      if (!Model.isDue(root.awaySince, Date.now(), root.timeoutSeconds)) return
+      root.firedThisAway = true
+      root.retryAfter = 0
+      root.fire("away")
     }
   }
 
@@ -97,6 +175,8 @@ Item {
       var result = Model.parseResult(suspendOut.text, suspendErr.text, exitCode)
       root.lastVerdict = result.verdict
       root.lastReason = result.reason
+      // Only a suspend settles the absence; anything else is worth another go.
+      root.retryAfter = result.verdict === "suspend" ? 0 : Date.now() + Model.RETRY_SECONDS * 1000
       root.logEvent(result.verdict + ": " + result.reason)
     }
   }
@@ -110,7 +190,14 @@ Item {
   }
 
   onTimeoutSecondsChanged: {
-    logEvent("timeout " + Model.describeTimeout(timeoutSeconds) + (dryRun ? " (dry run)" : ""))
+    logEvent("timeout " + Model.describeTimeout(timeoutSeconds))
+    // A new timeout is a new intention, so an attempt already made under the
+    // old one must not hold the new one back.
+    root.firedThisAway = false
+    root.retryAfter = 0
+  }
+
+  onDetectionSecondsChanged: {
     root.rearming = true
     rearmTimer.restart()
   }
