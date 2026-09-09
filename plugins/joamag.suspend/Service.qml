@@ -51,6 +51,8 @@ Item {
   // while: whatever was holding sleep may well have finished.
   property bool firedThisAway: false
   property double retryAfter: 0
+  // When the away timer last ran, so a sleep can be told from a normal tick.
+  property double lastTick: 0
 
   // For the bar widget, which binds to this service directly.
   readonly property bool idle: away
@@ -158,9 +160,23 @@ Item {
     running: root.armed
     repeat: true
     onTriggered: {
+      var now = Date.now()
+      var slept = Model.resumed(root.lastTick, now, awayTimer.interval)
+      root.lastTick = now
+      // Coming back from a sleep spends the absence that caused it. Waking to
+      // a lock screen nobody answers leaves the session locked, so `away` never
+      // clears and nothing else would ever start the wait again; the machine
+      // would then sit awake at the password prompt for good.
+      if (slept) {
+        root.firedThisAway = false
+        root.retryAfter = 0
+        if (root.away) root.awaySince = now
+        root.logEvent("resumed from sleep, counting the wait again")
+        return
+      }
       if (!root.away || root.awaySince <= 0) return
-      if (!Model.mayAttempt(root.firedThisAway, root.retryAfter, Date.now())) return
-      if (!Model.isDue(root.awaySince, Date.now(), root.timeoutSeconds)) return
+      if (!Model.mayAttempt(root.firedThisAway, root.retryAfter, now)) return
+      if (!Model.isDue(root.awaySince, now, root.timeoutSeconds)) return
       root.firedThisAway = true
       root.retryAfter = 0
       root.fire("away")

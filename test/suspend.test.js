@@ -247,6 +247,29 @@ describe("shortTimeout", () => {
   })
 })
 
+describe("resumed", () => {
+  it("spots the gap a sleep leaves between two ticks", () => {
+    assert.equal(Model.resumed(1000, 1000 + 5000 * Model.RESUME_GAP_FACTOR, 5000), true)
+    assert.equal(Model.resumed(1000, 1000 + 30 * 60 * 1000, 5000), true)
+  })
+
+  it("treats an ordinary tick, however late, as no sleep", () => {
+    assert.equal(Model.resumed(1000, 6000, 5000), false)
+    assert.equal(Model.resumed(1000, 1000 + 5000 * Model.RESUME_GAP_FACTOR - 1, 5000), false)
+  })
+
+  it("has nothing to compare against before the first tick", () => {
+    assert.equal(Model.resumed(0, 999999, 5000), false)
+    assert.equal(Model.resumed(-1, 999999, 5000), false)
+  })
+
+  it("says no when the numbers make no sense", () => {
+    assert.equal(Model.resumed(1000, NaN, 5000), false)
+    assert.equal(Model.resumed(1000, 999999, 0), false)
+    assert.equal(Model.resumed(1000, 999999, "x"), false)
+  })
+})
+
 describe("barIcon", () => {
   it("is the sleeping face, crossed out when off", () => {
     assert.equal(Model.barIcon(true), Model.ICON_ARMED)

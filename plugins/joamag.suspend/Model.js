@@ -179,6 +179,21 @@ function isDue(awaySince, now, timeoutSeconds) {
   return awaySeconds(awaySince, now) >= timeout
 }
 
+// A sleep is the only thing that stops the event loop for longer than a few
+// seconds, so a tick that arrives this much later than the timer asked for
+// means the machine has just come back from one.
+var RESUME_GAP_FACTOR = 4
+
+// Whether the machine slept between two ticks of a timer of `intervalMs`.
+function resumed(lastTick, now, intervalMs) {
+  var last = Number(lastTick)
+  var at = Number(now)
+  var interval = Number(intervalMs)
+  if (!isFinite(last) || last <= 0) return false
+  if (!isFinite(at) || !isFinite(interval) || interval <= 0) return false
+  return at - last >= interval * RESUME_GAP_FACTOR
+}
+
 // Auto sleep only happens when a timeout is set and nothing is holding the
 // machine awake, so Stay Awake shows the same crossed-out icon as no timeout
 // at all; the bar would otherwise promise a sleep that never comes.
