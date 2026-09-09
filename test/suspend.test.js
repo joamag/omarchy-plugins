@@ -253,6 +253,12 @@ describe("barIcon", () => {
     assert.equal(Model.barIcon(false), Model.ICON_OFF)
     assert.notEqual(Model.ICON_ARMED, Model.ICON_OFF)
   })
+
+  it("is crossed out while stay awake holds the machine", () => {
+    assert.equal(Model.barIcon(true, true), Model.ICON_OFF)
+    assert.equal(Model.barIcon(true, false), Model.ICON_ARMED)
+    assert.equal(Model.barIcon(false, true), Model.ICON_OFF)
+  })
 })
 
 describe("barText", () => {
@@ -261,6 +267,11 @@ describe("barText", () => {
     assert.equal(Model.barText(true, 1800, false, false), Model.ICON_ARMED)
     assert.equal(Model.barText(true, 1800, true, true), Model.ICON_ARMED)
     assert.equal(Model.barText(false, 0, true, false), Model.ICON_OFF)
+  })
+
+  it("drops the timeout while stay awake holds the machine", () => {
+    assert.equal(Model.barText(true, 1800, true, false, true), Model.ICON_OFF)
+    assert.equal(Model.barText(true, 1800, true, false, false), `${Model.ICON_ARMED} 30m`)
   })
 })
 
@@ -293,6 +304,11 @@ describe("tooltip", () => {
     assert.equal(Model.tooltip(true, 1800, "", ""), "Suspend · Sleeps after 30 min idle")
     assert.equal(Model.tooltip(true, 900, "skip", "inhibited"), "Suspend · Sleeps after 15 min idle · skipped, something is holding sleep")
     assert.equal(Model.tooltip(false, 0, "suspend", "idle"), "Suspend · Auto sleep is off · last time it slept")
+  })
+
+  it("says when stay awake is what is holding the machine", () => {
+    assert.equal(Model.tooltip(true, 1800, "", "", true), "Suspend · Held awake by stay awake")
+    assert.equal(Model.tooltip(false, 0, "", "", true), "Suspend · Auto sleep is off")
   })
 })
 

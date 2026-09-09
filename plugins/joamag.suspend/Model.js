@@ -179,15 +179,18 @@ function isDue(awaySince, now, timeoutSeconds) {
   return awaySeconds(awaySince, now) >= timeout
 }
 
-function barIcon(armed) {
-  return armed ? ICON_ARMED : ICON_OFF
+// Auto sleep only happens when a timeout is set and nothing is holding the
+// machine awake, so Stay Awake shows the same crossed-out icon as no timeout
+// at all; the bar would otherwise promise a sleep that never comes.
+function barIcon(armed, stayAwake) {
+  return armed && !stayAwake ? ICON_ARMED : ICON_OFF
 }
 
 // Text on the bar button: the icon that says armed or not, then the timeout
 // when wanted and the bar is horizontal.
-function barText(armed, seconds, showLabel, vertical) {
-  var icon = barIcon(armed)
-  if (!showLabel || vertical || !armed) return icon
+function barText(armed, seconds, showLabel, vertical, stayAwake) {
+  var icon = barIcon(armed, stayAwake)
+  if (!showLabel || vertical || !armed || stayAwake) return icon
   return icon + " " + shortTimeout(seconds)
 }
 
@@ -216,8 +219,9 @@ function heroStatus(armed, seconds, idle, stayAwake) {
   return parts.join(" · ")
 }
 
-function tooltip(armed, seconds, verdict, reason) {
+function tooltip(armed, seconds, verdict, reason, stayAwake) {
   var text = armed ? "Sleeps after " + describeTimeout(seconds) + " idle" : "Auto sleep is off"
+  if (armed && stayAwake) text = "Held awake by stay awake"
   var last = verdictLabel(verdict, reason)
   return "Suspend · " + text + (last ? " · " + last : "")
 }

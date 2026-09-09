@@ -28,8 +28,12 @@ Panel {
   readonly property string lastReason: service ? service.lastReason : ""
   readonly property int presetIndex: Model.presetIndex(timeoutSeconds)
 
-  property bool stayAwake: false
-  property bool stayAwakeKnown: false
+  // Omarchy's idle service owns the stay awake indicator and watches its state
+  // file, so binding to it keeps the bar icon right while the popup is closed,
+  // which is exactly when a silent stay awake would otherwise go unnoticed.
+  readonly property var idleService: bar && bar.shell ? bar.shell.serviceFor("omarchy.idle") : null
+  readonly property bool stayAwake: !!idleService && idleService.stayAwake === true
+  readonly property bool stayAwakeKnown: !!idleService && idleService.stayAwakeStateLoaded === true
   property string customError: ""
   // "Sleep now" asks twice: the first press arms the button for a few
   // seconds, the second one runs it.
@@ -41,8 +45,8 @@ Panel {
   readonly property bool vertical: bar ? bar.vertical : false
   readonly property color foreground: bar ? bar.foreground : Color.foreground
   readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
-  readonly property string barText: Model.barText(armed, timeoutSeconds, showLabel, vertical)
-  readonly property bool barHasLabel: showLabel && !vertical && armed
+  readonly property string barText: Model.barText(armed, timeoutSeconds, showLabel, vertical, stayAwake)
+  readonly property bool barHasLabel: showLabel && !vertical && armed && !stayAwake
   readonly property real openPanelIndicatorWidth: barHasLabel ? button.labelWidth : 0
 
   readonly property var actions: [
@@ -82,10 +86,6 @@ Panel {
 
   function focusCustom() {
     Qt.callLater(function() { customField.forceActiveFocus() })
-  }
-
-  function refreshStayAwake() {
-    if (!stayAwakeProc.running) stayAwakeProc.running = true
   }
 
   function toggleStayAwake() {
@@ -133,35 +133,15 @@ Panel {
       cursorIndex = presetIndex >= 0 ? presetIndex : 0
       armedKey = ""
       customError = ""
-      refreshStayAwake()
     }
   }
 
   implicitWidth: button.implicitWidth
   implicitHeight: button.implicitHeight
 
-  // Omarchy's stay awake state, from the idle service's own report.
-  Process {
-    id: stayAwakeProc
-    command: ["omarchy-shell", "idle", "status"]
-    stdout: StdioCollector {
-      waitForEnd: true
-      onStreamFinished: {
-        try {
-          var status = JSON.parse(String(text || "").trim())
-          root.stayAwake = status && status.stayAwake === true
-          root.stayAwakeKnown = true
-        } catch (e) {
-          root.stayAwakeKnown = false
-        }
-      }
-    }
-  }
-
   Process {
     id: toggleProc
     command: ["omarchy-toggle-idle", "toggle"]
-    onExited: root.refreshStayAwake()
   }
 
   Timer {
@@ -170,30 +150,22 @@ Panel {
     onTriggered: root.armedKey = ""
   }
 
-  // The stay awake indicator can be flipped from the bar too; keep in step
-  // while the popup is open.
-  Timer {
-    interval: 5000
-    running: root.opened
-    repeat: true
-    onTriggered: root.refreshStayAwake()
-  }
-
   WidgetButton {
     id: button
     anchors.fill: parent
     bar: root.bar
     text: root.barText
-    dimmed: !root.armed
+    dimmed: !root.armed || root.stayAwake
     fontSize: Style.font.body
     horizontalMargin: root.barHasLabel ? 8.75 : 6
     fixedWidth: root.barHasLabel ? -1 : Style.bar.iconSlot
-    tooltipText: root.opened ? "" : Model.tooltip(root.armed, root.timeoutSeconds, root.lastVerdict, root.lastReason)
+    tooltipText: root.opened ? "" : Model.tooltip(root.armed, root.timeoutSeconds, root.lastVerdict, root.lastReason, root.stayAwake)
 
     onPressed: function(b) {
-      // Right click flips between the configured timeout and never.
+      // Right click flips between the configured timeout and never, middle
+      // click holds the machine awake without opening the popup.
       if (b === Qt.RightButton) root.setTimeout(root.armed ? 0 : Model.DEFAULT_TIMEOUT_SECONDS)
-      else if (b === Qt.MiddleButton) root.refreshStayAwake()
+      else if (b === Qt.MiddleButton) root.toggleStayAwake()
       else root.toggle()
     }
   }
@@ -239,7 +211,7 @@ Panel {
           Text {
             id: heroIcon
             textFormat: Text.PlainText
-            text: Model.barIcon(root.armed)
+            text: Model.barIcon(root.armed, root.stayAwake)
             color: root.armed ? root.foreground : Util.alpha(root.foreground, 0.45)
             font.family: root.fontFamily
             font.pixelSize: Style.font.display
