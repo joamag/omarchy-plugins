@@ -28,7 +28,10 @@ var MAX_TIMEOUT_SECONDS = 86400
 // both exist, since that is the one with a control on it.
 function pluginEntry(config, id) {
   if (!config || typeof config !== "object") return null
-  var layout = config.bar && config.bar.layout && typeof config.bar.layout === "object" ? config.bar.layout : null
+  // Newer shells hand a plugin its bar config alone, older ones the whole
+  // file; the same layout sits one level apart in the two.
+  var bar = config.bar && typeof config.bar === "object" ? config.bar : config
+  var layout = bar.layout && typeof bar.layout === "object" ? bar.layout : null
   var sections = ["left", "center", "right"]
   for (var s = 0; s < sections.length; s++) {
     var list = layout && Array.isArray(layout[sections[s]]) ? layout[sections[s]] : []
@@ -177,6 +180,34 @@ function isDue(awaySince, now, timeoutSeconds) {
   var timeout = Number(timeoutSeconds)
   if (!isFinite(timeout) || timeout <= 0) return false
   return awaySeconds(awaySince, now) >= timeout
+}
+
+// The lock and the idle services each answer their status IPC with one line of
+// JSON. Either line may be missing when that service is not loaded, and a
+// half-read answer is not worth failing over, so anything unparsable is simply
+// not a reason to believe the user is away.
+function parseAwayProbe(text) {
+  var probe = { known: false, locked: false, authenticating: false, inIdleCycle: false, stayAwake: false }
+  var lines = String(text || "").split("\n")
+  for (var i = 0; i < lines.length; i++) {
+    var line = lines[i].trim()
+    if (!line) continue
+    var data = null
+    try {
+      data = JSON.parse(line)
+    } catch (e) {
+      continue
+    }
+    // JSON.parse gives a real array here, whatever the shell hands other
+    // bindings, so a stray list is told apart from a status object safely.
+    if (!data || typeof data !== "object" || Array.isArray(data)) continue
+    probe.known = true
+    if (data.locked === true) probe.locked = true
+    if (data.authenticating === true) probe.authenticating = true
+    if (data.inIdleCycle === true) probe.inIdleCycle = true
+    if (data.stayAwake === true) probe.stayAwake = true
+  }
+  return probe
 }
 
 // A sleep is the only thing that stops the event loop for longer than a few

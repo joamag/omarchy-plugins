@@ -28,12 +28,8 @@ Panel {
   readonly property string lastReason: service ? service.lastReason : ""
   readonly property int presetIndex: Model.presetIndex(timeoutSeconds)
 
-  // Omarchy's idle service owns the stay awake indicator and watches its state
-  // file, so binding to it keeps the bar icon right while the popup is closed,
-  // which is exactly when a silent stay awake would otherwise go unnoticed.
-  readonly property var idleService: bar && bar.shell ? bar.shell.serviceFor("omarchy.idle") : null
-  readonly property bool stayAwake: !!idleService && idleService.stayAwake === true
-  readonly property bool stayAwakeKnown: !!idleService && idleService.stayAwakeStateLoaded === true
+  property bool stayAwake: false
+  property bool stayAwakeKnown: false
   property string customError: ""
   // "Sleep now" asks twice: the first press arms the button for a few
   // seconds, the second one runs it.
@@ -70,6 +66,10 @@ Panel {
   function setTimeout(seconds) {
     var n = Math.max(0, Math.round(Number(seconds) || 0))
     customError = ""
+    // The bar config the service is handed lags a change behind, so tell it
+    // straight away rather than leaving it on the previous timeout until the
+    // next change nudges the shell into catching up.
+    if (service && typeof service.applyTimeout === "function") service.applyTimeout(n)
     persistSetting("timeoutSec", n)
   }
 
@@ -86,6 +86,14 @@ Panel {
 
   function focusCustom() {
     Qt.callLater(function() { customField.forceActiveFocus() })
+  }
+
+  // A plugin may not hold the idle service itself, so stay awake is read over
+  // IPC. The bar icon depends on it, so it is polled for as long as the widget
+  // lives rather than only while the popup is open, just less often when there
+  // is nobody looking at the numbers.
+  function refreshStayAwake() {
+    if (!stayAwakeProc.running) stayAwakeProc.running = true
   }
 
   function toggleStayAwake() {
@@ -133,6 +141,7 @@ Panel {
       cursorIndex = presetIndex >= 0 ? presetIndex : 0
       armedKey = ""
       customError = ""
+      refreshStayAwake()
     }
   }
 
@@ -140,8 +149,30 @@ Panel {
   implicitHeight: button.implicitHeight
 
   Process {
+    id: stayAwakeProc
+    command: ["omarchy-shell", "idle", "status"]
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        var probe = Model.parseAwayProbe(text)
+        root.stayAwake = probe.stayAwake
+        root.stayAwakeKnown = probe.known
+      }
+    }
+  }
+
+  Process {
     id: toggleProc
     command: ["omarchy-toggle-idle", "toggle"]
+    onExited: root.refreshStayAwake()
+  }
+
+  Timer {
+    interval: root.opened ? 5000 : 30000
+    running: true
+    repeat: true
+    triggeredOnStart: true
+    onTriggered: root.refreshStayAwake()
   }
 
   Timer {

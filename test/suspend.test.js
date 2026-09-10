@@ -38,6 +38,12 @@ describe("pluginEntry", () => {
     assert.equal(Model.pluginEntry({ bar: { layout: "nope" }, plugins: CONFIG.plugins }, "joamag.suspend").timeoutSec, 600)
   })
 
+  it("accepts a bar config handed over on its own, without the file around it", () => {
+    const barOnly = { layout: { left: [], center: [], right: [{ id: "joamag.suspend", timeoutSec: 10800 }] } }
+    assert.deepEqual(Model.pluginEntry(barOnly, "joamag.suspend"), { id: "joamag.suspend", timeoutSec: 10800 })
+    assert.equal(Model.pluginEntry({ layout: { left: [], center: [], right: [] } }, "joamag.suspend"), null)
+  })
+
   it("is null without a config, a plugins array or a matching id", () => {
     assert.equal(Model.pluginEntry(null, "joamag.suspend"), null)
     assert.equal(Model.pluginEntry({ plugins: "nope" }, "joamag.suspend"), null)
@@ -244,6 +250,35 @@ describe("shortTimeout", () => {
     assert.equal(Model.shortTimeout(5400), "1h 30m")
     assert.equal(Model.shortTimeout(10800), "3h")
     assert.equal(Model.shortTimeout("1800"), "30m")
+  })
+})
+
+describe("parseAwayProbe", () => {
+  const LOCK = '{"locked":true,"authenticating":false,"lastEvent":"init"}'
+  const IDLE = '{"stayAwake":true,"idle":false,"inIdleCycle":true,"screensaver":300}'
+
+  it("reads the lock and the idle cycle out of the two answers", () => {
+    const probe = Model.parseAwayProbe(`${LOCK}\n${IDLE}\n`)
+    assert.deepEqual(probe, { known: true, locked: true, authenticating: false, inIdleCycle: true, stayAwake: true })
+  })
+
+  it("takes whichever answer arrived when a service is not loaded", () => {
+    assert.deepEqual(Model.parseAwayProbe(IDLE), { known: true, locked: false, authenticating: false, inIdleCycle: true, stayAwake: true })
+    assert.equal(Model.parseAwayProbe('{"locked":false,"authenticating":true}').authenticating, true)
+  })
+
+  it("believes nothing when the answer is missing or unreadable", () => {
+    assert.deepEqual(Model.parseAwayProbe(""), { known: false, locked: false, authenticating: false, inIdleCycle: false, stayAwake: false })
+    assert.equal(Model.parseAwayProbe("not json").known, false)
+    assert.equal(Model.parseAwayProbe("null\n[1,2]").known, false)
+    assert.equal(Model.parseAwayProbe(null).known, false)
+  })
+
+  it("ignores a torn line but keeps the whole one beside it", () => {
+    const probe = Model.parseAwayProbe(`{"locked":tr\n${IDLE}`)
+    assert.equal(probe.known, true)
+    assert.equal(probe.locked, false)
+    assert.equal(probe.inIdleCycle, true)
   })
 })
 

@@ -25,25 +25,31 @@ Item {
   readonly property string pluginVersion: "0.2.0"
   readonly property string scriptPath: String(Qt.resolvedUrl("suspend.sh")).replace(/^file:\/\//, "")
 
-  readonly property var entry: Model.pluginEntry(shell ? shell.shellConfig : null, pluginId)
-  readonly property int timeoutSeconds: Model.timeoutSeconds(entry, Model.DEFAULT_TIMEOUT_SECONDS)
+  // The shell stopped handing plugins the whole config and now passes the bar
+  // section on its own, so take whichever of the two this shell offers.
+  readonly property var entry: Model.pluginEntry(shell ? (shell.shellConfig || shell.barConfig) : null, pluginId)
+  readonly property int configuredTimeout: Model.timeoutSeconds(entry, Model.DEFAULT_TIMEOUT_SECONDS)
+  // The shell hands a plugin a fresh bar config only when the plugin or the
+  // widget registry changes, not when a setting is written, so what arrives is
+  // a change behind. The widget says what it just set, and that stands until
+  // the config catches up with it.
+  property int timeoutOverride: -1
+  readonly property int timeoutSeconds: timeoutOverride >= 0 ? timeoutOverride : configuredTimeout
   readonly property bool dryRun: Model.dryRun(entry)
   readonly property bool armed: timeoutSeconds > 0
   // Short enough that nothing else pre-empts it; the wait itself is counted
   // by this service, not by the monitor.
   readonly property int detectionSeconds: Model.detectionSeconds(timeoutSeconds)
 
-  // The shell's own idle and lock services, when they are loaded. They are the
-  // only things that still know the user is away once the compositor has been
-  // reset by the screensaver or the lock.
-  readonly property var idleService: shell && shell.serviceFor ? shell.serviceFor("omarchy.idle") : null
-  readonly property var lockService: shell && shell.serviceFor ? shell.serviceFor("omarchy.lock") : null
-  readonly property bool sessionLocked: !!lockService && lockService.locked === true
-  readonly property bool inIdleCycle: !!idleService && idleService.idledThisCycle === true
-  // Someone typing a password or presenting a finger is back, whatever the
-  // compositor thinks, so the machine is not taken out from under them.
-  readonly property bool authenticating: !!lockService
-    && (lockService.authenticatingPassword === true || lockService.fingerprintAuthenticating === true)
+  // The shell's own idle and lock services still know the user is away once
+  // the compositor has been reset by the screensaver or the lock, but a plugin
+  // may no longer hold them directly, so they are asked over the same IPC the
+  // command line uses and their answers land here.
+  property bool sessionLocked: false
+  property bool inIdleCycle: false
+  // Someone typing a password is back, whatever the compositor thinks, so the
+  // machine is not taken out from under them.
+  property bool authenticating: false
 
   readonly property bool away: !authenticating && (idleMonitor.isIdle || inIdleCycle || sessionLocked)
   property double awaySince: 0
@@ -71,6 +77,19 @@ Item {
   property string lastReason: ""
   property string lastEventAt: ""
   property int fired: 0
+
+  function applyAwayProbe(text) {
+    var probe = Model.parseAwayProbe(text)
+    if (!probe.known) return
+    root.sessionLocked = probe.locked
+    root.inIdleCycle = probe.inIdleCycle
+    root.authenticating = probe.authenticating
+  }
+
+  // Called by the widget the moment it writes a new timeout.
+  function applyTimeout(seconds) {
+    root.timeoutOverride = Model.timeoutSeconds({ timeoutSec: seconds }, root.timeoutSeconds)
+  }
 
   function logEvent(message) {
     root.lastEventAt = new Date().toISOString()
@@ -160,6 +179,7 @@ Item {
     running: root.armed
     repeat: true
     onTriggered: {
+      if (!awayProbe.running) awayProbe.running = true
       var now = Date.now()
       var slept = Model.resumed(root.lastTick, now, awayTimer.interval)
       root.lastTick = now
@@ -183,6 +203,13 @@ Item {
     }
   }
 
+  // Both statuses in one go, so watching the lock costs a single process a tick.
+  Process {
+    id: awayProbe
+    command: ["bash", "-c", "omarchy-shell lock status; omarchy-shell idle status"]
+    stdout: StdioCollector { waitForEnd: true; onStreamFinished: root.applyAwayProbe(text) }
+  }
+
   Process {
     id: suspendProcess
     stdout: StdioCollector { id: suspendOut; waitForEnd: true }
@@ -204,6 +231,10 @@ Item {
     function now(): string { root.fire("ipc"); return "ok" }
     function version(): string { return root.pluginVersion }
   }
+
+  // Once the config catches up the override has nothing left to correct, and
+  // dropping it keeps a later hand edit of shell.json from being masked.
+  onConfiguredTimeoutChanged: if (configuredTimeout === timeoutOverride) timeoutOverride = -1
 
   onTimeoutSecondsChanged: {
     logEvent("timeout " + Model.describeTimeout(timeoutSeconds))
