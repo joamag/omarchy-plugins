@@ -40,6 +40,11 @@ Panel {
   property var suggestions: []
   property int suggestionIndex: -1
   property string searchQuery: ""
+  // Drag and drop reordering: the row being dragged, how far it has travelled
+  // from the press and the index it would land on (-1 = no drag in progress).
+  property int dragIndex: -1
+  property int dragTarget: -1
+  property real dragOffset: 0
 
   // Chart point under the pointer, or null. While set, the hero shows that
   // point's price and its change against the previous close.
@@ -228,12 +233,42 @@ Panel {
     var idx = symbols.indexOf(symbol)
     var target = idx + delta
     if (idx < 0 || target < 0 || target >= symbols.length) return
-    var next = symbols.slice()
-    next.splice(idx, 1)
-    next.splice(target, 0, symbol)
-    saveSymbols(next)
+    saveSymbols(Model.reorder(symbols, idx, target))
     cursorActive = true
     cursorIndex = target
+  }
+
+  // A row was picked up: from here the row follows the pointer and the rows it
+  // passes slide out of its way, until the release commits the new order.
+  function startDrag(index) {
+    if (index < 0 || index >= symbols.length) return
+    dragIndex = index
+    dragTarget = index
+    dragOffset = 0
+  }
+
+  function updateDrag(offset, pitch) {
+    if (dragIndex < 0) return
+    dragOffset = offset
+    dragTarget = Model.dropIndex(dragIndex, offset, pitch, symbols.length)
+  }
+
+  function endDrag() {
+    var from = dragIndex
+    var target = dragTarget
+    // Cleared first so the rows are back at their own places by the time the
+    // new watchlist reaches the repeater.
+    cancelDrag()
+    if (from < 0 || target < 0 || target === from) return
+    saveSymbols(Model.reorder(symbols, from, target))
+    cursorActive = true
+    cursorIndex = target
+  }
+
+  function cancelDrag() {
+    dragIndex = -1
+    dragTarget = -1
+    dragOffset = 0
   }
 
   function cursorSymbol() {
@@ -376,7 +411,7 @@ Panel {
     function cycleSymbol(): void { root.cycleSymbol(1) }
     function addSymbol(symbol: string): string { return root.addSymbol(symbol) ? "ok" : "exists" }
     function removeSymbol(symbol: string): string { return root.removeSymbol(String(symbol || "").trim().toUpperCase()) ? "ok" : "unknown" }
-    function version(): string { return "0.2.0" }
+    function version(): string { return "0.3.0" }
   }
 
   onOpenedChanged: {
@@ -384,6 +419,7 @@ Panel {
       selectedSymbol = barSymbol
       cursorActive = false
       cursorIndex = Math.max(0, symbols.indexOf(barSymbol))
+      cancelDrag()
       refresh()
       ensureSeries()
     } else if (editing) {
@@ -766,6 +802,7 @@ Panel {
         PanelSeparator { foreground: root.foreground }
 
         Column {
+          id: watchlist
           width: parent.width
           spacing: Style.space(2)
 
@@ -786,6 +823,7 @@ Panel {
               width: parent.width
               symbol: modelData
               rowIndex: index
+              rowPitch: height + watchlist.spacing
             }
           }
 
@@ -938,7 +976,7 @@ Panel {
           Text {
             visible: !root.editing
             textFormat: Text.PlainText
-            text: "a add · x remove · J / K reorder · or edit symbols in shell.json"
+            text: "a add · x remove · drag or J / K reorder · or edit symbols in shell.json"
             color: root.foreground
             opacity: 0.35
             font.family: root.fontFamily
@@ -1006,20 +1044,38 @@ Panel {
   }
 
   // One watchlist row: label over name, a sparkline of the day, price over
-  // the daily change. Click charts it, right click opens it in the browser.
+  // the daily change. Click charts it, right click opens it in the browser,
+  // drag it up or down to reorder the watchlist.
   component QuoteRow: CursorSurface {
     id: row
     required property string symbol
     required property int rowIndex
+    // Height of a row plus the gap to the next one, which is the distance the
+    // pointer covers to move the dragged row one place.
+    required property real rowPitch
 
     readonly property var quote: root.quotes[symbol]
     readonly property real pct: Model.changePct(quote)
     readonly property color trendColor: root.trendColor(pct)
+    readonly property bool dragging: root.dragIndex === rowIndex
 
     hasCursor: root.cursorActive && root.cursorIndex === rowIndex
     current: root.activeSymbol === symbol
     foreground: root.foreground
     implicitHeight: inner.implicitHeight + Style.spacing.xl
+    // The dragged row floats over its neighbours while they slide to open the
+    // gap it will drop into. Both move through a transform rather than `y`,
+    // which belongs to the Column that lays the rows out.
+    z: dragging ? 1 : 0
+
+    transform: Translate {
+      y: row.dragging ? root.dragOffset : Model.dragShift(row.rowIndex, root.dragIndex, root.dragTarget) * row.rowPitch
+
+      Behavior on y {
+        enabled: !row.dragging
+        NumberAnimation { duration: 120; easing.type: Easing.OutCubic }
+      }
+    }
 
     Row {
       id: inner
@@ -1109,7 +1165,17 @@ Panel {
       }
     }
 
+    // A press that crosses the threshold becomes a reorder, anything shorter
+    // stays a click, the same way the bar tells a module click from a module
+    // drag. No drag.target here: the row is owned by a Column positioner.
     MouseArea {
+      id: rowPointer
+
+      property bool dragging: false
+      property bool suppressClick: false
+      property real pressedY: 0
+      readonly property real dragThreshold: Style.space(4)
+
       anchors.fill: parent
       hoverEnabled: true
       acceptedButtons: Qt.LeftButton | Qt.RightButton
@@ -1118,7 +1184,43 @@ Panel {
         root.cursorActive = true
         root.cursorIndex = row.rowIndex
       }
+
+      onPressed: function(mouse) {
+        dragging = false
+        suppressClick = false
+        pressedY = mouse.y
+      }
+
+      onPositionChanged: function(mouse) {
+        if (!(mouse.buttons & Qt.LeftButton) || root.symbols.length < 2) return
+        if (!dragging) {
+          if (Math.abs(mouse.y - pressedY) < dragThreshold) return
+          dragging = true
+          root.startDrag(row.rowIndex)
+        }
+        // The row keeps up with the pointer, so the press point stays under
+        // the cursor and every event measures one step, not the whole travel.
+        root.updateDrag(root.dragOffset + mouse.y - pressedY, row.rowPitch)
+      }
+
+      onReleased: {
+        if (!dragging) return
+        dragging = false
+        suppressClick = true
+        root.endDrag()
+      }
+
+      onCanceled: {
+        dragging = false
+        suppressClick = false
+        root.cancelDrag()
+      }
+
       onClicked: function(mouse) {
+        if (suppressClick) {
+          suppressClick = false
+          return
+        }
         if (mouse.button === Qt.RightButton) root.openInBrowser(row.symbol)
         else root.selectSymbol(row.symbol)
       }

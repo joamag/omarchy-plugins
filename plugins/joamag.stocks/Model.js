@@ -263,6 +263,35 @@ function nextSymbol(symbols, current, delta) {
   return symbols[((idx + delta) % n + n) % n]
 }
 
+// Move one entry of the watchlist to another position, returning a new list.
+// An index outside the list, or a move that goes nowhere, leaves the order
+// untouched.
+function reorder(symbols, from, to) {
+  var out = (symbols || []).slice()
+  if (from < 0 || from >= out.length || to < 0 || to >= out.length || from === to) return out
+  out.splice(to, 0, out.splice(from, 1)[0])
+  return out
+}
+
+// Where a dragged row lands: the pointer's travel from the press point turned
+// into whole rows and clamped to the list. `pitch` is a row's height plus the
+// spacing between rows.
+function dropIndex(from, offsetY, pitch, count) {
+  if (count <= 0) return 0
+  var travel = num(offsetY)
+  var steps = isFinite(travel) && pitch > 0 ? Math.round(travel / pitch) : 0
+  return Math.max(0, Math.min(count - 1, from + steps))
+}
+
+// How far a row slides while another row is dragged over it, in whole rows:
+// the ones between the drag's origin and its target close the gap it left,
+// everything else stays where it is.
+function dragShift(index, from, to) {
+  if (from < 0 || to < 0 || from === to || index === from) return 0
+  if (from < to) return index > from && index <= to ? -1 : 0
+  return index >= to && index < from ? 1 : 0
+}
+
 function rangeIndex(key) {
   for (var i = 0; i < RANGES.length; i++) if (RANGES[i].key === key) return i
   return 0

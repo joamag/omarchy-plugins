@@ -244,6 +244,61 @@ describe("nextSymbol", () => {
   })
 })
 
+describe("reorder", () => {
+  it("moves an entry and closes the gap behind it", () => {
+    assert.deepEqual(Model.reorder(["A", "B", "C", "D"], 0, 2), ["B", "C", "A", "D"])
+    assert.deepEqual(Model.reorder(["A", "B", "C", "D"], 3, 1), ["A", "D", "B", "C"])
+    assert.deepEqual(Model.reorder(["A", "B"], 1, 0), ["B", "A"])
+  })
+
+  it("leaves the order alone for a move that goes nowhere", () => {
+    const list = ["A", "B", "C"]
+    assert.deepEqual(Model.reorder(list, 1, 1), list)
+    assert.deepEqual(Model.reorder(list, -1, 2), list)
+    assert.deepEqual(Model.reorder(list, 0, 3), list)
+    assert.deepEqual(Model.reorder(list, 3, 0), list)
+    assert.deepEqual(Model.reorder(null, 0, 1), [])
+  })
+
+  it("never touches the list it was given", () => {
+    const list = ["A", "B", "C"]
+    Model.reorder(list, 0, 2)
+    assert.deepEqual(list, ["A", "B", "C"])
+  })
+})
+
+describe("dropIndex", () => {
+  it("turns the pointer's travel into whole rows", () => {
+    assert.equal(Model.dropIndex(0, 0, 40, 4), 0)
+    assert.equal(Model.dropIndex(0, 19, 40, 4), 0)
+    assert.equal(Model.dropIndex(0, 21, 40, 4), 1)
+    assert.equal(Model.dropIndex(3, -80, 40, 4), 1)
+  })
+
+  it("clamps to the list and stays put on a pitch or travel it cannot use", () => {
+    assert.equal(Model.dropIndex(0, -500, 40, 4), 0)
+    assert.equal(Model.dropIndex(3, 500, 40, 4), 3)
+    assert.equal(Model.dropIndex(2, 80, 0, 4), 2)
+    assert.equal(Model.dropIndex(2, NaN, 40, 4), 2)
+    assert.equal(Model.dropIndex(1, 40, 40, 0), 0)
+  })
+})
+
+describe("dragShift", () => {
+  it("slides the rows the drag passes over, one place towards the gap", () => {
+    // Dragging row 1 down onto row 3 lifts the two rows it passes.
+    assert.deepEqual([0, 1, 2, 3].map((i) => Model.dragShift(i, 1, 3)), [0, 0, -1, -1])
+    // Dragging row 2 up onto row 0 pushes the two rows above it down.
+    assert.deepEqual([0, 1, 2, 3].map((i) => Model.dragShift(i, 2, 0)), [1, 1, 0, 0])
+  })
+
+  it("holds every row still without a drag or without a move", () => {
+    assert.deepEqual([0, 1, 2].map((i) => Model.dragShift(i, -1, -1)), [0, 0, 0])
+    assert.deepEqual([0, 1, 2].map((i) => Model.dragShift(i, 1, 1)), [0, 0, 0])
+    assert.equal(Model.dragShift(2, 2, 0), 0)
+  })
+})
+
 describe("rangeIndex", () => {
   it("finds a range or defaults to the first", () => {
     assert.equal(Model.rangeIndex("6mo"), 3)
