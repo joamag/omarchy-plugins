@@ -49,6 +49,8 @@ Item {
   // two differ only while the script is running.
   property bool blanked: false
   property bool displaysOff: false
+  // Whether the last blank was only a dry run, which is how it is undone.
+  property bool blankWasDry: false
 
   property string lastVerdict: ""
   property string lastReason: ""
@@ -83,7 +85,7 @@ Item {
       root.fired++
       logEvent("idle for " + Model.describeTimeout(root.timeoutSeconds) + ", displays off" + (root.dryRun ? " (dry run)" : ""))
     } else {
-      logEvent("displays back on" + (root.dryRun ? " (dry run)" : ""))
+      logEvent("displays back on" + (root.blankWasDry ? " (dry run)" : ""))
     }
     apply()
   }
@@ -92,8 +94,11 @@ Item {
   // are still going off is carried out as soon as that run has finished.
   function apply() {
     if (screenProcess.running || root.blanked === root.displaysOff) return
-    var command = [root.scriptPath, root.blanked ? "off" : "on"]
-    if (root.dryRun) command.push("--dry-run")
+    var action = root.blanked ? "off" : "on"
+    var dry = Model.runsDry(action, root.dryRun, root.blankWasDry)
+    if (root.blanked) root.blankWasDry = dry
+    var command = [root.scriptPath, action]
+    if (dry) command.push("--dry-run")
     screenProcess.command = command
     screenProcess.running = true
   }
@@ -191,6 +196,10 @@ Item {
 
   onTimeoutSecondsChanged: rearm()
   onRespectInhibitorsChanged: rearm()
+  // The monitor has no use for this one, but re-arming stops the watch for a
+  // moment, which undoes a blank made under the old setting the way it was
+  // made, and the next one is made under the new.
+  onDryRunChanged: rearm()
 
   // Lets the new setting settle, then re-enables the monitor so it registers
   // a fresh idle notification with it.

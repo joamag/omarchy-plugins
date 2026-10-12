@@ -15,6 +15,7 @@ When the timeout is reached `screenoff.sh off` runs, checks once more that Stay 
 | A key is pressed or the mouse moves | displays back on |
 | Stay Awake is switched off | displays back on, Omarchy's idle service takes over from there |
 | `timeoutSec` is set to `0` | displays back on, the service is disarmed |
+| Any other setting is changed | displays back on, the wait starts again under the new setting |
 
 A session that is locked by hand counts as active for as long as it stays locked, so this service stays out of the way and the lock screen blanks the displays itself.
 

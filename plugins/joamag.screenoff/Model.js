@@ -95,6 +95,14 @@ function nextAction(watching, idle, blanked) {
   return ""
 }
 
+// Whether a run of screenoff.sh only pretends. That is the `dryRun` setting,
+// except on the way back: displays are turned on the way they were turned
+// off, so ones that really went dark really come back even when `dryRun` was
+// switched on in between.
+function runsDry(action, dryRun, blankWasDry) {
+  return action === "on" ? !!blankWasDry : !!dryRun
+}
+
 // screenoff.sh prints one "verdict<TAB>reason" line. Anything else is an
 // error, described by the first stderr line or the exit status.
 function parseResult(stdout, stderr, exitCode) {

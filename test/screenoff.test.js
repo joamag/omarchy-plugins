@@ -182,6 +182,28 @@ describe("nextAction", () => {
   })
 })
 
+describe("runsDry", () => {
+  it("goes by the setting when the displays are turned off", () => {
+    assert.equal(Model.runsDry("off", false, false), false)
+    assert.equal(Model.runsDry("off", true, false), true)
+    assert.equal(Model.runsDry("off", false, true), false)
+    assert.equal(Model.runsDry("off", true, true), true)
+  })
+
+  it("turns them back on the way they went off, whatever the setting is by then", () => {
+    assert.equal(Model.runsDry("on", true, false), false)
+    assert.equal(Model.runsDry("on", false, false), false)
+    assert.equal(Model.runsDry("on", false, true), true)
+    assert.equal(Model.runsDry("on", true, true), true)
+  })
+
+  it("takes a setting or a blank it was never told about for a real one", () => {
+    assert.equal(Model.runsDry("off", undefined, true), false)
+    assert.equal(Model.runsDry("on", true, undefined), false)
+    assert.equal(Model.runsDry("on", undefined, undefined), false)
+  })
+})
+
 describe("parseResult", () => {
   it("splits a verdict line from screenoff.sh", () => {
     assert.deepEqual(Model.parseResult("off\tidle\n", "", 0), { verdict: "off", reason: "idle" })
@@ -268,12 +290,12 @@ describe("screenoff.sh", () => {
     return { run, calls }
   }
 
-  it("turns the keyboard backlight and then the displays off", (t) => {
+  it("turns the displays and then the keyboard backlight off", (t) => {
     const { run, calls } = setup(t)
     const result = run(["off"])
     assert.equal(result.status, 0)
     assert.equal(result.stdout, "off\tidle\n")
-    assert.deepEqual(calls(), ["omarchy-brightness-keyboard off", "omarchy-brightness-display off"])
+    assert.deepEqual(calls(), ["omarchy-brightness-display off", "omarchy-brightness-keyboard off"])
   })
 
   it("leaves the displays alone once Stay Awake has been switched off", (t) => {
@@ -333,7 +355,7 @@ describe("screenoff.sh", () => {
   it("turns the displays off even when the keyboard backlight will not dim", (t) => {
     const { run, calls } = setup(t, { "omarchy-brightness-keyboard": "echo 'no keyboard backlight' >&2; exit 1" })
     assert.equal(run(["off"]).stdout, "off\tidle\n")
-    assert.deepEqual(calls(), ["omarchy-brightness-keyboard off", "omarchy-brightness-display off"])
+    assert.deepEqual(calls(), ["omarchy-brightness-display off", "omarchy-brightness-keyboard off"])
   })
 
   it("turns the displays off on a machine with no keyboard backlight command", (t) => {
@@ -361,6 +383,15 @@ describe("screenoff.sh", () => {
     const result = run(["off"])
     assert.equal(result.status, 1)
     assert.equal(result.stdout, "error\tomarchy-brightness-display not found\n")
+  })
+
+  it("leaves the keyboard backlight lit when the displays will not go off", (t) => {
+    const failing = setup(t, { "omarchy-brightness-display": "exit 1" })
+    assert.equal(failing.run(["off"]).status, 1)
+    assert.deepEqual(failing.calls(), ["omarchy-brightness-display off"])
+    const missing = setup(t, { "omarchy-brightness-display": null })
+    assert.equal(missing.run(["off"]).status, 1)
+    assert.deepEqual(missing.calls(), [])
   })
 
   it("wakes the displays, whatever Stay Awake says by then", (t) => {

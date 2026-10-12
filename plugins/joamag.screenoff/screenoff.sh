@@ -51,10 +51,11 @@ case "$action" in
       exit 0
     fi
     if (( ! dry_run )); then
-      # Not every machine has a keyboard backlight, and one that will not dim
-      # is no reason to leave the displays on.
-      omarchy-brightness-keyboard off >/dev/null 2>&1 || true
       run omarchy-brightness-display off
+      # Not every machine has a keyboard backlight, and one that will not dim
+      # is no reason to call the blank a failure. It goes after the displays,
+      # so a blank that fails has left no backlight to put back.
+      omarchy-brightness-keyboard off >/dev/null 2>&1 || true
     fi
     printf 'off\tidle\n'
     ;;
