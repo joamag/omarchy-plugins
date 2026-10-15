@@ -120,11 +120,22 @@ describe("findMode", () => {
     assert.equal(Model.findMode(nzxt, "cover marquee"), "Cover Marquee")
   })
 
+  it("reads the modes of a device handed over by a Repeater, which are not an Array", () => {
+    // What a QVariantList looks like from JavaScript: indexed, with a length,
+    // but rejected by Array.isArray.
+    const modes = { length: 3, 0: "Off", 1: "Direct", 2: "Cycle" }
+    assert.equal(Array.isArray(modes), false)
+    assert.equal(Model.findMode({ modes }, "direct"), "Direct")
+    assert.equal(Model.isControllable({ modes }), true)
+    assert.deepEqual(Model.applyArgs({ index: 0, modes }, { on: false }), ["set", "0", "Off"])
+  })
+
   it("returns an empty string for a missing mode or device", () => {
     assert.equal(Model.findMode(nzxt, "off"), "")
     assert.equal(Model.findMode(nzxt, ""), "")
     assert.equal(Model.findMode(null, "static"), "")
     assert.equal(Model.findMode({ modes: "Static" }, "static"), "")
+    assert.equal(Model.findMode({ modes: { 0: "Static" } }, "static"), "")
   })
 })
 

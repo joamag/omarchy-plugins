@@ -104,9 +104,12 @@ function parseModes(raw) {
 }
 
 // The device's own spelling of a mode, matched without regard to case the way
-// OpenRGB matches it, or "" when the device has no such mode.
+// OpenRGB matches it, or "" when the device has no such mode. A device that
+// has crossed a Repeater's modelData carries its modes as a QVariantList,
+// which Array.isArray rejects, so anything with a length is read as a list.
 function findMode(device, wanted) {
-  var modes = device && Array.isArray(device.modes) ? device.modes : []
+  var modes = device ? device.modes : null
+  if (!modes || typeof modes === "string" || typeof modes.length !== "number") return ""
   var key = String(wanted || "").toLowerCase()
   for (var i = 0; i < modes.length; i++) {
     if (String(modes[i]).toLowerCase() === key) return modes[i]
