@@ -6,7 +6,7 @@
 #   rgb.sh                          snapshot:
 #     state   ok | missing | error
 #     error   message, only with state error
-#     device  index  name  type  modes    (one per device, modes as OpenRGB prints them)
+#     device  index  name  type  serial  modes   (one per device, modes as OpenRGB prints them)
 #   rgb.sh set INDEX MODE [COLOR [SPEED]]
 #                                   switch device INDEX to MODE, painted COLOR
 #                                   (RRGGBB) when the mode takes one, running at
@@ -16,7 +16,8 @@
 # and detects every device itself otherwise, which takes a few seconds a call.
 # Either way it reports a mode it does not know, a colour it cannot parse or a
 # number of colours the mode does not take on its output and still exits 0, so
-# its words are checked as well as its exit status.
+# its words are checked as well as its exit status. A mode that takes more
+# colours than one says how many, and is asked again with that many of it.
 #
 # The set action prints "error<TAB>message" when it fails and nothing on
 # success; the popup keeps what it asked for either way.
@@ -39,6 +40,16 @@ error_of() {
   printf '%s' "$message"
 }
 
+# Runs the set action with COLORS (one or more, comma separated, or none),
+# leaving what OpenRGB said in $out and its exit status in $status.
+set_device() {
+  local colors="$1" args=(--device "$index" --mode "$mode")
+  [[ -n $colors ]] && args+=(--color "$colors")
+  [[ -n $speed ]] && args+=(--speed "$((10#$speed))")
+  out=$(timeout 30 openrgb "${args[@]}" 2>&1)
+  status=$?
+}
+
 snapshot() {
   if ! command -v openrgb >/dev/null 2>&1; then
     printf 'state\tmissing\n'
@@ -48,6 +59,13 @@ snapshot() {
   local out status message
   out=$(timeout 30 openrgb --list-devices 2>&1)
   status=$?
+  # Newer OpenRGB lists the names alone under --list-devices and moved the rest
+  # to --list-detailed, which older ones do not know, so a list of devices
+  # without a single mode line is the short one and is asked for again.
+  if (( status == 0 )) && grep -q '^[0-9]\+: ' <<<"$out" && ! grep -q '^ \+Modes:' <<<"$out"; then
+    out=$(timeout 30 openrgb --list-detailed 2>&1)
+    status=$?
+  fi
   message=$(error_of "$out" "$status")
   if [[ -n $message ]]; then
     printf 'state\terror\nerror\t%s\n' "${message//$'\t'/ }"
@@ -55,13 +73,13 @@ snapshot() {
   fi
 
   printf 'state\tok\n'
-  # One block per device: "N: name", then indented "Type:" and "Modes:" lines
-  # among others. Whatever OpenRGB says about its server before the list is
-  # not a device header and is skipped.
+  # One block per device: "N: name", then indented "Type:", "Serial:" and
+  # "Modes:" lines among others. Whatever OpenRGB says about its server before
+  # the list is not a device header and is skipped.
   awk '
     function flush() {
-      if (idx != "") printf "device\t%s\t%s\t%s\t%s\n", idx, name, type, modes
-      idx = ""; name = ""; type = ""; modes = ""
+      if (idx != "") printf "device\t%s\t%s\t%s\t%s\t%s\n", idx, name, type, serial, modes
+      idx = ""; name = ""; type = ""; serial = ""; modes = ""
     }
     /^[0-9]+: / {
       flush()
@@ -71,6 +89,7 @@ snapshot() {
     }
     idx == "" { next }
     /^ +Type:/ { type = $0; sub(/^ +Type: */, "", type); next }
+    /^ +Serial:/ { serial = $0; sub(/^ +Serial: */, "", serial); gsub(/[ \t]+$/, "", serial); gsub(/\t/, " ", serial); next }
     /^ +Modes:/ { modes = $0; sub(/^ +Modes: */, "", modes); gsub(/\t/, " ", modes); next }
     END { flush() }
   ' <<<"$out"
@@ -87,18 +106,22 @@ case "${1:-}" in
     speed=${5:-}
     [[ $index =~ ^[0-9]+$ ]] || fail "device index required"
     [[ -n $mode ]] || fail "mode required"
-    args=(--device "$index" --mode "$mode")
     if [[ -n $color ]]; then
       [[ $color =~ ^[0-9A-Fa-f]{6}$ ]] || fail "colour must be six hex digits"
-      args+=(--color "$color")
     fi
     if [[ -n $speed ]]; then
       [[ $speed =~ ^[0-9]{1,3}$ ]] && (( 10#$speed <= 100 )) || fail "speed must be 0 to 100"
-      args+=(--speed "$((10#$speed))")
     fi
     command -v openrgb >/dev/null 2>&1 || fail "openrgb not found"
-    out=$(timeout 30 openrgb "${args[@]}" 2>&1)
-    status=$?
+    set_device "$color"
+    # OpenRGB checks the count before it switches anything, so asking again
+    # with the least the mode takes, all in the one colour, is safe.
+    if [[ -n $color && $out =~ Please\ provide\ between\ ([0-9]{1,2})\ and\ [0-9]+\ colors ]] && (( 10#${BASH_REMATCH[1]} > 1 )); then
+      wanted=$((10#${BASH_REMATCH[1]}))
+      colors=$color
+      for (( i = 1; i < wanted; i++ )); do colors+=",$color"; done
+      set_device "$colors"
+    fi
     message=$(error_of "$out" "$status")
     [[ -z $message ]] || fail "$message"
     ;;

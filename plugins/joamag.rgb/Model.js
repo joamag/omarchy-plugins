@@ -57,12 +57,10 @@ function num(value) {
 }
 
 // rgb.sh emits "state<TAB>value", optionally "error<TAB>message", then one
-// "device<TAB>index<TAB>name<TAB>type<TAB>modes" per device. Two devices of the
-// same model share a name, so each gets a key that tells them apart for the
-// state remembered against it.
+// "device<TAB>index<TAB>name<TAB>type<TAB>serial<TAB>modes" per device, each
+// given the key its remembered state is stored under.
 function parseSnapshot(raw) {
   var out = { state: "error", error: "", devices: [] }
-  var seen = {}
   var lines = String(raw || "").split("\n")
   for (var i = 0; i < lines.length; i++) {
     var line = lines[i]
@@ -70,15 +68,13 @@ function parseSnapshot(raw) {
     var parts = line.split("\t")
     if (parts[0] === "device") {
       if (parts.length < 4 || !/^\d+$/.test(parts[1])) continue
-      var name = parts[2] !== "" ? parts[2] : "Device " + parts[1]
-      var count = (seen[name] || 0) + 1
-      seen[name] = count
-      var modes = parseModes(parts.slice(4).join("\t"))
+      var modes = parseModes(parts.slice(5).join("\t"))
       out.devices.push({
         index: Number(parts[1]),
-        key: count > 1 ? name + " #" + count : name,
-        name: name,
+        key: "",
+        name: parts[2] !== "" ? parts[2] : "Device " + parts[1],
         type: parts[3],
+        serial: parts.length > 4 ? parts[4] : "",
         modes: modes.names,
         activeMode: modes.active
       })
@@ -89,7 +85,38 @@ function parseSnapshot(raw) {
     }
   }
   if (out.state === "error" && out.error === "") out.error = "OpenRGB returned no data"
+  assignKeys(out.devices)
   return out
+}
+
+// The key each device's state is remembered under: its name, which a person
+// can read and edit in shell.json. Two devices of the same model share a name,
+// so those are told apart by their serial, which stays with the hardware
+// whatever order it is detected in, or failing one (memory sticks report
+// none, and are listed in the order of their fixed bus addresses) by their
+// place among the ones without, "#2" for the second.
+function assignKeys(devices) {
+  var counts = {}
+  var seen = {}
+  var used = {}
+  for (var i = 0; i < devices.length; i++) counts[devices[i].name] = (counts[devices[i].name] || 0) + 1
+  for (var j = 0; j < devices.length; j++) {
+    var device = devices[j]
+    var key = device.name
+    if (counts[device.name] > 1 && device.serial !== "") {
+      key = device.name + " #" + device.serial
+    } else {
+      seen[device.name] = (seen[device.name] || 0) + 1
+      if (seen[device.name] > 1) key = device.name + " #" + seen[device.name]
+    }
+    // A serial two devices share, or one that reads like a place, tells them
+    // apart no better than nothing; the later one is numbered on from it.
+    var base = key
+    for (var n = 2; used[key]; n++) key = base + " #" + n
+    used[key] = true
+    device.key = key
+  }
+  return devices
 }
 
 // OpenRGB's mode list: names separated by spaces, one with a space in it in
@@ -337,6 +364,56 @@ function pendingRestore(devices, lights, done) {
   return out
 }
 
+// Whether a remembered device is still owed its state: not restored yet, and
+// not one the last snapshot shows hidden by the devices setting or unable to
+// take it. One that snapshot does not list at all may yet turn up, since the
+// openrgb service can still be detecting when the shell asks at login.
+function awaitingRestore(snapshot, filter, lights, done) {
+  if (!lights || typeof lights !== "object") return false
+  var listed = {}
+  var all = snapshot && Array.isArray(snapshot.devices) ? snapshot.devices : []
+  for (var i = 0; i < all.length; i++) listed[all[i].key] = all[i]
+  var shown = {}
+  var visible = visibleDevices(snapshot, filter)
+  for (var j = 0; j < visible.length; j++) shown[visible[j].key] = true
+  for (var key in lights) {
+    if (!Object.prototype.hasOwnProperty.call(lights, key) || !lightState(lights, key).known) continue
+    if (done && done[key]) continue
+    var device = listed[key]
+    if (device && (!shown[key] || !isControllable(device))) continue
+    return true
+  }
+  return false
+}
+
+// The restore marks worth keeping after a snapshot. A device a good snapshot no
+// longer lists has lost its colours along with its power, so it is restored
+// again when it comes back; a failed snapshot says nothing about what is there.
+function pruneRestored(done, snapshot) {
+  var out = {}
+  if (!done || typeof done !== "object") return out
+  var listed = null
+  if (isOk(snapshot)) {
+    listed = {}
+    for (var i = 0; i < snapshot.devices.length; i++) listed[snapshot.devices[i].key] = true
+  }
+  for (var key in done) {
+    if (Object.prototype.hasOwnProperty.call(done, key) && done[key] && (!listed || listed[key])) out[key] = true
+  }
+  return out
+}
+
+// The restore marks without one device's: what was sent to it did not land,
+// so the next snapshot puts its remembered state back.
+function forgetRestored(done, key) {
+  var out = {}
+  if (!done || typeof done !== "object") return out
+  for (var k in done) {
+    if (Object.prototype.hasOwnProperty.call(done, k) && done[k] && k !== key) out[k] = true
+  }
+  return out
+}
+
 function litCount(devices, lights) {
   var n = 0
   var list = Array.isArray(devices) ? devices : []
@@ -344,6 +421,18 @@ function litCount(devices, lights) {
     if (isControllable(list[i]) && lightState(lights, list[i].key).on) n++
   }
   return n
+}
+
+// What an all on or off asked for before the devices were listed comes to once
+// they are: "on" and "off" say it, "toggle" (the bar's right click) flips what
+// is lit by then. null for no request at all.
+function requestedPower(request, anyOn) {
+  switch (String(request || "")) {
+  case "on": return true
+  case "off": return false
+  case "toggle": return !anyOn
+  default: return null
+  }
 }
 
 function typeIcon(device) {

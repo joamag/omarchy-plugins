@@ -9,14 +9,14 @@ const { loadModel, fixturePath, runScript, tmpdir, fakeCommand } = require("./he
 const Model = loadModel("joamag.rgb")
 
 // The fixture the way rgb.sh turns it into lines: the NZXT hub, a GPU, two
-// identical RAM sticks and a fan hub with effects only.
+// identical RAM sticks without a serial and a fan hub with effects only.
 const RAW_OK = [
   "state\tok",
-  "device\t0\tNZXT Smart Device V2\tLED Strip\t[Direct] Fixed Fading Spectrum 'Cover Marquee' 'Super Rainbow'",
-  "device\t1\tASUS ROG STRIX RTX 2060\tGPU\tDirect Off Static Breathing 'Spectrum Cycle' ['Chase Fade']",
-  "device\t2\tCorsair Vengeance RGB\tDRAM\tDirect [Static] 'Color Shift'",
-  "device\t3\tCorsair Vengeance RGB\tDRAM\tDirect [Static] 'Color Shift'",
-  "device\t4\tRainbow Fan Hub\tCooler\t[Rainbow] 'Spectrum Cycle'",
+  "device\t0\tNZXT Smart Device V2\tLED Strip\t00000000001A\t[Direct] Fixed Fading Spectrum 'Cover Marquee' 'Super Rainbow'",
+  "device\t1\tASUS ROG STRIX RTX 2060\tGPU\t\tDirect Off Static Breathing 'Spectrum Cycle' ['Chase Fade']",
+  "device\t2\tCorsair Vengeance RGB\tDRAM\t\tDirect [Static] 'Color Shift'",
+  "device\t3\tCorsair Vengeance RGB\tDRAM\t\tDirect [Static] 'Color Shift'",
+  "device\t4\tRainbow Fan Hub\tCooler\t\t[Rainbow] 'Spectrum Cycle'",
   "",
 ].join("\n")
 const ok = Model.parseSnapshot(RAW_OK)
@@ -31,8 +31,8 @@ const LIGHTS = {
 // solid mode is Direct, with two effects, and a board with nothing but Direct.
 const [pny, board] = Model.parseSnapshot([
   "state\tok",
-  "device\t0\tPNY GeForce RTX 2060 XLR8 OC EDITION\tGPU\t[Off] Direct Cycle Strobe",
-  "device\t2\tMSI B450I GAMING PLUS AC (MS-7A40)\tMotherboard\t[Direct]",
+  "device\t0\tPNY GeForce RTX 2060 XLR8 OC EDITION\tGPU\t\t[Off] Direct Cycle Strobe",
+  "device\t2\tMSI B450I GAMING PLUS AC (MS-7A40)\tMotherboard\t\t[Direct]",
   "",
 ].join("\n")).devices
 
@@ -62,6 +62,7 @@ describe("parseSnapshot", () => {
       key: "NZXT Smart Device V2",
       name: "NZXT Smart Device V2",
       type: "LED Strip",
+      serial: "00000000001A",
       modes: ["Direct", "Fixed", "Fading", "Spectrum", "Cover Marquee", "Super Rainbow"],
       activeMode: "Direct",
     })
@@ -75,16 +76,18 @@ describe("parseSnapshot", () => {
     assert.equal(ram2.index, 3)
   })
 
-  it("names a nameless device after its index and keeps a missing mode list empty", () => {
-    const parsed = Model.parseSnapshot("state\tok\ndevice\t7\t\tGPU\t\ndevice\t8\tBare\tLight\n")
+  it("names a nameless device after its index and keeps a missing serial and mode list empty", () => {
+    const parsed = Model.parseSnapshot("state\tok\ndevice\t7\t\tGPU\t\t\ndevice\t8\tBare\tLight\n")
     assert.equal(parsed.devices[0].name, "Device 7")
+    assert.equal(parsed.devices[0].serial, "")
     assert.deepEqual(parsed.devices[0].modes, [])
     assert.equal(parsed.devices[1].name, "Bare")
+    assert.equal(parsed.devices[1].serial, "")
     assert.deepEqual(parsed.devices[1].modes, [])
   })
 
   it("skips rows without a whole numeric index or too few fields", () => {
-    const parsed = Model.parseSnapshot("state\tok\ndevice\t\tEmpty index\tGPU\tStatic\ndevice\tx1\tWord\tGPU\tStatic\ndevice\t-1\tNegative\tGPU\tStatic\ndevice\t1.5\tFraction\tGPU\tStatic\ndevice\t2\tShort\n")
+    const parsed = Model.parseSnapshot("state\tok\ndevice\t\tEmpty index\tGPU\t\tStatic\ndevice\tx1\tWord\tGPU\t\tStatic\ndevice\t-1\tNegative\tGPU\t\tStatic\ndevice\t1.5\tFraction\tGPU\t\tStatic\ndevice\t2\tShort\n")
     assert.deepEqual(parsed.devices, [])
   })
 
@@ -98,6 +101,37 @@ describe("parseSnapshot", () => {
     assert.deepEqual(Model.parseSnapshot(""), { state: "error", error: "OpenRGB returned no data", devices: [] })
     assert.equal(Model.parseSnapshot(null).state, "error")
     assert.equal(Model.parseSnapshot("state\t").state, "error")
+  })
+})
+
+describe("assignKeys", () => {
+  const keyed = (devices) => Model.assignKeys(devices).map((d) => d.key)
+  const hub = (serial) => ({ name: "Hub", serial })
+
+  it("keys a device by its name alone while no other shares it, serial or not", () => {
+    assert.equal(nzxt.key, "NZXT Smart Device V2")
+    assert.deepEqual(keyed([hub("A1"), { name: "Board", serial: "" }]), ["Hub", "Board"])
+  })
+
+  it("tells same-name devices apart by serial, whatever order they are detected in", () => {
+    assert.deepEqual(keyed([hub("A1"), hub("B2")]), ["Hub #A1", "Hub #B2"])
+    assert.deepEqual(keyed([hub("B2"), hub("A1")]), ["Hub #B2", "Hub #A1"])
+  })
+
+  it("numbers same-name devices without a serial in the order they are listed", () => {
+    assert.deepEqual(keyed([hub(""), hub(""), hub("")]), ["Hub", "Hub #2", "Hub #3"])
+    assert.deepEqual(keyed([hub(""), hub("A1"), hub("")]), ["Hub", "Hub #A1", "Hub #2"])
+  })
+
+  it("never hands out one key twice, for a shared serial or one that reads like a place", () => {
+    assert.deepEqual(keyed([hub("000"), hub("000")]), ["Hub #000", "Hub #000 #2"])
+    assert.deepEqual(keyed([hub(""), hub("2"), hub("")]), ["Hub", "Hub #2", "Hub #2 #2"])
+  })
+
+  it("keys the devices in place and hands the list back", () => {
+    const devices = [hub("")]
+    assert.equal(Model.assignKeys(devices), devices)
+    assert.deepEqual(Model.assignKeys([]), [])
   })
 })
 
@@ -497,12 +531,89 @@ describe("pendingRestore", () => {
   })
 })
 
+describe("awaitingRestore", () => {
+  const both = { "NZXT Smart Device V2": true, "ASUS ROG STRIX RTX 2060": true }
+
+  it("waits for a remembered device that has not had its state back", () => {
+    assert.equal(Model.awaitingRestore(ok, "", LIGHTS, {}), true)
+    assert.equal(Model.awaitingRestore(ok, "", LIGHTS, { "NZXT Smart Device V2": true }), true)
+    assert.equal(Model.awaitingRestore(ok, "", LIGHTS, both), false)
+  })
+
+  it("waits for one the snapshot does not list yet, or a failed or missing snapshot", () => {
+    const gone = { "Lian Li Strip": { on: true } }
+    assert.equal(Model.awaitingRestore(ok, "", gone, both), true)
+    assert.equal(Model.awaitingRestore(Model.parseSnapshot("state\terror\nerror\tboom"), "", LIGHTS, {}), true)
+    assert.equal(Model.awaitingRestore(null, "", LIGHTS, {}), true)
+  })
+
+  it("does not wait for one the devices setting hides or that cannot take a state", () => {
+    assert.equal(Model.awaitingRestore(ok, "gpu", LIGHTS, { "ASUS ROG STRIX RTX 2060": true }), false)
+    assert.equal(Model.awaitingRestore(ok, "", { "Rainbow Fan Hub": { on: true } }, {}), false)
+  })
+
+  it("has nothing to wait for without memories, or with entries that are not states", () => {
+    assert.equal(Model.awaitingRestore(ok, "", {}, {}), false)
+    assert.equal(Model.awaitingRestore(ok, "", null, {}), false)
+    assert.equal(Model.awaitingRestore(ok, "", { "Lian Li Strip": "on" }, {}), false)
+    assert.equal(Model.awaitingRestore(ok, "", Object.create({ inherited: { on: true } }), {}), false)
+  })
+})
+
+describe("pruneRestored", () => {
+  it("keeps the marks of devices a good snapshot still lists", () => {
+    assert.deepEqual(Model.pruneRestored({ "NZXT Smart Device V2": true, "Lian Li Strip": true }, ok), { "NZXT Smart Device V2": true })
+  })
+
+  it("keeps every mark when the snapshot failed or is missing", () => {
+    const done = { "NZXT Smart Device V2": true, "Lian Li Strip": true }
+    assert.deepEqual(Model.pruneRestored(done, Model.parseSnapshot("state\terror")), done)
+    assert.deepEqual(Model.pruneRestored(done, null), done)
+  })
+
+  it("drops marks that are not set, and leaves the marks it was given untouched", () => {
+    const done = { "NZXT Smart Device V2": true, "ASUS ROG STRIX RTX 2060": false }
+    assert.deepEqual(Model.pruneRestored(done, ok), { "NZXT Smart Device V2": true })
+    assert.deepEqual(done, { "NZXT Smart Device V2": true, "ASUS ROG STRIX RTX 2060": false })
+    assert.deepEqual(Model.pruneRestored(null, ok), {})
+  })
+})
+
+describe("forgetRestored", () => {
+  it("drops one device's mark and keeps the rest", () => {
+    assert.deepEqual(Model.forgetRestored({ a: true, b: true }, "a"), { b: true })
+    assert.deepEqual(Model.forgetRestored({ a: true, b: false }, "c"), { a: true })
+  })
+
+  it("is empty for no marks, and copies rather than changes what it was given", () => {
+    const done = { a: true }
+    Model.forgetRestored(done, "a")
+    assert.deepEqual(done, { a: true })
+    assert.deepEqual(Model.forgetRestored(undefined, "a"), {})
+  })
+})
+
 describe("litCount", () => {
   it("counts devices that can be set and are on, a device never set counting as on", () => {
     assert.equal(Model.litCount(ok.devices, LIGHTS), 3)
     assert.equal(Model.litCount([gpu], LIGHTS), 0)
     assert.equal(Model.litCount([fanHub], {}), 0)
     assert.equal(Model.litCount(undefined, LIGHTS), 0)
+  })
+})
+
+describe("requestedPower", () => {
+  it("says on or off as asked, and flips what is lit for a toggle", () => {
+    assert.equal(Model.requestedPower("on", true), true)
+    assert.equal(Model.requestedPower("off", false), false)
+    assert.equal(Model.requestedPower("toggle", true), false)
+    assert.equal(Model.requestedPower("toggle", false), true)
+  })
+
+  it("is null when nothing was asked", () => {
+    assert.equal(Model.requestedPower("", true), null)
+    assert.equal(Model.requestedPower(undefined, false), null)
+    assert.equal(Model.requestedPower("dim", true), null)
   })
 })
 
@@ -649,6 +760,43 @@ exit "\${FAKE_OPENRGB_STATUS:-0}"`)
     assert.equal(Model.solidMode(parsed.devices[4]), "")
   })
 
+  it("keeps each device's serial, an empty one padded with spaces read as none", (t) => {
+    const f = fakes(t)
+    const parsed = Model.parseSnapshot(runScript("joamag.rgb", "rgb.sh", [], { bin: f.dir, env: f.env }).stdout)
+    assert.deepEqual(parsed.devices.map((d) => d.serial), ["00000000001A", "", "", "", ""])
+  })
+
+  it("asks for the detailed list when a newer OpenRGB lists the names alone", (t) => {
+    const f = fakes(t)
+    fakeCommand(f.dir, "openrgb", `
+printf '%s\\n' "$*" >> "$FAKE_LOG"
+case "$1" in
+  --list-devices) printf 'Connected to server\\n0: NZXT Smart Device V2\\n1: ASUS ROG STRIX RTX 2060\\n' ;;
+  --list-detailed) cat "${fixturePath("openrgb-list-devices.txt")}" ;;
+esac`)
+    const parsed = Model.parseSnapshot(runScript("joamag.rgb", "rgb.sh", [], { bin: f.dir, env: f.env }).stdout)
+    assert.deepEqual(f.log(), ["--list-devices", "--list-detailed"])
+    assert.equal(parsed.state, "ok")
+    assert.equal(parsed.devices.length, 5)
+    assert.equal(Model.solidMode(parsed.devices[0]), "Fixed")
+  })
+
+  it("reports the detailed list failing, and does not ask for it when nothing is listed", (t) => {
+    const f = fakes(t)
+    fakeCommand(f.dir, "openrgb", `
+printf '%s\\n' "$*" >> "$FAKE_LOG"
+case "$1" in
+  --list-devices) printf '0: NZXT Smart Device V2\\n' ;;
+  --list-detailed) echo "Error: Invalid option: --list-detailed"; exit 255 ;;
+esac`)
+    const failed = Model.parseSnapshot(runScript("joamag.rgb", "rgb.sh", [], { bin: f.dir, env: f.env }).stdout)
+    assert.equal(failed.state, "error")
+    assert.equal(failed.error, "Invalid option: --list-detailed")
+    fakeCommand(f.dir, "openrgb", `printf '%s\\n' "$*" >> "$FAKE_LOG"; echo "Running standalone."`)
+    assert.equal(runScript("joamag.rgb", "rgb.sh", [], { bin: f.dir, env: f.env }).stdout, "state\tok\n")
+    assert.deepEqual(f.log(), ["--list-devices", "--list-detailed", "--list-devices"])
+  })
+
   it("lists nothing when OpenRGB found no device", (t) => {
     const f = fakes(t)
     const result = runScript("joamag.rgb", "rgb.sh", [], { bin: f.dir, env: { ...f.env, FAKE_OPENRGB_OUTPUT: "Attempting to connect to local OpenRGB server.\nRunning standalone." } })
@@ -658,7 +806,7 @@ exit "\${FAKE_OPENRGB_STATUS:-0}"`)
   it("keeps a device whose block has no type or modes, and turns tabs in a name into spaces", (t) => {
     const f = fakes(t)
     const result = runScript("joamag.rgb", "rgb.sh", [], { bin: f.dir, env: { ...f.env, FAKE_OPENRGB_OUTPUT: "0: Odd\tname\n  Location:       HID: /dev/hidraw3\n1: Next\n  Type:           GPU\n  Modes: Static" } })
-    assert.equal(result.stdout, "state\tok\ndevice\t0\tOdd name\t\t\ndevice\t1\tNext\tGPU\tStatic\n")
+    assert.equal(result.stdout, "state\tok\ndevice\t0\tOdd name\t\t\t\ndevice\t1\tNext\tGPU\t\tStatic\n")
   })
 
   it("reports an error OpenRGB prints even when it exits 0", (t) => {
@@ -753,12 +901,51 @@ exit "\${FAKE_OPENRGB_STATUS:-0}"`)
     assert.equal(Model.actionError(result.stdout), "Mode 'Static' not available for device 'NZXT Smart Device V2'")
   })
 
+  it("asks again with as many of the colour as an effect takes at least", (t) => {
+    const f = fakes(t)
+    // Complains until it is handed FAKE_MIN colours, the way OpenRGB does for a
+    // mode that takes more than one.
+    fakeCommand(f.dir, "openrgb", `
+printf '%s\\n' "$*" >> "$FAKE_LOG"
+colors=""; previous=""
+for arg in "$@"; do [[ $previous == --color ]] && colors=$arg; previous=$arg; done
+if [[ -n $colors ]] && (( $(tr ',' '\\n' <<<"$colors" | wc -l) >= FAKE_MIN )); then exit 0; fi
+echo "Wrong number of colors specified for mode Alternating"
+echo "Please provide between $FAKE_MIN and 8 colors"`)
+    const result = runScript("joamag.rgb", "rgb.sh", ["set", "0", "Alternating", "FF0000", "50"], { bin: f.dir, env: { ...f.env, FAKE_MIN: "3" } })
+    assert.equal(result.stdout, "")
+    assert.deepEqual(f.log(), [
+      "--device 0 --mode Alternating --color FF0000 --speed 50",
+      "--device 0 --mode Alternating --color FF0000,FF0000,FF0000 --speed 50",
+    ])
+  })
+
   it("reports a number of colours the effect does not take, which OpenRGB exits 0 on", (t) => {
     const f = fakes(t)
     const output = "Connected to server\nWrong number of colors specified for mode Alternating\nPlease provide between 2 and 2 colors"
     const result = runScript("joamag.rgb", "rgb.sh", ["set", "0", "Alternating", "FF0000", "50"], { bin: f.dir, env: { ...f.env, FAKE_OPENRGB_OUTPUT: output } })
     assert.equal(result.status, 0)
     assert.equal(Model.actionError(result.stdout), "Wrong number of colors specified for mode Alternating")
+    assert.deepEqual(f.log(), [
+      "--device 0 --mode Alternating --color FF0000 --speed 50",
+      "--device 0 --mode Alternating --color FF0000,FF0000 --speed 50",
+    ])
+  })
+
+  it("asks only once when no colour was given or the least it takes is one, none or past reason", (t) => {
+    const f = fakes(t)
+    const wrong = (low, high) => `Wrong number of colors specified for mode Wings\nPlease provide between ${low} and ${high} colors`
+    const cases = [
+      [["set", "0", "Wings"], wrong(2, 2)],
+      [["set", "0", "Wings", "FF0000"], wrong(0, 0)],
+      [["set", "0", "Wings", "FF0000"], wrong(1, 1)],
+      [["set", "0", "Wings", "FF0000"], wrong(100, 200)],
+    ]
+    for (const [args, output] of cases) {
+      const result = runScript("joamag.rgb", "rgb.sh", args, { bin: f.dir, env: { ...f.env, FAKE_OPENRGB_OUTPUT: output } })
+      assert.equal(Model.actionError(result.stdout), "Wrong number of colors specified for mode Wings", output)
+    }
+    assert.equal(f.log().length, cases.length)
   })
 
   it("reports a set that failed without words by its exit status", (t) => {

@@ -36,6 +36,12 @@ Panel {
   property string lastError: ""
   // Devices whose remembered state has been put back this session.
   property var restored: ({})
+  // Snapshots taken again to finish a restore at login, where the openrgb
+  // service can still be detecting and list fewer devices than it has.
+  property int restoreRetries: 0
+  // An all on or off asked for before the first snapshot listed the devices,
+  // "on", "off" or "toggle"; it is carried out once they are, after the restore.
+  property string pendingAll: ""
   // Key of the device whose hex field has the keys, so typing a colour does not
   // drive the list cursor.
   property string editingKey: ""
@@ -59,7 +65,7 @@ Panel {
 
   readonly property var actions: [
     { label: "Refresh", icon: "󰑐", tooltip: "Look for devices again", run: function() { root.refresh() } },
-    { label: root.anyOn ? "All off" : "All on", icon: root.anyOn ? "󰌶" : "󰌵", tooltip: root.anyOn ? "Turn every light off" : "Turn every light back on", run: function() { root.setAll(!root.anyOn) } }
+    { label: root.anyOn ? "All off" : "All on", icon: root.anyOn ? "󰌶" : "󰌵", tooltip: root.anyOn ? "Turn every listed light off" : "Turn every listed light back on", run: function() { root.toggleAll() } }
   ]
 
   // Keyboard cursor walks the device rows and then the footer actions, all on
@@ -77,7 +83,11 @@ Panel {
     snapshot = Model.parseSnapshot(raw)
     loading = false
     if (cursorIndex >= cursorCount) cursorIndex = Math.max(0, cursorCount - 1)
+    restored = Model.pruneRestored(restored, snapshot)
     if (restoreOnStart) restore()
+    var power = Model.requestedPower(pendingAll, anyOn)
+    pendingAll = ""
+    if (power !== null) setAll(power)
   }
 
   function markRestored(list) {
@@ -87,10 +97,10 @@ Panel {
     root.restored = done
   }
 
-  // Puts the remembered state back on every device that has one and has not
-  // had it yet this session, as soon as a snapshot shows the device.
+  // Puts the remembered state back on every listed device that has one and has
+  // not had it yet this session, as soon as a snapshot shows the device.
   function restore() {
-    var list = Model.pendingRestore(snapshot ? snapshot.devices : [], root.lights, root.restored)
+    var list = Model.pendingRestore(root.devices, root.lights, root.restored)
     if (list.length === 0) return
     markRestored(list)
     for (var i = 0; i < list.length; i++) queue(list[i], Model.lightState(root.lights, list[i].key))
@@ -152,7 +162,10 @@ Panel {
     commit([device], Model.setLight(root.lights, device.key, patch))
   }
 
+  // Every listed light on or off. Before the first snapshot there is no list to
+  // go by yet, so the request waits for one rather than being lost.
   function setAll(on) {
+    if (!loaded) { pendingAll = on ? "on" : "off"; return }
     var list = []
     var next = root.lights
     for (var i = 0; i < devices.length; i++) {
@@ -163,6 +176,13 @@ Panel {
     if (list.length === 0) return
     lastError = ""
     commit(list, next)
+  }
+
+  // All off while anything is lit, all on otherwise; which of the two is only
+  // known once the devices are.
+  function toggleAll() {
+    if (!loaded) { pendingAll = "toggle"; return }
+    setAll(!anyOn)
   }
 
   function toggleDevice(device) {
@@ -301,16 +321,31 @@ Panel {
 
   Process {
     id: actionProc
-    stdout: StdioCollector {
-      waitForEnd: true
-      onStreamFinished: {
-        var error = Model.actionError(text)
-        if (error !== "") root.lastError = error
-      }
-    }
+    stdout: StdioCollector { id: actionOut; waitForEnd: true }
     onExited: {
+      var error = Model.actionError(actionOut.text)
+      if (error !== "") {
+        root.lastError = error
+        // A change that did not land is put back by the next snapshot, so a
+        // restore that failed is tried again rather than counted as done.
+        root.restored = Model.forgetRestored(root.restored, root.busyKey)
+      }
       root.busyKey = ""
       Qt.callLater(root.flush)
+    }
+  }
+
+  // At login the openrgb service can still be detecting when the first snapshot
+  // asks, and answers with fewer devices than it has, or none. While a
+  // remembered device is still owed its state, look again a few times; then
+  // give up, so a device that is gone for good is not looked for forever.
+  Timer {
+    interval: 10000
+    repeat: true
+    running: root.restoreOnStart && root.restoreRetries < 6 && Model.awaitingRestore(root.snapshot, root.deviceFilter, root.lights, root.restored)
+    onTriggered: {
+      root.restoreRetries++
+      root.refresh()
     }
   }
 
@@ -326,7 +361,7 @@ Panel {
     tooltipText: root.opened ? "" : Model.tooltip(root.snapshot, root.devices, root.lights)
 
     onPressed: function(b) {
-      if (b === Qt.RightButton) root.setAll(!root.anyOn)
+      if (b === Qt.RightButton) root.toggleAll()
       else if (b === Qt.MiddleButton) root.refresh()
       else root.toggle()
     }
@@ -356,7 +391,7 @@ Panel {
       onTabRequested: function(direction) { root.switchPanel(direction) }
       onTextKey: function(text) {
         if (text === "r") root.refresh()
-        else if (text === "a") root.setAll(!root.anyOn)
+        else if (text === "a") root.toggleAll()
         else if (text === "c") root.focusColor()
         else if (text === "[") root.stepEffect(-1)
         else if (text === "]") root.stepEffect(1)

@@ -6,7 +6,7 @@ RGB lighting control for the Omarchy bar, through OpenRGB: a palette icon, dimme
 
 - Left click on the bar icon: open the popup. Arrow keys or `j`/`k` move over the devices and the footer actions, Enter switches the device under the cursor on or off, `h`/`l` change its brightness, Esc closes, Tab switches to the neighbouring panel.
 - Middle click on the bar icon: look for devices again.
-- Right click on the bar icon: turn every light off, or back on when they are all off.
+- Right click on the bar icon: turn every listed light off, or back on when they are all off. A click before the devices have been listed is carried out once they are.
 - `1`-`9`: paint the device under the cursor (or the first device, with the cursor elsewhere) white, red, orange, yellow, green, cyan, blue, purple or pink.
 - `c`: focus that device's colour field. `ff8000`, `#ff8000` or `#f80` followed by Enter set it; Esc gives the keys back.
 - `[` / `]`: that device's previous or next animation, `Solid` included.
@@ -24,10 +24,10 @@ Inline on the widget entry in `~/.config/omarchy/shell.json`:
 
 | Key | Default | Meaning |
 |---|---|---|
-| `devices` | `""` | Devices to show, comma separated: a device is listed when its name contains one of the words or its type is one (`"nzxt, gpu"`); empty lists every device OpenRGB finds |
-| `restoreOnStart` | `true` | Put the remembered colours back when the shell starts, and on any device that shows up later |
+| `devices` | `""` | Devices to show and set, comma separated: a device is listed when its name contains one of the words or its type is one (`"nzxt, gpu"`); empty lists every device OpenRGB finds. The widget leaves the others alone, all on and off and the restore included |
+| `restoreOnStart` | `true` | Put the remembered colours back when the shell starts, retrying for a minute while a device has yet to show up, and on any device that comes back later |
 
-The popup writes what it sets onto the same entry, one object per device keyed by its name, so it can be edited by hand too:
+The popup writes what it sets onto the same entry, one object per device keyed by its name, so it can be edited by hand too. Two devices of the same model are told apart by their serial (`"Name #SERIAL"`), or by their place when they report none (`"Name #2"`):
 
 ```json
 { "id": "joamag.rgb", "lights": { "NZXT Smart Device V2": { "on": true, "color": "FF0000", "brightness": 80, "effect": "Breathing", "speed": 50 } } }
@@ -56,4 +56,4 @@ The service runs OpenRGB's SDK server, which the widget's calls talk to, so a ch
 
 ## Data source
 
-`rgb.sh` lists the devices with `openrgb --list-devices`, keeping each one's index, name, type and modes, and applies a change with `openrgb --device INDEX --mode MODE --color RRGGBB`, adding `--speed PERCENT` for an animation. OpenRGB reports a mode it does not know, or a number of colours a mode does not take, on its output and still exits 0, so the script checks what it printed as well as its exit status.
+`rgb.sh` lists the devices with `openrgb --list-devices`, keeping each one's index, name, type, serial and modes, and asks again with `--list-detailed` when a newer OpenRGB lists the names alone. It applies a change with `openrgb --device INDEX --mode MODE --color RRGGBB`, adding `--speed PERCENT` for an animation. OpenRGB reports a mode it does not know, or a number of colours a mode does not take, on its output and still exits 0, so the script checks what it printed as well as its exit status; a mode that wants more colours than one is asked again with that many of the one colour.
