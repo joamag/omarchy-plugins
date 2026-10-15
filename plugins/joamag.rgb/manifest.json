@@ -1,0 +1,40 @@
+{
+  "schemaVersion": 1,
+  "id": "joamag.rgb",
+  "name": "RGB",
+  "version": "0.1.0",
+  "author": "João Magalhães",
+  "license": "Apache-2.0",
+  "description": "RGB lighting of the case and the graphics card through OpenRGB: on and off, brightness and colour per device from a popup, with the last colours put back when the shell starts.",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "Panel.qml"
+  },
+  "barWidget": {
+    "displayName": "RGB",
+    "description": "Case, graphics card and other OpenRGB lighting: on, off, brightness and colour.",
+    "category": "System",
+    "allowMultiple": false,
+    "defaultSection": "right",
+    "defaults": {
+      "devices": "",
+      "restoreOnStart": true
+    },
+    "schema": [
+      {
+        "key": "devices",
+        "type": "string",
+        "label": "Devices to show (comma separated names or types; empty = every device OpenRGB finds)",
+        "defaultValue": ""
+      },
+      {
+        "key": "restoreOnStart",
+        "type": "boolean",
+        "label": "Put the remembered colours back when the shell starts",
+        "defaultValue": true
+      }
+    ]
+  }
+}

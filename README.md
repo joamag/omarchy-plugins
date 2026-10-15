@@ -16,6 +16,7 @@ A collection of plugins for the [Omarchy](https://omarchy.org) shell (Omarchy 4.
 | [`joamag.disks`](plugins/joamag.disks/) | bar-widget | Usage per mount with meters, removable media mount / unmount / eject, trash and package cache cleanup |
 | [`joamag.suspend`](plugins/joamag.suspend/) | service | Suspends the machine after a period of idle, honouring Stay Awake, idle and sleep inhibitors and the suspend toggle |
 | [`joamag.screenoff`](plugins/joamag.screenoff/) | service | Turns the displays off after a period of idle while Stay Awake is on, any input turns them back on |
+| [`joamag.rgb`](plugins/joamag.rgb/) | bar-widget | Case, graphics card and other OpenRGB lighting: on / off, brightness and colour per device, put back when the shell starts |
 
 ## Development
 
