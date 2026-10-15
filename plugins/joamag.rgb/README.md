@@ -25,7 +25,7 @@ Inline on the widget entry in `~/.config/omarchy/shell.json`:
 | Key | Default | Meaning |
 |---|---|---|
 | `devices` | `""` | Devices to show and set, comma separated: a device is listed when its name contains one of the words or its type is one (`"nzxt, gpu"`); empty lists every device OpenRGB finds. The widget leaves the others alone, all on and off and the restore included |
-| `restoreOnStart` | `true` | Put the remembered colours back when the shell starts, retrying for a minute while a device has yet to show up, and on any device that comes back later |
+| `restoreOnStart` | `true` | Put the remembered colours back when the shell starts, retrying for a minute while a device has yet to show up, and on any device a later refresh finds again, such as opening the popup |
 
 The popup writes what it sets onto the same entry, one object per device keyed by its name, so it can be edited by hand too. Two devices of the same model are told apart by their serial (`"Name #SERIAL"`), or by their place when they report none (`"Name #2"`):
 
