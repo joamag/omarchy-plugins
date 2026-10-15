@@ -12,7 +12,8 @@ import "Model.js" as Model
 // This service watches for idle only while Stay Awake is on and does nothing
 // but the blanking: no screensaver, no lock, no sleep. Any input turns the
 // displays back on, and a Wayland idle inhibitor (video playback, a game)
-// keeps them on.
+// keeps them on. The same blank can be asked for by hand, from the System menu
+// or `omarchy-shell joamag.screenoff now`, whether Stay Awake is on or not.
 Item {
   id: root
 
@@ -21,7 +22,7 @@ Item {
   property var manifest: null
 
   readonly property string pluginId: "joamag.screenoff"
-  readonly property string pluginVersion: "0.1.0"
+  readonly property string pluginVersion: "0.2.0"
   readonly property string scriptPath: String(Qt.resolvedUrl("screenoff.sh")).replace(/^file:\/\//, "")
   readonly property string configPath: Quickshell.env("HOME") + "/.config/omarchy/shell.json"
 
@@ -51,6 +52,10 @@ Item {
   property bool displaysOff: false
   // Whether the last blank was only a dry run, which is how it is undone.
   property bool blankWasDry: false
+  // A screen off asked for by hand, from the moment it is asked for until the
+  // user is back. The displays go once the hands have been off the machine for
+  // a moment, and the first input after that brings them back for good.
+  property bool forced: false
 
   property string lastVerdict: ""
   property string lastReason: ""
@@ -77,14 +82,25 @@ Item {
     rearmTimer.restart()
   }
 
+  function forceOff() {
+    if (root.forced) return
+    root.forced = true
+    logEvent("screen off asked for, displays go once the input stops" + (root.dryRun ? " (dry run)" : ""))
+    // A monitor that was already idle when the last request ended reports no
+    // change when it is enabled again, so its word is taken now.
+    evaluate()
+  }
+
   function evaluate() {
-    var action = Model.nextAction(root.watching, idleMonitor.isIdle, root.blanked)
+    var action = Model.nextAction(root.watching, idleMonitor.isIdle, root.blanked, root.forced && handsOffMonitor.isIdle)
     if (action === "") return
     root.blanked = action === "off"
     if (root.blanked) {
       root.fired++
-      logEvent("idle for " + Model.describeTimeout(root.timeoutSeconds) + ", displays off" + (root.dryRun ? " (dry run)" : ""))
+      logEvent((root.forced ? "screen off asked for" : "idle for " + Model.describeTimeout(root.timeoutSeconds)) + ", displays off" + (root.dryRun ? " (dry run)" : ""))
     } else {
+      // A return ends a blank asked for by hand as well as a timed one.
+      root.forced = false
       logEvent("displays back on" + (root.blankWasDry ? " (dry run)" : ""))
     }
     apply()
@@ -94,7 +110,8 @@ Item {
   // are still going off is carried out as soon as that run has finished.
   function apply() {
     if (screenProcess.running || root.blanked === root.displaysOff) return
-    var action = root.blanked ? "off" : "on"
+    // A blank asked for by hand does not wait on Stay Awake.
+    var action = root.blanked ? (root.forced ? "now" : "off") : "on"
     var dry = Model.runsDry(action, root.dryRun, root.blankWasDry)
     if (root.blanked) root.blankWasDry = dry
     var command = [root.scriptPath, action]
@@ -109,6 +126,7 @@ Item {
       stayAwake: root.stayAwake,
       watching: root.watching,
       idle: idleMonitor.isIdle,
+      forced: root.forced,
       blanked: root.blanked,
       displaysOff: root.displaysOff,
       timeoutSec: root.timeoutSeconds,
@@ -133,6 +151,22 @@ Item {
     respectInhibitors: root.respectInhibitors
     onIsIdleChanged: {
       root.logEvent("idle-monitor: " + (idleMonitor.isIdle ? "idle" : "active"))
+      root.evaluate()
+    }
+  }
+
+  // The timed monitor cannot tell when a user who never went idle for its
+  // whole timeout comes back, so a screen off asked for by hand has one of its
+  // own on a short window: idle once the hands are off the machine, which is
+  // when the displays go, and active again at the first input after that. An
+  // inhibitor does not hold it back, since the user asked for the blank.
+  IdleMonitor {
+    id: handsOffMonitor
+    enabled: root.forced
+    timeout: Model.FORCED_SETTLE_SECONDS
+    respectInhibitors: false
+    onIsIdleChanged: {
+      root.logEvent("hands-off monitor: " + (handsOffMonitor.isIdle ? "idle" : "active"))
       root.evaluate()
     }
   }
@@ -183,6 +217,9 @@ Item {
       // trying it again straight away would run the script in a loop.
       if (result.verdict === "skip" || result.verdict === "error") root.blanked = root.displaysOff
       if (result.verdict === "skip") root.refreshStayAwake()
+      // A blank asked for by hand that could not be made is not asked for
+      // again at every change of idle.
+      if (result.verdict === "error") root.forced = false
       root.apply()
     }
   }
@@ -191,6 +228,7 @@ Item {
     target: "joamag.screenoff"
 
     function status(): string { return root.statusJson() }
+    function now(): string { root.forceOff(); return "ok" }
     function version(): string { return root.pluginVersion }
   }
 

@@ -8,6 +8,11 @@ var DEFAULT_TIMEOUT_SECONDS = 900
 
 var MAX_TIMEOUT_SECONDS = 86400
 
+// A screen off asked for by hand waits for this long without input before the
+// displays go, so the click or key press that asked for it, and the hand still
+// on the mouse after it, does not wake them straight back.
+var FORCED_SETTLE_SECONDS = 1
+
 // shell.json as an object, or null for anything that is not one. The file is
 // read straight from disk: the shell hands a third-party service the bar
 // section alone, and a service with no widget is listed in `plugins[]`.
@@ -85,11 +90,12 @@ function parseStayAwake(text) {
 }
 
 // What to do with the displays now. They go off once the user has been idle
-// for the whole timeout while the service is watching, and come back as soon
-// as either stops being true: the user returned, Stay Awake was switched off
-// or the timeout was set to never.
-function nextAction(watching, idle, blanked) {
-  var away = !!watching && !!idle
+// for the whole timeout while the service is watching, or as soon as a screen
+// off asked for by hand finds the hands off the machine (`forced`), and come
+// back as soon as neither holds: the user returned, or, for the timed blank,
+// Stay Awake was switched off or the timeout was set to never.
+function nextAction(watching, idle, blanked, forced) {
+  var away = (!!watching && !!idle) || !!forced
   if (away && !blanked) return "off"
   if (!away && blanked) return "on"
   return ""

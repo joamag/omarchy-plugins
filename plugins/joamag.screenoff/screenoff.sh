@@ -6,11 +6,13 @@
 # down, both restored on the way back.
 #
 #   screenoff.sh off [--dry-run]   turn the displays off, as long as Stay Awake is still on
+#   screenoff.sh now [--dry-run]   turn them off on request, Stay Awake or not
 #   screenoff.sh on [--dry-run]    turn them back on
 #
 # Prints one "verdict<TAB>reason" line:
 #
 #   off    idle        the displays were turned off
+#   off    forced      the displays were turned off on request
 #   on     activity    the displays were turned back on
 #   skip   allow-idle  Stay Awake was switched off first, Omarchy's own idle service is back in charge
 #   error  message     an Omarchy command is missing or failed
@@ -42,6 +44,16 @@ run() {
   fail "${message:-$* exited $status}"
 }
 
+# Turns the displays off, then the keyboard backlight.
+blank() {
+  (( dry_run )) && return 0
+  run omarchy-brightness-display off
+  # Not every machine has a keyboard backlight, and one that will not dim is
+  # no reason to call the blank a failure. It goes after the displays, so a
+  # blank that fails has left no backlight to put back.
+  omarchy-brightness-keyboard off >/dev/null 2>&1 || true
+}
+
 case "$action" in
   off)
     # Decided at fire time, so a Stay Awake switched off during the idle
@@ -50,21 +62,21 @@ case "$action" in
       printf 'skip\tallow-idle\n'
       exit 0
     fi
-    if (( ! dry_run )); then
-      run omarchy-brightness-display off
-      # Not every machine has a keyboard backlight, and one that will not dim
-      # is no reason to call the blank a failure. It goes after the displays,
-      # so a blank that fails has left no backlight to put back.
-      omarchy-brightness-keyboard off >/dev/null 2>&1 || true
-    fi
+    blank
     printf 'off\tidle\n'
+    ;;
+  now)
+    # Asked for by hand, from the menu or the command line, so it is not the
+    # idle service's to decide whether the machine is held awake.
+    blank
+    printf 'off\tforced\n'
     ;;
   on)
     (( dry_run )) || run omarchy-system-wake
     printf 'on\tactivity\n'
     ;;
   *)
-    echo "Usage: screenoff.sh off|on [--dry-run]" >&2
+    echo "Usage: screenoff.sh off|now|on [--dry-run]" >&2
     exit 1
     ;;
 esac

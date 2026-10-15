@@ -32,6 +32,12 @@ describe("MAX_TIMEOUT_SECONDS", () => {
   })
 })
 
+describe("FORCED_SETTLE_SECONDS", () => {
+  it("is a second, enough to let go of the mouse", () => {
+    assert.equal(Model.FORCED_SETTLE_SECONDS, 1)
+  })
+})
+
 describe("parseConfig", () => {
   it("reads shell.json as the shell writes it", () => {
     assert.deepEqual(Model.parseConfig(JSON.stringify(CONFIG, null, 2) + "\n"), CONFIG)
@@ -180,6 +186,25 @@ describe("nextAction", () => {
     assert.equal(Model.nextAction(false, false, false), "")
     assert.equal(Model.nextAction(undefined, undefined, undefined), "")
   })
+
+  it("turns the displays off for a screen off asked for by hand, watching or not", () => {
+    assert.equal(Model.nextAction(false, false, false, true), "off")
+    assert.equal(Model.nextAction(true, false, false, true), "off")
+  })
+
+  it("keeps them off while the hands stay away, even once it stops watching", () => {
+    assert.equal(Model.nextAction(false, false, true, true), "")
+    assert.equal(Model.nextAction(false, true, true, true), "")
+  })
+
+  it("turns them back on when the user returns from a screen off asked for by hand", () => {
+    assert.equal(Model.nextAction(false, false, true, false), "on")
+  })
+
+  it("keeps a timed blank while the user is still away, with or without one asked for", () => {
+    assert.equal(Model.nextAction(true, true, true, false), "")
+    assert.equal(Model.nextAction(true, true, false, false), "off")
+  })
 })
 
 describe("runsDry", () => {
@@ -306,6 +331,25 @@ describe("screenoff.sh", () => {
     assert.deepEqual(calls(), [])
   })
 
+  it("turns the displays off on request, whatever Stay Awake says", (t) => {
+    for (const stayAwake of [true, false]) {
+      const { run, calls } = setup(t, { stayAwake })
+      const result = run(["now"])
+      assert.equal(result.status, 0)
+      assert.equal(result.stdout, "off\tforced\n")
+      assert.deepEqual(calls(), ["omarchy-brightness-display off", "omarchy-brightness-keyboard off"])
+    }
+  })
+
+  it("turns them off on request on a machine with no state directory", (t) => {
+    const dir = tmpdir(t)
+    const bin = path.join(dir, "bin")
+    fs.mkdirSync(bin)
+    for (const name of COMMANDS) fakeCommand(bin, name, "exit 0")
+    const result = runScript("joamag.screenoff", "screenoff.sh", ["now"], { bin, env: { OMARCHY_STATE_DIR: path.join(dir, "missing") } })
+    assert.equal(result.stdout, "off\tforced\n")
+  })
+
   it("takes a machine with no state directory for one that is not held awake", (t) => {
     const dir = tmpdir(t)
     const bin = path.join(dir, "bin")
@@ -334,14 +378,17 @@ describe("screenoff.sh", () => {
   it("decides without acting in dry-run mode", (t) => {
     const { run, calls } = setup(t)
     assert.equal(run(["off", "--dry-run"]).stdout, "off\tidle\n")
+    assert.equal(run(["now", "--dry-run"]).stdout, "off\tforced\n")
     assert.equal(run(["on", "--dry-run"]).stdout, "on\tactivity\n")
     assert.deepEqual(calls(), [])
     assert.equal(setup(t, { stayAwake: false }).run(["off", "--dry-run"]).stdout, "skip\tallow-idle\n")
+    assert.equal(setup(t, { stayAwake: false }).run(["now", "--dry-run"]).stdout, "off\tforced\n")
   })
 
   it("needs none of the commands to decide in dry-run mode", (t) => {
     const { run } = setup(t, { "omarchy-brightness-keyboard": null, "omarchy-brightness-display": null, "omarchy-system-wake": null })
     assert.equal(run(["off", "--dry-run"]).stdout, "off\tidle\n")
+    assert.equal(run(["now", "--dry-run"]).stdout, "off\tforced\n")
     assert.equal(run(["on", "--dry-run"]).stdout, "on\tactivity\n")
   })
 
@@ -392,6 +439,16 @@ describe("screenoff.sh", () => {
     const missing = setup(t, { "omarchy-brightness-display": null })
     assert.equal(missing.run(["off"]).status, 1)
     assert.deepEqual(missing.calls(), [])
+  })
+
+  it("fails a screen off asked for the same way as a timed one", (t) => {
+    const failing = setup(t, { stayAwake: false, "omarchy-brightness-display": "echo 'hyprctl: no socket' >&2; exit 1" })
+    const result = failing.run(["now"])
+    assert.equal(result.status, 1)
+    assert.equal(result.stdout, "error\thyprctl: no socket\n")
+    assert.deepEqual(failing.calls(), ["omarchy-brightness-display off"])
+    const dimless = setup(t, { stayAwake: false, "omarchy-brightness-keyboard": "exit 1" })
+    assert.equal(dimless.run(["now"]).stdout, "off\tforced\n")
   })
 
   it("wakes the displays, whatever Stay Awake says by then", (t) => {
