@@ -1,8 +1,9 @@
 .pragma library
 
 // Pure helpers for the RGB widget: snapshot parsing, the mode each device is
-// driven in, colour and brightness arithmetic, the state remembered for each
-// device, and the strings the bar, tooltip and popup share.
+// driven in and the effects it offers, colour, brightness and speed
+// arithmetic, the state remembered for each device, and the strings the bar,
+// tooltip and popup share.
 
 var ICON = "󰏘"
 
@@ -40,6 +41,11 @@ var DEFAULT_COLOR = "FFFFFF"
 var MIN_BRIGHTNESS = 5
 var MAX_BRIGHTNESS = 100
 var BRIGHTNESS_STEP = 5
+
+// Effect speed as a percentage of the mode's own range, which OpenRGB maps
+// onto it: 0-4 on an NZXT hub, 0-100 or 0-255 on others.
+var DEFAULT_SPEED = 50
+var SPEED_STEP = 5
 
 function num(value) {
   // Number() makes 0 of null and a blank string and 1 of true; only a number
@@ -135,6 +141,45 @@ function isControllable(device) {
   return solidMode(device) !== ""
 }
 
+// The animations a device offers: every mode but Off and the single-colour
+// ones, Direct among them, which is OpenRGB painting each LED rather than an
+// effect of the controller's own. Empty for a device that cannot be set at all.
+function effectModes(device) {
+  if (solidMode(device) === "") return []
+  var out = []
+  var modes = device.modes
+  for (var i = 0; i < modes.length; i++) {
+    var name = String(modes[i])
+    var key = name.toLowerCase()
+    if (key === "off" || SOLID_MODES.indexOf(key) >= 0) continue
+    out.push(name)
+  }
+  return out
+}
+
+// The effect a device is to run, in its own spelling, or "" for its solid
+// colour; a remembered effect the device no longer offers counts as solid.
+function activeEffect(device, state) {
+  var wanted = state && state.effect ? String(state.effect).toLowerCase() : ""
+  if (wanted === "") return ""
+  var effects = effectModes(device)
+  for (var i = 0; i < effects.length; i++) if (effects[i].toLowerCase() === wanted) return effects[i]
+  return ""
+}
+
+// The effect `delta` steps away from the current one, solid colour first in
+// the ring, so stepping past the last effect comes back to a plain colour.
+function nextEffect(device, state, delta) {
+  var ring = [""].concat(effectModes(device))
+  var index = ring.indexOf(activeEffect(device, state))
+  var n = ring.length
+  return ring[((index + Math.round(num(delta) || 0)) % n + n) % n]
+}
+
+function effectLabel(effect) {
+  return effect ? String(effect) : "Solid"
+}
+
 // A typed colour as OpenRGB takes it, six upper-case hex digits: "#ff8000",
 // "ff8000" and the short "#f80" all read as "FF8000". "" for anything else.
 function normalizeColor(text) {
@@ -150,6 +195,14 @@ function clampBrightness(value) {
   var n = num(value)
   if (!isFinite(n)) return MAX_BRIGHTNESS
   return Math.max(MIN_BRIGHTNESS, Math.min(MAX_BRIGHTNESS, Math.round(n)))
+}
+
+// Whole percent of the effect's speed range; anything that is not a number is
+// the middle of it.
+function clampSpeed(value) {
+  var n = num(value)
+  if (!isFinite(n)) return DEFAULT_SPEED
+  return Math.max(0, Math.min(100, Math.round(n)))
 }
 
 // The colour as the LEDs are asked to show it: every channel scaled by the
@@ -182,19 +235,22 @@ function colorName(color) {
 }
 
 // What is remembered for a device, filled in: whether it is on, its colour at
-// full brightness and the brightness. `known` is false for a device the widget
-// has never set, whose real state OpenRGB cannot report back.
+// full brightness, the brightness, the effect it runs ("" for a solid colour)
+// and that effect's speed. `known` is false for a device the widget has never
+// set, whose real state OpenRGB cannot report back.
 function lightState(lights, key) {
   var has = !!lights && typeof lights === "object" && Object.prototype.hasOwnProperty.call(lights, key)
   var entry = has ? lights[key] : null
   if (!entry || typeof entry !== "object") {
-    return { known: false, on: true, color: DEFAULT_COLOR, brightness: MAX_BRIGHTNESS }
+    return { known: false, on: true, color: DEFAULT_COLOR, brightness: MAX_BRIGHTNESS, effect: "", speed: DEFAULT_SPEED }
   }
   return {
     known: true,
     on: entry.on !== false && entry.on !== "false",
     color: normalizeColor(entry.color) || DEFAULT_COLOR,
-    brightness: clampBrightness(entry.brightness)
+    brightness: clampBrightness(entry.brightness),
+    effect: typeof entry.effect === "string" ? entry.effect.trim() : "",
+    speed: clampSpeed(entry.speed)
   }
 }
 
@@ -210,14 +266,18 @@ function setLight(lights, key, patch) {
   out[key] = {
     on: change.on !== undefined ? change.on === true : current.on,
     color: change.color !== undefined ? (normalizeColor(change.color) || current.color) : current.color,
-    brightness: change.brightness !== undefined ? clampBrightness(change.brightness) : current.brightness
+    brightness: change.brightness !== undefined ? clampBrightness(change.brightness) : current.brightness,
+    effect: change.effect !== undefined ? String(change.effect || "").trim() : current.effect,
+    speed: change.speed !== undefined ? clampSpeed(change.speed) : current.speed
   }
   return out
 }
 
-// The rgb.sh arguments that put a device in a state: its solid mode with the
-// colour scaled to the brightness, or switched off, through its own Off mode
-// when it has one and black otherwise. Empty for a device with no solid mode.
+// The rgb.sh arguments that put a device in a state: its effect with the
+// colour and the speed, or its solid mode with the colour, the colour scaled to
+// the brightness either way; or switched off, through its own Off mode when it
+// has one and black otherwise. An effect that takes no colour leaves it unused.
+// Empty for a device with no solid mode.
 function applyArgs(device, state) {
   var solid = solidMode(device)
   if (solid === "") return []
@@ -227,7 +287,10 @@ function applyArgs(device, state) {
     var off = offMode(device)
     return off !== "" ? ["set", index, off] : ["set", index, solid, "000000"]
   }
-  return ["set", index, solid, scaleColor(s.color, s.brightness)]
+  var color = scaleColor(s.color, s.brightness)
+  var effect = activeEffect(device, s)
+  if (effect !== "") return ["set", index, effect, color, String(clampSpeed(s.speed))]
+  return ["set", index, solid, color]
 }
 
 // rgb.sh set prints "error<TAB>message" when it fails and nothing otherwise.
@@ -319,13 +382,15 @@ function stateDetail(snapshot, filter) {
   }
 }
 
-// The line under a device's name: "Red · 80%", "Off", or why it cannot be set.
+// The line under a device's name: "Red · 80%", "Breathing · Red · 80%", "Off",
+// or why it cannot be set.
 function deviceDetail(device, state) {
   if (!isControllable(device)) return "No single-colour mode in OpenRGB"
   var s = state || lightState(null, "")
   if (!s.known) return "Not set from here yet"
   if (!s.on) return "Off"
-  return colorName(s.color) + " · " + s.brightness + "%"
+  var effect = activeEffect(device, s)
+  return (effect !== "" ? effect + " · " : "") + colorName(s.color) + " · " + s.brightness + "%"
 }
 
 function heroStatus(snapshot, devices, lights) {
@@ -351,7 +416,10 @@ function tooltip(snapshot, devices, lights) {
     if (!isControllable(device)) detail = "not settable"
     else if (!s.known) detail = "not set"
     else if (!s.on) detail = "off"
-    else detail = colorName(s.color).toLowerCase() + " " + s.brightness + "%"
+    else {
+      var effect = activeEffect(device, s)
+      detail = (effect !== "" ? effect.toLowerCase() + " " : "") + colorName(s.color).toLowerCase() + " " + s.brightness + "%"
+    }
     parts.push(device.name + " " + detail)
   }
   return "RGB · " + parts.join(" · ")

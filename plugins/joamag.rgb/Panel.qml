@@ -190,6 +190,15 @@ Panel {
     change(devices[target], { on: true, color: Model.SWATCHES[index].color })
   }
 
+  // [ and ]: the previous or next effect, solid colour included in the ring.
+  function stepEffect(delta) {
+    var target = targetIndex()
+    if (target < 0) return
+    var device = devices[target]
+    if (Model.effectModes(device).length === 0) return
+    change(device, { on: true, effect: Model.nextEffect(device, Model.lightState(root.lights, device.key), delta) })
+  }
+
   function focusColor() {
     var target = targetIndex()
     var row = target >= 0 ? deviceRepeater.itemAt(target) : null
@@ -349,6 +358,8 @@ Panel {
         if (text === "r") root.refresh()
         else if (text === "a") root.setAll(!root.anyOn)
         else if (text === "c") root.focusColor()
+        else if (text === "[") root.stepEffect(-1)
+        else if (text === "]") root.stepEffect(1)
         else if (/^[1-9]$/.test(text)) root.pickSwatch(Number(text) - 1)
       }
 
@@ -543,8 +554,8 @@ Panel {
   }
 
   // One device: its type icon in the colour it is lit, name and state, and a
-  // switch; under a lit device, the colour swatches with a hex field and a
-  // brightness slider.
+  // switch; under a lit device, its effects, the colour swatches with a hex
+  // field, a brightness slider and, while an effect runs, its speed.
   component DeviceRow: CursorSurface {
     id: entry
     required property var device
@@ -552,6 +563,8 @@ Panel {
 
     readonly property var light: Model.lightState(root.lights, device.key)
     readonly property bool controllable: Model.isControllable(device)
+    readonly property var effects: Model.effectModes(device)
+    readonly property string effect: Model.activeEffect(device, light)
     readonly property bool lit: controllable && light.on
     readonly property bool busy: root.busyKey !== "" && root.busyKey === device.key
     readonly property color tone: !lit ? root.dimColor : (light.known ? "#" + light.color : root.onColor)
@@ -633,6 +646,38 @@ Panel {
         }
       }
 
+      // Effects: one pill per animation the device offers, solid colour first,
+      // the running one lit, three to a row since a hub can offer a dozen.
+      Grid {
+        id: effectGrid
+        visible: entry.lit && entry.effects.length > 0
+        x: Style.space(30)
+        width: parent.width - Style.space(30)
+        columns: 3
+        spacing: Style.spacing.xs
+
+        readonly property real cellWidth: (width - spacing * (columns - 1)) / columns
+
+        Repeater {
+          model: [""].concat(entry.effects)
+
+          Button {
+            required property string modelData
+            width: effectGrid.cellWidth
+            height: Style.spacing.controlHeight - Style.space(4)
+            text: Model.effectLabel(modelData)
+            fontSize: Style.font.caption
+            foreground: root.foreground
+            fontFamily: root.fontFamily
+            horizontalPadding: Style.spacing.sm
+            verticalPadding: Style.spacing.xs
+            bordered: true
+            active: entry.effect === modelData
+            onClicked: root.change(entry.device, { on: true, effect: modelData })
+          }
+        }
+      }
+
       // Colours: one dot per swatch, the current one ringed, then a field for
       // any other. Enter applies, Esc gives the keys back.
       Row {
@@ -678,21 +723,20 @@ Panel {
         }
       }
 
-      // Brightness under a lit device: drag to set, released is sent.
-      PanelSlider {
+      // Brightness under a lit device, and the speed while it runs an effect:
+      // drag to set, released is sent.
+      SliderRow {
         visible: entry.lit
-        bar: root.bar
-        width: parent.width - Style.space(30)
-        x: Style.space(30)
-        implicitHeight: Style.space(18)
-        minimum: Model.MIN_BRIGHTNESS
-        maximum: Model.MAX_BRIGHTNESS
-        step: Model.BRIGHTNESS_STEP
-        integer: true
+        device: entry.device
+        controlKey: "brightness"
         value: entry.light.brightness
-        fillColor: root.onColor
-        knobColor: root.onColor
-        onReleased: function(v) { root.change(entry.device, { brightness: v }) }
+      }
+
+      SliderRow {
+        visible: entry.lit && entry.effect !== ""
+        device: entry.device
+        controlKey: "speed"
+        value: entry.light.speed
       }
     }
 
@@ -709,6 +753,48 @@ Panel {
         root.cursorIndex = entry.rowIndex
       }
       onClicked: root.toggleDevice(entry.device)
+    }
+  }
+
+  // One slider under a lit device, what it sets named on its left: the
+  // brightness, or the speed of the effect it runs. Released is sent.
+  component SliderRow: Row {
+    id: sliderRow
+    required property var device
+    required property string controlKey
+    property real value: 0
+
+    readonly property bool speed: controlKey === "speed"
+
+    x: Style.space(30)
+    width: parent.width - Style.space(30)
+    spacing: Style.space(8)
+
+    Text {
+      id: sliderCaption
+      textFormat: Text.PlainText
+      text: sliderRow.speed ? "Speed" : "Light"
+      color: root.foreground
+      opacity: 0.55
+      font.family: root.fontFamily
+      font.pixelSize: Style.font.caption
+      width: Style.space(40)
+      anchors.verticalCenter: parent.verticalCenter
+    }
+
+    PanelSlider {
+      bar: root.bar
+      width: parent.width - sliderCaption.width - parent.spacing
+      implicitHeight: Style.space(18)
+      anchors.verticalCenter: parent.verticalCenter
+      minimum: sliderRow.speed ? 0 : Model.MIN_BRIGHTNESS
+      maximum: sliderRow.speed ? 100 : Model.MAX_BRIGHTNESS
+      step: sliderRow.speed ? Model.SPEED_STEP : Model.BRIGHTNESS_STEP
+      integer: true
+      value: sliderRow.value
+      fillColor: root.onColor
+      knobColor: root.onColor
+      onReleased: function(v) { root.change(sliderRow.device, sliderRow.speed ? { speed: v } : { brightness: v }) }
     }
   }
 

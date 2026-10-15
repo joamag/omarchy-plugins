@@ -7,14 +7,16 @@
 #     state   ok | missing | error
 #     error   message, only with state error
 #     device  index  name  type  modes    (one per device, modes as OpenRGB prints them)
-#   rgb.sh set INDEX MODE [COLOR]   switch device INDEX to MODE, painted COLOR
-#                                   (RRGGBB) when the mode takes one
+#   rgb.sh set INDEX MODE [COLOR [SPEED]]
+#                                   switch device INDEX to MODE, painted COLOR
+#                                   (RRGGBB) when the mode takes one, running at
+#                                   SPEED (0-100% of its range) when it has one
 #
 # OpenRGB talks to its SDK server when one is running (the openrgb service)
 # and detects every device itself otherwise, which takes a few seconds a call.
-# Either way it reports a mode it does not know or a colour it cannot parse on
-# its output and still exits 0, so its words are checked as well as its exit
-# status.
+# Either way it reports a mode it does not know, a colour it cannot parse or a
+# number of colours the mode does not take on its output and still exits 0, so
+# its words are checked as well as its exit status.
 #
 # The set action prints "error<TAB>message" when it fails and nothing on
 # success; the popup keeps what it asked for either way.
@@ -27,10 +29,11 @@ fail() {
 }
 
 # The first thing OpenRGB said went wrong: its "Error: ..." line without the
-# prefix, or the exit status when it failed without one.
+# prefix, its complaint about the number of colours a mode takes, or the exit
+# status when it failed without a word.
 error_of() {
   local output="$1" status="$2" message
-  message=$(printf '%s\n' "$output" | sed -n 's/^Error: *//p' | head -n 1)
+  message=$(printf '%s\n' "$output" | sed -n -e 's/^Error: *//p' -e '/^Wrong number of colors/p' | head -n 1)
   if [[ -z $message ]] && (( status == 124 )); then message="OpenRGB took too long to answer"; fi
   if [[ -z $message ]] && (( status != 0 )); then message="openrgb exited $status"; fi
   printf '%s' "$message"
@@ -81,12 +84,17 @@ case "${1:-}" in
     index=${2:-}
     mode=${3:-}
     color=${4:-}
+    speed=${5:-}
     [[ $index =~ ^[0-9]+$ ]] || fail "device index required"
     [[ -n $mode ]] || fail "mode required"
     args=(--device "$index" --mode "$mode")
     if [[ -n $color ]]; then
       [[ $color =~ ^[0-9A-Fa-f]{6}$ ]] || fail "colour must be six hex digits"
       args+=(--color "$color")
+    fi
+    if [[ -n $speed ]]; then
+      [[ $speed =~ ^[0-9]{1,3}$ ]] && (( 10#$speed <= 100 )) || fail "speed must be 0 to 100"
+      args+=(--speed "$((10#$speed))")
     fi
     command -v openrgb >/dev/null 2>&1 || fail "openrgb not found"
     out=$(timeout 30 openrgb "${args[@]}" 2>&1)
@@ -95,7 +103,7 @@ case "${1:-}" in
     [[ -z $message ]] || fail "$message"
     ;;
   *)
-    echo "Usage: rgb.sh [set INDEX MODE [COLOR]]" >&2
+    echo "Usage: rgb.sh [set INDEX MODE [COLOR [SPEED]]]" >&2
     exit 1
     ;;
 esac

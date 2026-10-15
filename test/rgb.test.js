@@ -27,6 +27,15 @@ const LIGHTS = {
   "ASUS ROG STRIX RTX 2060": { on: false, color: "0000FF", brightness: 50 },
 }
 
+// A graphics card and a board the way OpenRGB lists them: a card whose only
+// solid mode is Direct, with two effects, and a board with nothing but Direct.
+const [pny, board] = Model.parseSnapshot([
+  "state\tok",
+  "device\t0\tPNY GeForce RTX 2060 XLR8 OC EDITION\tGPU\t[Off] Direct Cycle Strobe",
+  "device\t2\tMSI B450I GAMING PLUS AC (MS-7A40)\tMotherboard\t[Direct]",
+  "",
+].join("\n")).devices
+
 describe("num", () => {
   it("parses numbers and numeric strings", () => {
     assert.equal(Model.num(42), 42)
@@ -167,6 +176,77 @@ describe("isControllable", () => {
   })
 })
 
+describe("effectModes", () => {
+  it("lists every mode but the solid one, Off and Direct, in the device's order", () => {
+    assert.deepEqual(Model.effectModes(nzxt), ["Fading", "Spectrum", "Cover Marquee", "Super Rainbow"])
+    assert.deepEqual(Model.effectModes(gpu), ["Breathing", "Spectrum Cycle", "Chase Fade"])
+    assert.deepEqual(Model.effectModes(ram), ["Color Shift"])
+  })
+
+  it("does not take a second single-colour mode for an animation", () => {
+    assert.deepEqual(Model.effectModes({ modes: ["Static", "Fixed", "Breathing", "OFF"] }), ["Breathing"])
+  })
+
+  it("keeps the effects of a device whose solid mode is Direct", () => {
+    assert.deepEqual(Model.effectModes(pny), ["Cycle", "Strobe"])
+    assert.deepEqual(Model.effectModes(board), [])
+  })
+
+  it("offers nothing on a device that cannot be set", () => {
+    assert.deepEqual(Model.effectModes(fanHub), [])
+    assert.deepEqual(Model.effectModes(null), [])
+  })
+
+  it("reads the modes of a device handed over by a Repeater", () => {
+    assert.deepEqual(Model.effectModes({ modes: { length: 3, 0: "Off", 1: "Direct", 2: "Cycle" } }), ["Cycle"])
+  })
+})
+
+describe("activeEffect", () => {
+  it("answers in the device's own spelling", () => {
+    assert.equal(Model.activeEffect(gpu, { effect: "chase fade" }), "Chase Fade")
+    assert.equal(Model.activeEffect(pny, { effect: "Strobe" }), "Strobe")
+  })
+
+  it("is the solid colour for no effect, one the device lacks, or a mode that is no effect", () => {
+    assert.equal(Model.activeEffect(gpu, { effect: "" }), "")
+    assert.equal(Model.activeEffect(gpu, { effect: "Wings" }), "")
+    assert.equal(Model.activeEffect(gpu, { effect: "Static" }), "")
+    assert.equal(Model.activeEffect(gpu, { effect: "off" }), "")
+    assert.equal(Model.activeEffect(fanHub, { effect: "Rainbow" }), "")
+    assert.equal(Model.activeEffect(gpu, null), "")
+  })
+})
+
+describe("nextEffect", () => {
+  it("steps through the effects with the solid colour first in the ring", () => {
+    assert.equal(Model.nextEffect(gpu, { effect: "" }, 1), "Breathing")
+    assert.equal(Model.nextEffect(gpu, { effect: "Breathing" }, 1), "Spectrum Cycle")
+    assert.equal(Model.nextEffect(gpu, { effect: "Chase Fade" }, 1), "")
+    assert.equal(Model.nextEffect(gpu, { effect: "" }, -1), "Chase Fade")
+    assert.equal(Model.nextEffect(gpu, { effect: "" }, 6), "Spectrum Cycle")
+  })
+
+  it("starts from the solid colour when the remembered effect is not offered", () => {
+    assert.equal(Model.nextEffect(gpu, { effect: "Wings" }, 1), "Breathing")
+  })
+
+  it("stays put for a step that is not a number, and on a device without effects", () => {
+    assert.equal(Model.nextEffect(gpu, { effect: "Breathing" }, "x"), "Breathing")
+    assert.equal(Model.nextEffect(gpu, { effect: "Breathing" }, Infinity), "Breathing")
+    assert.equal(Model.nextEffect(gpu, { effect: "Breathing" }, undefined), "Breathing")
+    assert.equal(Model.nextEffect(board, { effect: "" }, 1), "")
+  })
+})
+
+describe("effectLabel", () => {
+  it("names the solid colour", () => {
+    assert.equal(Model.effectLabel(""), "Solid")
+    assert.equal(Model.effectLabel(undefined), "Solid")
+    assert.equal(Model.effectLabel("Spectrum Cycle"), "Spectrum Cycle")
+  })
+})
+
 describe("normalizeColor", () => {
   it("reads hex with or without a hash, short or long, as six upper-case digits", () => {
     assert.equal(Model.normalizeColor("#ff8000"), "FF8000")
@@ -197,6 +277,22 @@ describe("clampBrightness", () => {
     assert.equal(Model.clampBrightness(""), 100)
     assert.equal(Model.clampBrightness("dim"), 100)
     assert.equal(Model.clampBrightness(true), 100)
+  })
+})
+
+describe("clampSpeed", () => {
+  it("rounds into the 0..100 range, zero included", () => {
+    assert.equal(Model.clampSpeed(0), 0)
+    assert.equal(Model.clampSpeed("0"), 0)
+    assert.equal(Model.clampSpeed(62.5), 63)
+    assert.equal(Model.clampSpeed(-1), 0)
+    assert.equal(Model.clampSpeed(180), 100)
+  })
+
+  it("reads anything that is not a number as the middle of the range", () => {
+    assert.equal(Model.clampSpeed(undefined), Model.DEFAULT_SPEED)
+    assert.equal(Model.clampSpeed("fast"), 50)
+    assert.equal(Model.clampSpeed(true), 50)
   })
 })
 
@@ -236,12 +332,13 @@ describe("colorName", () => {
 
 describe("lightState", () => {
   it("fills in what is remembered", () => {
-    assert.deepEqual(Model.lightState(LIGHTS, "NZXT Smart Device V2"), { known: true, on: true, color: "FF0000", brightness: 80 })
-    assert.deepEqual(Model.lightState(LIGHTS, "ASUS ROG STRIX RTX 2060"), { known: true, on: false, color: "0000FF", brightness: 50 })
+    assert.deepEqual(Model.lightState(LIGHTS, "NZXT Smart Device V2"), { known: true, on: true, color: "FF0000", brightness: 80, effect: "", speed: 50 })
+    assert.deepEqual(Model.lightState(LIGHTS, "ASUS ROG STRIX RTX 2060"), { known: true, on: false, color: "0000FF", brightness: 50, effect: "", speed: 50 })
+    assert.deepEqual(Model.lightState({ x: { effect: "Breathing", speed: 75 } }, "x"), { known: true, on: true, color: "FFFFFF", brightness: 100, effect: "Breathing", speed: 75 })
   })
 
   it("is unknown, on and white at full brightness for a device never set", () => {
-    const unknown = { known: false, on: true, color: "FFFFFF", brightness: 100 }
+    const unknown = { known: false, on: true, color: "FFFFFF", brightness: 100, effect: "", speed: 50 }
     assert.deepEqual(Model.lightState(LIGHTS, "Rainbow Fan Hub"), unknown)
     assert.deepEqual(Model.lightState(null, "x"), unknown)
     assert.deepEqual(Model.lightState({ x: "on" }, "x"), unknown)
@@ -254,16 +351,18 @@ describe("lightState", () => {
   })
 
   it("repairs a hand edit gone wrong field by field", () => {
-    assert.deepEqual(Model.lightState({ x: { on: "false", color: "#0f0", brightness: "300" } }, "x"), { known: true, on: false, color: "00FF00", brightness: 100 })
-    assert.deepEqual(Model.lightState({ x: {} }, "x"), { known: true, on: true, color: "FFFFFF", brightness: 100 })
+    assert.deepEqual(Model.lightState({ x: { on: "false", color: "#0f0", brightness: "300", effect: " Candle ", speed: "-3" } }, "x"), { known: true, on: false, color: "00FF00", brightness: 100, effect: "Candle", speed: 0 })
+    assert.deepEqual(Model.lightState({ x: {} }, "x"), { known: true, on: true, color: "FFFFFF", brightness: 100, effect: "", speed: 50 })
     assert.equal(Model.lightState({ x: { color: "red" } }, "x").color, "FFFFFF")
+    assert.equal(Model.lightState({ x: { effect: 7 } }, "x").effect, "")
+    assert.equal(Model.lightState({ x: { speed: "fast" } }, "x").speed, 50)
   })
 })
 
 describe("setLight", () => {
   it("changes one device and carries the others over", () => {
     const next = Model.setLight(LIGHTS, "NZXT Smart Device V2", { color: "#00ff00" })
-    assert.deepEqual(next["NZXT Smart Device V2"], { on: true, color: "00FF00", brightness: 80 })
+    assert.deepEqual(next["NZXT Smart Device V2"], { on: true, color: "00FF00", brightness: 80, effect: "", speed: 50 })
     assert.deepEqual(next["ASUS ROG STRIX RTX 2060"], LIGHTS["ASUS ROG STRIX RTX 2060"])
   })
 
@@ -274,13 +373,23 @@ describe("setLight", () => {
   })
 
   it("starts a new device from the defaults", () => {
-    assert.deepEqual(Model.setLight({}, "new", { brightness: 30 }).new, { on: true, color: "FFFFFF", brightness: 30 })
-    assert.deepEqual(Model.setLight(null, "new").new, { on: true, color: "FFFFFF", brightness: 100 })
+    assert.deepEqual(Model.setLight({}, "new", { brightness: 30 }).new, { on: true, color: "FFFFFF", brightness: 30, effect: "", speed: 50 })
+    assert.deepEqual(Model.setLight(null, "new").new, { on: true, color: "FFFFFF", brightness: 100, effect: "", speed: 50 })
   })
 
   it("keeps the current colour when the new one is not a colour, and clamps the brightness", () => {
     const next = Model.setLight(LIGHTS, "NZXT Smart Device V2", { color: "nope", brightness: 0 })
-    assert.deepEqual(next["NZXT Smart Device V2"], { on: true, color: "FF0000", brightness: 5 })
+    assert.deepEqual(next["NZXT Smart Device V2"], { on: true, color: "FF0000", brightness: 5, effect: "", speed: 50 })
+  })
+
+  it("sets an effect and its speed, and a blank effect goes back to the solid colour", () => {
+    const running = Model.setLight({}, "x", { effect: " Breathing ", speed: 120 })
+    assert.deepEqual(running.x, { on: true, color: "FFFFFF", brightness: 100, effect: "Breathing", speed: 100 })
+    const solid = Model.setLight(running, "x", { effect: "" })
+    assert.equal(solid.x.effect, "")
+    assert.equal(solid.x.speed, 100)
+    assert.equal(Model.setLight(running, "x", { effect: null }).x.effect, "")
+    assert.equal(Model.setLight(running, "x", { color: "FF0000" }).x.effect, "Breathing")
   })
 
   it("switches off for anything but a true on", () => {
@@ -309,6 +418,22 @@ describe("applyArgs", () => {
 
   it("defaults to white at full brightness without a state", () => {
     assert.deepEqual(Model.applyArgs(ram, null), ["set", "2", "Static", "FFFFFF"])
+  })
+
+  it("runs an effect with the colour scaled and its speed", () => {
+    const state = Model.lightState({ x: { color: "FF0000", brightness: 50, effect: "breathing", speed: 75 } }, "x")
+    assert.deepEqual(Model.applyArgs(gpu, state), ["set", "1", "Breathing", "800000", "75"])
+    assert.deepEqual(Model.applyArgs(pny, Model.lightState({ x: { effect: "Cycle", speed: 0 } }, "x")), ["set", "0", "Cycle", "FFFFFF", "0"])
+  })
+
+  it("clamps a speed handed over unchecked, and falls back to the solid colour for an effect not offered", () => {
+    assert.deepEqual(Model.applyArgs(gpu, { on: true, color: "FFFFFF", brightness: 100, effect: "Breathing", speed: 500 }), ["set", "1", "Breathing", "FFFFFF", "100"])
+    assert.deepEqual(Model.applyArgs(gpu, { on: true, color: "FFFFFF", brightness: 100, effect: "Breathing" }), ["set", "1", "Breathing", "FFFFFF", "50"])
+    assert.deepEqual(Model.applyArgs(gpu, { on: true, color: "FFFFFF", brightness: 100, effect: "Wings", speed: 20 }), ["set", "1", "Static", "FFFFFF"])
+  })
+
+  it("switches off the same way while an effect is remembered", () => {
+    assert.deepEqual(Model.applyArgs(gpu, { on: false, color: "FFFFFF", brightness: 100, effect: "Breathing", speed: 20 }), ["set", "1", "Off"])
   })
 
   it("has nothing to send to a device it cannot set", () => {
@@ -436,6 +561,11 @@ describe("deviceDetail", () => {
     assert.equal(Model.deviceDetail(nzxt, { known: true, on: true, color: "123456", brightness: 40 }), "#123456 · 40%")
   })
 
+  it("puts the running effect in front, unless the device does not offer it", () => {
+    assert.equal(Model.deviceDetail(nzxt, { known: true, on: true, color: "FF0000", brightness: 80, effect: "cover marquee" }), "Cover Marquee · Red · 80%")
+    assert.equal(Model.deviceDetail(nzxt, { known: true, on: true, color: "FF0000", brightness: 80, effect: "Wings" }), "Red · 80%")
+  })
+
   it("says off, never set, or why it cannot be set", () => {
     assert.equal(Model.deviceDetail(gpu, Model.lightState(LIGHTS, gpu.key)), "Off")
     assert.equal(Model.deviceDetail(ram, Model.lightState(LIGHTS, ram.key)), "Not set from here yet")
@@ -466,6 +596,10 @@ describe("tooltip", () => {
       Model.tooltip(ok, [nzxt, gpu, ram, fanHub], LIGHTS),
       "RGB · NZXT Smart Device V2 red 80% · ASUS ROG STRIX RTX 2060 off · Corsair Vengeance RGB not set · Rainbow Fan Hub not settable",
     )
+  })
+
+  it("names the effect a lit device runs", () => {
+    assert.equal(Model.tooltip(ok, [nzxt], { "NZXT Smart Device V2": { color: "0000FF", brightness: 60, effect: "Fading" } }), "RGB · NZXT Smart Device V2 fading blue 60%")
   })
 })
 
@@ -551,12 +685,26 @@ exit "\${FAKE_OPENRGB_STATUS:-0}"`)
     assert.deepEqual(f.log(), ["--device 1 --mode Static --color ff8000"])
   })
 
+  it("passes an effect's speed, leading zeros dropped, with or without a colour", (t) => {
+    const f = fakes(t)
+    const env = { ...f.env, FAKE_OPENRGB_OUTPUT: "" }
+    assert.equal(runScript("joamag.rgb", "rgb.sh", ["set", "1", "Breathing", "FF0000", "75"], { bin: f.dir, env }).stdout, "")
+    assert.equal(runScript("joamag.rgb", "rgb.sh", ["set", "1", "Breathing", "FF0000", "008"], { bin: f.dir, env }).stdout, "")
+    assert.equal(runScript("joamag.rgb", "rgb.sh", ["set", "1", "Spectrum Cycle", "", "100"], { bin: f.dir, env }).stdout, "")
+    assert.deepEqual(f.log(), [
+      "--device 1 --mode Breathing --color FF0000 --speed 75",
+      "--device 1 --mode Breathing --color FF0000 --speed 8",
+      "--device 1 --mode Spectrum Cycle --speed 100",
+    ])
+  })
+
   it("takes the arguments the model builds, the Off mode with no colour", (t) => {
     const f = fakes(t)
-    for (const args of [Model.applyArgs(nzxt, Model.lightState(LIGHTS, nzxt.key)), Model.applyArgs(gpu, Model.lightState(LIGHTS, gpu.key))]) {
+    const breathing = Model.lightState({ x: { color: "00FF00", effect: "Breathing", speed: 25 } }, "x")
+    for (const args of [Model.applyArgs(nzxt, Model.lightState(LIGHTS, nzxt.key)), Model.applyArgs(gpu, Model.lightState(LIGHTS, gpu.key)), Model.applyArgs(gpu, breathing)]) {
       assert.equal(runScript("joamag.rgb", "rgb.sh", args, { bin: f.dir, env: { ...f.env, FAKE_OPENRGB_OUTPUT: "" } }).stdout, "")
     }
-    assert.deepEqual(f.log(), ["--device 0 --mode Fixed --color CC0000", "--device 1 --mode Off"])
+    assert.deepEqual(f.log(), ["--device 0 --mode Fixed --color CC0000", "--device 1 --mode Off", "--device 1 --mode Breathing --color 00FF00 --speed 25"])
   })
 
   it("passes a mode with a space in it as one argument", (t) => {
@@ -577,6 +725,12 @@ exit "\${FAKE_OPENRGB_STATUS:-0}"`)
       [["set", "1", ""], "mode required"],
       [["set", "1", "Static", "#ff8000"], "colour must be six hex digits"],
       [["set", "1", "Static", "red"], "colour must be six hex digits"],
+      [["set", "1", "Breathing", "FF0000", "101"], "speed must be 0 to 100"],
+      [["set", "1", "Breathing", "FF0000", "0100"], "speed must be 0 to 100"],
+      [["set", "1", "Breathing", "FF0000", "-1"], "speed must be 0 to 100"],
+      [["set", "1", "Breathing", "FF0000", "1.5"], "speed must be 0 to 100"],
+      [["set", "1", "Breathing", "FF0000", "fast"], "speed must be 0 to 100"],
+      [["set", "1", "Breathing", "FF0000", "18446744073709551716"], "speed must be 0 to 100"],
     ]
     for (const [args, message] of cases) {
       const result = runScript("joamag.rgb", "rgb.sh", args, { bin: f.dir, env: f.env })
@@ -597,6 +751,14 @@ exit "\${FAKE_OPENRGB_STATUS:-0}"`)
     const result = runScript("joamag.rgb", "rgb.sh", ["set", "0", "Static", "FFFFFF"], { bin: f.dir, env: { ...f.env, FAKE_OPENRGB_OUTPUT: "Error: Mode 'Static' not available for device 'NZXT Smart Device V2'" } })
     assert.equal(result.status, 0)
     assert.equal(Model.actionError(result.stdout), "Mode 'Static' not available for device 'NZXT Smart Device V2'")
+  })
+
+  it("reports a number of colours the effect does not take, which OpenRGB exits 0 on", (t) => {
+    const f = fakes(t)
+    const output = "Connected to server\nWrong number of colors specified for mode Alternating\nPlease provide between 2 and 2 colors"
+    const result = runScript("joamag.rgb", "rgb.sh", ["set", "0", "Alternating", "FF0000", "50"], { bin: f.dir, env: { ...f.env, FAKE_OPENRGB_OUTPUT: output } })
+    assert.equal(result.status, 0)
+    assert.equal(Model.actionError(result.stdout), "Wrong number of colors specified for mode Alternating")
   })
 
   it("reports a set that failed without words by its exit status", (t) => {
