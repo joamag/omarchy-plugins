@@ -142,26 +142,38 @@ describe("parseStayAwake", () => {
   const OFF = '{"enabled":true,"stayAwake":false,"idle":false,"inIdleCycle":false,"screensaver":150,"lock":300}'
 
   it("reads Stay Awake out of the idle service's answer", () => {
-    assert.deepEqual(Model.parseStayAwake(`${ON}\n`), { known: true, stayAwake: true })
-    assert.deepEqual(Model.parseStayAwake(`\n  ${OFF}  \n`), { known: true, stayAwake: false })
+    assert.deepEqual(Model.parseStayAwake(`${ON}\n`), { known: true, stayAwake: true, screensaverCycle: false })
+    assert.deepEqual(Model.parseStayAwake(`\n  ${OFF}  \n`), { known: true, stayAwake: false, screensaverCycle: false })
   })
 
   it("takes it for off when the answer does not say it is on", () => {
-    assert.deepEqual(Model.parseStayAwake('{"idle":false}'), { known: true, stayAwake: false })
-    assert.deepEqual(Model.parseStayAwake('{"stayAwake":"true"}'), { known: true, stayAwake: false })
-    assert.deepEqual(Model.parseStayAwake('{"stayAwake":1}'), { known: true, stayAwake: false })
+    assert.deepEqual(Model.parseStayAwake('{"idle":false}'), { known: true, stayAwake: false, screensaverCycle: false })
+    assert.deepEqual(Model.parseStayAwake('{"stayAwake":"true"}'), { known: true, stayAwake: false, screensaverCycle: false })
+    assert.deepEqual(Model.parseStayAwake('{"stayAwake":1}'), { known: true, stayAwake: false, screensaverCycle: false })
+  })
+
+  it("reads an idle cycle that has started the screensaver", () => {
+    const CYCLE = '{"enabled":true,"stayAwake":false,"idle":true,"inIdleCycle":true,"screensaverStarted":true,"screensaverWindows":1}'
+    assert.deepEqual(Model.parseStayAwake(CYCLE), { known: true, stayAwake: false, screensaverCycle: true })
+  })
+
+  it("does not take a cycle that has not reached the screensaver, or a screensaver outside one, for it", () => {
+    assert.equal(Model.parseStayAwake('{"inIdleCycle":true,"screensaverStarted":false}').screensaverCycle, false)
+    assert.equal(Model.parseStayAwake('{"inIdleCycle":false,"screensaverStarted":true}').screensaverCycle, false)
+    assert.equal(Model.parseStayAwake('{"inIdleCycle":"true","screensaverStarted":1}').screensaverCycle, false)
   })
 
   it("knows nothing when the answer is missing or unreadable", () => {
-    assert.deepEqual(Model.parseStayAwake(""), { known: false, stayAwake: false })
+    assert.deepEqual(Model.parseStayAwake(""), { known: false, stayAwake: false, screensaverCycle: false })
     assert.equal(Model.parseStayAwake("Target not found").known, false)
     assert.equal(Model.parseStayAwake("null\n[true]\ntrue").known, false)
     assert.equal(Model.parseStayAwake(undefined).known, false)
   })
 
   it("ignores a torn line but keeps the whole one beside it", () => {
-    assert.deepEqual(Model.parseStayAwake(`{"stayAwake":tr\n${ON}`), { known: true, stayAwake: true })
-    assert.deepEqual(Model.parseStayAwake('{"stayAwake":tr'), { known: false, stayAwake: false })
+    assert.deepEqual(Model.parseStayAwake(`{"stayAwake":tr\n${ON}`), { known: true, stayAwake: true, screensaverCycle: false })
+    assert.deepEqual(Model.parseStayAwake('{"stayAwake":tr'), { known: false, stayAwake: false, screensaverCycle: false })
+    assert.equal(Model.parseStayAwake('{"inIdleCycle":true,"screensaverStarted":tr').screensaverCycle, false)
   })
 })
 
@@ -207,6 +219,26 @@ describe("nextAction", () => {
   })
 })
 
+describe("scriptAction", () => {
+  it("turns the displays off after the timeout, or on request whatever the last blank was", () => {
+    assert.equal(Model.scriptAction(true, false, ""), "off")
+    assert.equal(Model.scriptAction(true, true, ""), "now")
+    assert.equal(Model.scriptAction(true, true, "displays"), "now")
+  })
+
+  it("brings the keyboard backlight back with the displays unless the blank left it alone", () => {
+    assert.equal(Model.scriptAction(false, false, "idle"), "on")
+    assert.equal(Model.scriptAction(false, false, "forced"), "on")
+    assert.equal(Model.scriptAction(false, false, "displays"), "displays-on")
+    assert.equal(Model.scriptAction(false, true, "displays"), "displays-on")
+  })
+
+  it("takes a state it was never told about for a timed blank and a full wake", () => {
+    assert.equal(Model.scriptAction(undefined, undefined, undefined), "on")
+    assert.equal(Model.scriptAction(true, undefined, undefined), "off")
+  })
+})
+
 describe("runsDry", () => {
   it("goes by the setting when the displays are turned off", () => {
     assert.equal(Model.runsDry("off", false, false), false)
@@ -220,6 +252,13 @@ describe("runsDry", () => {
     assert.equal(Model.runsDry("on", false, false), false)
     assert.equal(Model.runsDry("on", false, true), true)
     assert.equal(Model.runsDry("on", true, true), true)
+  })
+
+  it("goes by the setting for a blank on request, and by the blank for a wake of the displays alone", () => {
+    assert.equal(Model.runsDry("now", true, false), true)
+    assert.equal(Model.runsDry("now", false, true), false)
+    assert.equal(Model.runsDry("displays-on", true, false), false)
+    assert.equal(Model.runsDry("displays-on", false, true), true)
   })
 
   it("takes a setting or a blank it was never told about for a real one", () => {
@@ -274,6 +313,39 @@ describe("displaysOff", () => {
   })
 })
 
+describe("blankReason", () => {
+  it("takes the reason of the blank the script reported", () => {
+    assert.equal(Model.blankReason("off", "idle", ""), "idle")
+    assert.equal(Model.blankReason("off", "forced", "idle"), "forced")
+    assert.equal(Model.blankReason("off", "displays", ""), "displays")
+  })
+
+  it("forgets it once the displays are back, however they came back", () => {
+    assert.equal(Model.blankReason("on", "activity", "forced"), "")
+    assert.equal(Model.blankReason("on", "displays", "displays"), "")
+  })
+
+  it("leaves it as it was after a skip or an error, so a failed wake is tried again the same way", () => {
+    assert.equal(Model.blankReason("skip", "allow-idle", "idle"), "idle")
+    assert.equal(Model.blankReason("error", "omarchy-brightness-display on exited 1", "displays"), "displays")
+    assert.equal(Model.blankReason("error", "boom", undefined), "")
+    assert.equal(Model.blankReason("off", undefined, "idle"), "")
+  })
+})
+
+describe("blankByHand", () => {
+  it("is true for a blank asked for, with or without the keyboard backlight", () => {
+    assert.equal(Model.blankByHand("forced"), true)
+    assert.equal(Model.blankByHand("displays"), true)
+  })
+
+  it("is false for the timed blank and for no blank at all", () => {
+    assert.equal(Model.blankByHand("idle"), false)
+    assert.equal(Model.blankByHand(""), false)
+    assert.equal(Model.blankByHand(undefined), false)
+  })
+})
+
 describe("describeTimeout", () => {
   it("prefers hours, then minutes, then seconds", () => {
     assert.equal(Model.describeTimeout(3600), "1 h")
@@ -295,7 +367,7 @@ describe("describeTimeout", () => {
 // stand-ins alone so the real one cannot answer in its place and blank the
 // displays of whoever is running the tests.
 describe("screenoff.sh", () => {
-  const COMMANDS = ["omarchy-brightness-keyboard", "omarchy-brightness-display", "omarchy-system-wake"]
+  const COMMANDS = ["omarchy-brightness-keyboard", "omarchy-brightness-display", "omarchy-system-wake", "omarchy-hyprland-monitor-clamshell"]
 
   function setup(t, { stayAwake = true, ...bodies } = {}) {
     const dir = tmpdir(t)
@@ -331,23 +403,29 @@ describe("screenoff.sh", () => {
     assert.deepEqual(calls(), [])
   })
 
-  it("turns the displays off on request, whatever Stay Awake says", (t) => {
-    for (const stayAwake of [true, false]) {
-      const { run, calls } = setup(t, { stayAwake })
-      const result = run(["now"])
-      assert.equal(result.status, 0)
-      assert.equal(result.stdout, "off\tforced\n")
-      assert.deepEqual(calls(), ["omarchy-brightness-display off", "omarchy-brightness-keyboard off"])
-    }
+  it("turns the displays and the keyboard backlight off on request while Stay Awake is on", (t) => {
+    const { run, calls } = setup(t)
+    const result = run(["now"])
+    assert.equal(result.status, 0)
+    assert.equal(result.stdout, "off\tforced\n")
+    assert.deepEqual(calls(), ["omarchy-brightness-display off", "omarchy-brightness-keyboard off"])
   })
 
-  it("turns them off on request on a machine with no state directory", (t) => {
+  it("turns the displays alone off on request while Stay Awake is off, the keyboard backlight left to the lock", (t) => {
+    const { run, calls } = setup(t, { stayAwake: false })
+    const result = run(["now"])
+    assert.equal(result.status, 0)
+    assert.equal(result.stdout, "off\tdisplays\n")
+    assert.deepEqual(calls(), ["omarchy-brightness-display off"])
+  })
+
+  it("turns the displays alone off on request on a machine with no state directory", (t) => {
     const dir = tmpdir(t)
     const bin = path.join(dir, "bin")
     fs.mkdirSync(bin)
     for (const name of COMMANDS) fakeCommand(bin, name, "exit 0")
     const result = runScript("joamag.screenoff", "screenoff.sh", ["now"], { bin, env: { OMARCHY_STATE_DIR: path.join(dir, "missing") } })
-    assert.equal(result.stdout, "off\tforced\n")
+    assert.equal(result.stdout, "off\tdisplays\n")
   })
 
   it("takes a machine with no state directory for one that is not held awake", (t) => {
@@ -380,23 +458,28 @@ describe("screenoff.sh", () => {
     assert.equal(run(["off", "--dry-run"]).stdout, "off\tidle\n")
     assert.equal(run(["now", "--dry-run"]).stdout, "off\tforced\n")
     assert.equal(run(["on", "--dry-run"]).stdout, "on\tactivity\n")
+    assert.equal(run(["displays-on", "--dry-run"]).stdout, "on\tdisplays\n")
     assert.deepEqual(calls(), [])
-    assert.equal(setup(t, { stayAwake: false }).run(["off", "--dry-run"]).stdout, "skip\tallow-idle\n")
-    assert.equal(setup(t, { stayAwake: false }).run(["now", "--dry-run"]).stdout, "off\tforced\n")
+    const idle = setup(t, { stayAwake: false })
+    assert.equal(idle.run(["off", "--dry-run"]).stdout, "skip\tallow-idle\n")
+    assert.equal(idle.run(["now", "--dry-run"]).stdout, "off\tdisplays\n")
+    assert.deepEqual(idle.calls(), [])
   })
 
   it("needs none of the commands to decide in dry-run mode", (t) => {
-    const { run } = setup(t, { "omarchy-brightness-keyboard": null, "omarchy-brightness-display": null, "omarchy-system-wake": null })
+    const { run } = setup(t, { "omarchy-brightness-keyboard": null, "omarchy-brightness-display": null, "omarchy-system-wake": null, "omarchy-hyprland-monitor-clamshell": null })
     assert.equal(run(["off", "--dry-run"]).stdout, "off\tidle\n")
     assert.equal(run(["now", "--dry-run"]).stdout, "off\tforced\n")
     assert.equal(run(["on", "--dry-run"]).stdout, "on\tactivity\n")
+    assert.equal(run(["displays-on", "--dry-run"]).stdout, "on\tdisplays\n")
   })
 
   it("keeps what the commands print out of its one verdict line", (t) => {
     const chatter = "echo 'brightness 0'; echo 'DPMS: ok' >&2; exit 0"
-    const { run } = setup(t, { "omarchy-brightness-keyboard": chatter, "omarchy-brightness-display": chatter, "omarchy-system-wake": chatter })
+    const { run } = setup(t, { "omarchy-brightness-keyboard": chatter, "omarchy-brightness-display": chatter, "omarchy-system-wake": chatter, "omarchy-hyprland-monitor-clamshell": chatter })
     assert.equal(run(["off"]).stdout, "off\tidle\n")
     assert.equal(run(["on"]).stdout, "on\tactivity\n")
+    assert.equal(run(["displays-on"]).stdout, "on\tdisplays\n")
   })
 
   it("turns the displays off even when the keyboard backlight will not dim", (t) => {
@@ -447,7 +530,7 @@ describe("screenoff.sh", () => {
     assert.equal(result.status, 1)
     assert.equal(result.stdout, "error\thyprctl: no socket\n")
     assert.deepEqual(failing.calls(), ["omarchy-brightness-display off"])
-    const dimless = setup(t, { stayAwake: false, "omarchy-brightness-keyboard": "exit 1" })
+    const dimless = setup(t, { "omarchy-brightness-keyboard": "exit 1" })
     assert.equal(dimless.run(["now"]).stdout, "off\tforced\n")
   })
 
@@ -470,9 +553,38 @@ describe("screenoff.sh", () => {
     assert.equal(missing.stdout, "error\tomarchy-system-wake not found\n")
   })
 
+  it("wakes the displays alone, with the clamshell check omarchy-system-wake runs, and never the keyboard backlight", (t) => {
+    for (const stayAwake of [true, false]) {
+      const { run, calls } = setup(t, { stayAwake })
+      const result = run(["displays-on"])
+      assert.equal(result.status, 0)
+      assert.equal(result.stdout, "on\tdisplays\n")
+      assert.deepEqual(calls(), ["omarchy-brightness-display on", "omarchy-hyprland-monitor-clamshell"])
+    }
+  })
+
+  it("wakes the displays alone even when the clamshell check fails or is missing", (t) => {
+    const failing = setup(t, { "omarchy-hyprland-monitor-clamshell": "echo 'no laptop' >&2; exit 1" })
+    assert.equal(failing.run(["displays-on"]).stdout, "on\tdisplays\n")
+    const missing = setup(t, { "omarchy-hyprland-monitor-clamshell": null })
+    assert.equal(missing.run(["displays-on"]).stdout, "on\tdisplays\n")
+    assert.deepEqual(missing.calls(), ["omarchy-brightness-display on"])
+  })
+
+  it("reports a wake of the displays alone that fails or cannot be found, before the clamshell check", (t) => {
+    const failing = setup(t, { "omarchy-brightness-display": "echo 'hyprctl: no socket' >&2; exit 1" })
+    const result = failing.run(["displays-on"])
+    assert.equal(result.status, 1)
+    assert.equal(result.stdout, "error\thyprctl: no socket\n")
+    assert.deepEqual(failing.calls(), ["omarchy-brightness-display on"])
+    const missing = setup(t, { "omarchy-brightness-display": null }).run(["displays-on"])
+    assert.equal(missing.status, 1)
+    assert.equal(missing.stdout, "error\tomarchy-brightness-display not found\n")
+  })
+
   it("rejects a bad invocation", (t) => {
     const { run, calls } = setup(t)
-    for (const args of [[], ["blank"], ["--dry-run"]]) {
+    for (const args of [[], ["blank"], ["--dry-run"], ["displays"]]) {
       const result = run(args)
       assert.equal(result.status, 1)
       assert.equal(result.stdout, "")

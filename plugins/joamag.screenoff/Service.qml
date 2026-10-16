@@ -56,6 +56,17 @@ Item {
   // user is back. The displays go once the hands have been off the machine for
   // a moment, and the first input after that brings them back for good.
   property bool forced: false
+  // Why the displays are off, as screenoff.sh last reported it: a blank asked
+  // for by hand keeps its input monitor listening until a wake has landed, so
+  // a wake that failed is tried again at the next input, and one that left the
+  // keyboard backlight alone (see `screenoff.sh now`) is undone the same way.
+  property string blankReason: ""
+  // Whether Omarchy's own idle cycle has got as far as its screensaver, read
+  // with Stay Awake from the idle service.
+  property bool screensaverCycle: false
+  // An input during a blank asked for by hand, waiting on the idle service's
+  // view of it before it counts as the user being back.
+  property bool returnPending: false
 
   property string lastVerdict: ""
   property string lastReason: ""
@@ -64,8 +75,29 @@ Item {
 
   function applyStayAwake(text) {
     var probe = Model.parseStayAwake(text)
-    if (!probe.known) return
-    root.stayAwake = probe.stayAwake
+    // Without an answer there is no idle cycle to wait on, and the last word on
+    // Stay Awake stands; an input waiting on it is settled either way.
+    root.screensaverCycle = probe.screensaverCycle
+    if (probe.known) root.stayAwake = probe.stayAwake
+    if (root.returnPending) settleReturn()
+  }
+
+  // Settles an input that came during a blank asked for by hand, once the idle
+  // service has had its say. Omarchy's screensaver moves the cursor when it
+  // starts, which reads as input, and the idle service keeps its cycle going
+  // through that and through anything else short of the screensaver being
+  // dismissed; while it does, the displays stay off with it. Anything else is
+  // the user back.
+  function settleReturn() {
+    root.returnPending = false
+    if (root.screensaverCycle && root.forced && root.blanked) {
+      logEvent("input from the idle cycle's screensaver, displays stay off")
+      // The compositor may have woken them for it, so the blank is made again.
+      root.displaysOff = false
+      apply()
+      return
+    }
+    evaluate()
   }
 
   function logEvent(message) {
@@ -110,8 +142,7 @@ Item {
   // are still going off is carried out as soon as that run has finished.
   function apply() {
     if (screenProcess.running || root.blanked === root.displaysOff) return
-    // A blank asked for by hand does not wait on Stay Awake.
-    var action = root.blanked ? (root.forced ? "now" : "off") : "on"
+    var action = Model.scriptAction(root.blanked, root.forced, root.blankReason)
     var dry = Model.runsDry(action, root.dryRun, root.blankWasDry)
     if (root.blanked) root.blankWasDry = dry
     var command = [root.scriptPath, action]
@@ -158,16 +189,34 @@ Item {
   // The timed monitor cannot tell when a user who never went idle for its
   // whole timeout comes back, so a screen off asked for by hand has one of its
   // own on a short window: idle once the hands are off the machine, which is
-  // when the displays go, and active again at the first input after that. An
+  // when the displays go, and active again at the first input after that. It
+  // keeps listening until a wake has landed, so a failed one is tried again. An
   // inhibitor does not hold it back, since the user asked for the blank.
   IdleMonitor {
     id: handsOffMonitor
-    enabled: root.forced
+    enabled: root.forced || Model.blankByHand(root.blankReason)
     timeout: Model.FORCED_SETTLE_SECONDS
     respectInhibitors: false
     onIsIdleChanged: {
       root.logEvent("hands-off monitor: " + (handsOffMonitor.isIdle ? "idle" : "active"))
+      // With Stay Awake off, Omarchy's idle cycle runs underneath, and the
+      // screensaver it starts makes input of its own; whether this was the
+      // user is asked of the idle service a moment later, once it has decided.
+      if (!handsOffMonitor.isIdle && root.blanked && !root.stayAwake) {
+        returnTimer.restart()
+        return
+      }
       root.evaluate()
+    }
+  }
+
+  Timer {
+    id: returnTimer
+    interval: 1000
+    repeat: false
+    onTriggered: {
+      root.returnPending = true
+      root.refreshStayAwake()
     }
   }
 
@@ -177,11 +226,12 @@ Item {
   }
 
   // Nothing tells a plugin that Stay Awake was switched, so it is asked for on
-  // a timer, for as long as there is a timeout to apply it to.
+  // a timer, for as long as there is a timeout or a blank asked for by hand to
+  // apply it to.
   Timer {
     id: stayAwakeTimer
     interval: 5000
-    running: root.armed
+    running: root.armed || root.forced
     repeat: true
     triggeredOnStart: true
     onTriggered: root.refreshStayAwake()
@@ -212,6 +262,7 @@ Item {
       root.lastVerdict = result.verdict
       root.lastReason = result.reason
       root.displaysOff = Model.displaysOff(result.verdict, root.displaysOff)
+      root.blankReason = Model.blankReason(result.verdict, result.reason, root.blankReason)
       root.logEvent(result.verdict + ": " + result.reason)
       // A step that did not happen is left alone until idle next changes;
       // trying it again straight away would run the script in a loop.
@@ -219,7 +270,7 @@ Item {
       if (result.verdict === "skip") root.refreshStayAwake()
       // A blank asked for by hand that could not be made is not asked for
       // again at every change of idle.
-      if (result.verdict === "error") root.forced = false
+      if (result.verdict === "error" && !root.blanked) root.forced = false
       root.apply()
     }
   }

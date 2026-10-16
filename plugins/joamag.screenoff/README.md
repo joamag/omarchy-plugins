@@ -21,15 +21,17 @@ A session that is locked by hand counts as active for as long as it stays locked
 
 ## Screen off now
 
-The displays can also be turned off by hand, Stay Awake or not, with `omarchy-shell joamag.screenoff now` or a "Screen off" row in Omarchy's System menu. Nothing is locked and nothing sleeps. The displays go once the input has stopped for a second, so the click or key press that asked for it does not wake them straight back, and the first key press or mouse movement after that brings them back on, the keyboard backlight with them.
+The displays can also be turned off by hand, Stay Awake or not, with `omarchy-shell joamag.screenoff now` or a "Screen off" row in Omarchy's System menu. Nothing is locked and nothing sleeps. The displays go once the input has stopped for a second, so the click or key press that asked for it does not wake them straight back, and the first key press or mouse movement after that brings them back on. With Stay Awake on, the keyboard backlight goes off and comes back with them, as it does for the timed blank.
+
+With Stay Awake off, Omarchy's own idle cycle keeps running underneath, and the displays stay off through it. Its screensaver moves the cursor when it starts, which reads as input, so input during the blank counts as a return only once the idle service has dropped its cycle too: input it lets the screensaver ride through does not bring the displays back either, and dismissing the screensaver does. Its lock still comes at its usual time and dims the keyboard backlight, saving the level to put back later, so in this case the keyboard backlight is left to it and the displays alone go off and come back.
 
 Plugins never write outside `shell.json`, so the menu row is added by hand to `~/.config/omarchy/extensions/omarchy-menu.jsonc`, inside its outer braces:
 
 ```jsonc
-"system.screenoff": {"icon":"󰶐","label":"Screen off","when":"omarchy-shell joamag.screenoff version","action":"omarchy-shell joamag.screenoff now"},
+"system.screenoff": {"icon":"󰶐","label":"Screen off","when":"omarchy-shell joamag.screenoff status | grep -q forced","action":"omarchy-shell joamag.screenoff now"},
 ```
 
-The `when` check hides the row while the plugin is not loaded. Rows from that file land at the end of the System menu, after Shutdown. With Stay Awake off, Omarchy's own screensaver and lock still come at their usual times while the displays are off.
+The `when` check hides the row until the running service can take it: only a service that answers `now` reports `forced` in its status. The service is kept loaded across plugin reloads, so after updating from an earlier version the row appears once the shell is restarted (`omarchy-restart-shell`). Rows from that file land at the end of the System menu, after Shutdown.
 
 ## Settings
 
