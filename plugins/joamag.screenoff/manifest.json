@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "joamag.screenoff",
   "name": "Screen Off",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "author": "João Magalhães",
   "license": "Apache-2.0",
   "description": "Turns the displays off after a period of idle while Stay Awake is on, so a machine held awake does not leave the same picture on its screens for hours. Any input turns them back on.",

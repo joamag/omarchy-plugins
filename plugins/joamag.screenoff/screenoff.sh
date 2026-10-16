@@ -5,13 +5,18 @@
 # machine in the same state: DPMS and the keyboard backlight off on the way
 # down, both restored on the way back.
 #
-#   screenoff.sh off [--dry-run]   turn the displays off, as long as Stay Awake is still on
-#   screenoff.sh on [--dry-run]    turn them back on
+#   screenoff.sh off [--dry-run]           turn the displays off, as long as Stay Awake is still on
+#   screenoff.sh now [--dry-run]           turn them off on request, Stay Awake or not
+#   screenoff.sh on [--dry-run]            turn them back on
+#   screenoff.sh displays-on [--dry-run]   turn the displays alone back on, after a blank that left the keyboard backlight alone
 #
 # Prints one "verdict<TAB>reason" line:
 #
 #   off    idle        the displays were turned off
+#   off    forced      the displays were turned off on request
+#   off    displays    the displays alone were turned off on request, Stay Awake being off
 #   on     activity    the displays were turned back on
+#   on     displays    the displays alone were turned back on
 #   skip   allow-idle  Stay Awake was switched off first, Omarchy's own idle service is back in charge
 #   error  message     an Omarchy command is missing or failed
 #
@@ -42,6 +47,17 @@ run() {
   fail "${message:-$* exited $status}"
 }
 
+# Turns the displays off, then the keyboard backlight unless told to leave it.
+blank() {
+  (( dry_run )) && return 0
+  run omarchy-brightness-display off
+  [[ ${1:-} == displays ]] && return 0
+  # Not every machine has a keyboard backlight, and one that will not dim is
+  # no reason to call the blank a failure. It goes after the displays, so a
+  # blank that fails has left no backlight to put back.
+  omarchy-brightness-keyboard off >/dev/null 2>&1 || true
+}
+
 case "$action" in
   off)
     # Decided at fire time, so a Stay Awake switched off during the idle
@@ -50,21 +66,38 @@ case "$action" in
       printf 'skip\tallow-idle\n'
       exit 0
     fi
-    if (( ! dry_run )); then
-      run omarchy-brightness-display off
-      # Not every machine has a keyboard backlight, and one that will not dim
-      # is no reason to call the blank a failure. It goes after the displays,
-      # so a blank that fails has left no backlight to put back.
-      omarchy-brightness-keyboard off >/dev/null 2>&1 || true
-    fi
+    blank
     printf 'off\tidle\n'
+    ;;
+  now)
+    # Asked for by hand, from the menu or the command line, so it is not the
+    # idle service's to decide whether the machine is held awake. Without Stay
+    # Awake that idle service runs underneath, and its lock dims the keyboard
+    # backlight itself, saving the level it finds to put back on the way out;
+    # one already dimmed here would be saved dark, so it is left to the lock.
+    if [[ -f "$state_dir/indicators/stay-awake" ]]; then
+      blank
+      printf 'off\tforced\n'
+    else
+      blank displays
+      printf 'off\tdisplays\n'
+    fi
     ;;
   on)
     (( dry_run )) || run omarchy-system-wake
     printf 'on\tactivity\n'
     ;;
+  displays-on)
+    # omarchy-system-wake without the keyboard backlight, which this blank
+    # never touched: a restore now would bring back whatever was saved last.
+    if (( ! dry_run )); then
+      run omarchy-brightness-display on
+      omarchy-hyprland-monitor-clamshell >/dev/null 2>&1 || true
+    fi
+    printf 'on\tdisplays\n'
+    ;;
   *)
-    echo "Usage: screenoff.sh off|on [--dry-run]" >&2
+    echo "Usage: screenoff.sh off|now|on|displays-on [--dry-run]" >&2
     exit 1
     ;;
 esac

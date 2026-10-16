@@ -8,6 +8,11 @@ var DEFAULT_TIMEOUT_SECONDS = 900
 
 var MAX_TIMEOUT_SECONDS = 86400
 
+// A screen off asked for by hand waits for this long without input before the
+// displays go, so the click or key press that asked for it, and the hand still
+// on the mouse after it, does not wake them straight back.
+var FORCED_SETTLE_SECONDS = 1
+
 // shell.json as an object, or null for anything that is not one. The file is
 // read straight from disk: the shell hands a third-party service the bar
 // section alone, and a service with no widget is listed in `plugins[]`.
@@ -62,11 +67,12 @@ function respectInhibitors(entry) {
 }
 
 // The idle service answers its status IPC with one line of JSON, and that is
-// where Stay Awake is read from. The line may be missing while the shell is
-// still starting, and a half-read answer is not worth acting on, so anything
+// where Stay Awake is read from, along with whether its own idle cycle has got
+// as far as starting the screensaver. The line may be missing while the shell
+// is still starting, and a half-read answer is not worth acting on, so anything
 // unparsable is simply not an answer.
 function parseStayAwake(text) {
-  var probe = { known: false, stayAwake: false }
+  var probe = { known: false, stayAwake: false, screensaverCycle: false }
   var lines = String(text || "").split("\n")
   for (var i = 0; i < lines.length; i++) {
     var line = lines[i].trim()
@@ -80,19 +86,29 @@ function parseStayAwake(text) {
     if (!data || typeof data !== "object" || Array.isArray(data)) continue
     probe.known = true
     if (data.stayAwake === true) probe.stayAwake = true
+    if (data.inIdleCycle === true && data.screensaverStarted === true) probe.screensaverCycle = true
   }
   return probe
 }
 
 // What to do with the displays now. They go off once the user has been idle
-// for the whole timeout while the service is watching, and come back as soon
-// as either stops being true: the user returned, Stay Awake was switched off
-// or the timeout was set to never.
-function nextAction(watching, idle, blanked) {
-  var away = !!watching && !!idle
+// for the whole timeout while the service is watching, or as soon as a screen
+// off asked for by hand finds the hands off the machine (`forced`), and come
+// back as soon as neither holds: the user returned, or, for the timed blank,
+// Stay Awake was switched off or the timeout was set to never.
+function nextAction(watching, idle, blanked, forced) {
+  var away = (!!watching && !!idle) || !!forced
   if (away && !blanked) return "off"
   if (!away && blanked) return "on"
   return ""
+}
+
+// The screenoff.sh action that takes the displays where they should be: off
+// after the timeout or on request, or back on, the keyboard backlight with
+// them unless the blank (`blankReason`) left it alone.
+function scriptAction(blanked, forced, blankReason) {
+  if (blanked) return forced ? "now" : "off"
+  return blankReason === "displays" ? "displays-on" : "on"
 }
 
 // Whether a run of screenoff.sh only pretends. That is the `dryRun` setting,
@@ -100,7 +116,7 @@ function nextAction(watching, idle, blanked) {
 // off, so ones that really went dark really come back even when `dryRun` was
 // switched on in between.
 function runsDry(action, dryRun, blankWasDry) {
-  return action === "on" ? !!blankWasDry : !!dryRun
+  return action === "on" || action === "displays-on" ? !!blankWasDry : !!dryRun
 }
 
 // screenoff.sh prints one "verdict<TAB>reason" line. Anything else is an
@@ -133,6 +149,21 @@ function displaysOff(verdict, wasOff) {
   if (verdict === "off") return true
   if (verdict === "on") return false
   return !!wasOff
+}
+
+// Why the displays are off once screenoff.sh has answered: the reason of the
+// blank it reported ("idle", "forced", or "displays" for one on request that
+// left the keyboard backlight alone), and "" once they are back on. Like
+// displaysOff, only its own word changes it.
+function blankReason(verdict, reason, was) {
+  if (verdict === "off") return String(reason || "")
+  if (verdict === "on") return ""
+  return String(was || "")
+}
+
+// Whether a blank was asked for by hand rather than made after the timeout.
+function blankByHand(reason) {
+  return reason === "forced" || reason === "displays"
 }
 
 // Human form of the timeout for the status output and logs: "15 min", "90 s".
