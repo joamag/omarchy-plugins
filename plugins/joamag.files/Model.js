@@ -1198,6 +1198,16 @@ function longestNames(entries, count) {
     .slice(0, count || 8)
 }
 
+// The scroll offset that brings START to END into a view VIEW wide,
+// moving from OFFSET only as far as that needs and never past LAST; when
+// both ends do not fit, the start shows.
+function revealOffset(offset, start, end, last, view) {
+  var x = Math.min(offset, last)
+  if (end - x > view) x = end - view
+  if (start < x) x = start
+  return Math.max(0, x)
+}
+
 // ---------- Copy, move and name conflicts ----------
 
 // The first free "name (copy).ext", "name (copy 2).ext" ... Folders and dot

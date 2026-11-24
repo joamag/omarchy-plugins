@@ -423,6 +423,10 @@ Panel {
       loadArchive(archiveAt.archive, undefined, false)
     } else {
       showListed()
+      // The preview moves to the new folder at once, rather than staying a
+      // moment on the entry the cursor had in the folder left behind.
+      previewTimer.stop()
+      previewEntry = cursorEntry
       freeTimer.restart()
     }
   }
@@ -3514,23 +3518,59 @@ Panel {
 
     readonly property var chain: Model.crumbs(root.location, root.home, root.drives)
     readonly property real columnWidth: Style.space(root.columnDrag || root.columnWidth)
-    // The column after the folder on screen keeps one width, folder or file,
-    // so the strip does not move as the cursor does.
-    readonly property real trailWidth: Math.max(columnWidth, Style.space(230), width - columnWidth * chain.length)
+    readonly property real trailWidth: trailFor(chain.length)
+    readonly property var trailEntry: trailOf()
     // The column under the cursor's folder or file, faded in as it opens.
     property real trailOpacity: 1
 
-    // As far right as the strip goes: the deepest columns in view. Worked
-    // out when asked, since a binding may not have caught up yet inside
-    // the strip's own change handler.
+    // The column after the folder on screen keeps one width, folder or file,
+    // so the strip does not move as the cursor does.
+    function trailFor(count) {
+      return Math.max(columnWidth, Style.space(230), width - columnWidth * count)
+    }
+
+    // What that column shows: the entry under the cursor, once it is one of
+    // this folder's. Right after a move the preview can still be on the
+    // folder left behind, and that never shows.
+    function trailOf() {
+      var entry = root.previewEntry
+      return entry !== null && Model.parentPath(entry.path) === root.location ? entry : null
+    }
+
+    // Where the folder on screen starts, how far right the strip goes, and
+    // where what is worth seeing ends: past the column after it only when
+    // that shows something. All worked out afresh, since inside a change
+    // handler a binding, or the row's own layout, may not have caught up.
+    function currentX() {
+      return columnWidth * (chain.length - 1)
+    }
+
     function lastX() {
-      return Math.max(0, columnsFlick.contentWidth - columnsFlick.width)
+      return Math.max(0, columnWidth * chain.length + trailFor(chain.length) - width)
+    }
+
+    function contentEnd() {
+      var trail = trailOf()
+      var shows = trail !== null && (trail.dir || !root.showPreview)
+      return currentX() + columnWidth + (shows ? trailFor(chain.length) : 0)
+    }
+
+    // Brings the folder on screen into view, and the column after it when
+    // it lists a folder, moving the strip only as far as that needs: moving
+    // onto a file never moves it.
+    function reveal() {
+      if (!shown) return
+      var trail = trailOf()
+      var start = currentX()
+      var end = start + columnWidth + (trail !== null && trail.dir ? trailFor(chain.length) : 0)
+      slideTo(Model.revealOffset(columnsFlick.contentX, start, end, lastX(), width))
     }
 
     // A column or two opening or closing slides the strip there quickly,
     // the next column fading in; a jump further off lands at once.
     function slideTo(x) {
       var target = Math.max(0, Math.min(lastX(), x))
+      if (target === columnsFlick.contentX && !slide.running) return
       slide.stop()
       // While a divider is dragged the strip follows it at once.
       if (root.columnDrag > 0 || Math.abs(target - columnsFlick.contentX) > columnWidth * 2) {
@@ -3545,7 +3585,7 @@ Panel {
 
     // One column back (-1) or forward (1), from the column edge nearest.
     function stepColumns(count) {
-      slideTo(Model.steppedScroll(columnsFlick.contentX, count, columnWidth, columnsFlick.contentWidth, columnsFlick.width))
+      slideTo(Model.steppedScroll(columnsFlick.contentX, count, columnWidth, contentEnd(), width))
     }
 
     ParallelAnimation {
@@ -3571,17 +3611,18 @@ Panel {
       }
     }
 
-    onChainChanged: syncColumns()
-    onShownChanged: syncColumns()
-    Component.onCompleted: syncColumns()
-
-    // Moving the cursor brings the deepest columns back after a scroll back.
-    Connections {
-      target: root
-      function onCursorIndexChanged() {
-        if (columnsPane.shown && columnsFlick.contentX < columnsPane.lastX()) columnsPane.slideTo(columnsPane.lastX())
-      }
+    onChainChanged: {
+      syncColumns()
+      reveal()
     }
+    onShownChanged: {
+      syncColumns()
+      reveal()
+    }
+    onTrailEntryChanged: reveal()
+    onColumnWidthChanged: reveal()
+    onWidthChanged: reveal()
+    Component.onCompleted: syncColumns()
 
     Flickable {
       id: columnsFlick
@@ -3592,9 +3633,6 @@ Panel {
       flickableDirection: Flickable.HorizontalFlick
       contentWidth: columnsRow.width
       contentHeight: height
-      // The deepest column, where the cursor is, stays in view.
-      onContentWidthChanged: columnsPane.slideTo(columnsPane.lastX())
-
 
       Row {
         id: columnsRow
@@ -3763,8 +3801,8 @@ Panel {
 
           FolderColumn {
             anchors.fill: parent
-            visible: root.previewEntry !== null && root.previewEntry.dir
-            folderPath: visible ? root.previewEntry.path : ""
+            visible: columnsPane.trailEntry !== null && columnsPane.trailEntry.dir
+            folderPath: visible ? columnsPane.trailEntry.path : ""
             openPath: ""
             foreground: columnsPane.foreground
             rowHeight: columnsPane.rowHeight
@@ -3774,9 +3812,9 @@ Panel {
 
           PreviewPane {
             anchors.fill: parent
-            visible: root.previewEntry !== null && !root.previewEntry.dir && !root.showPreview
+            visible: columnsPane.trailEntry !== null && !columnsPane.trailEntry.dir && !root.showPreview
             foreground: columnsPane.foreground
-            entry: visible ? root.previewEntry : null
+            entry: visible ? columnsPane.trailEntry : null
           }
         }
       }
@@ -3791,7 +3829,7 @@ Panel {
         id: edge
         required property int modelData
         readonly property bool back: modelData < 0
-        visible: back ? columnsFlick.contentX > 1 : columnsFlick.contentX < columnsPane.lastX() - 1
+        visible: back ? columnsFlick.contentX > 1 : columnsFlick.contentX + columnsPane.width < columnsPane.contentEnd() - 1
         x: back ? 0 : columnsPane.width - width
         width: Style.space(26)
         height: columnsPane.height

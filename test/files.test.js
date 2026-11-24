@@ -1340,6 +1340,31 @@ describe("longestNames", () => {
   })
 })
 
+describe("revealOffset", () => {
+  it("does not move when the span is in view", () => {
+    assert.equal(Model.revealOffset(100, 150, 400, 600, 400), 100)
+    assert.equal(Model.revealOffset(0, 0, 400, 600, 400), 0)
+  })
+
+  it("moves only as far as the span needs", () => {
+    // The end past the right edge: just enough to show it.
+    assert.equal(Model.revealOffset(0, 380, 570, 600, 400), 170)
+    // The start past the left edge: back to it.
+    assert.equal(Model.revealOffset(300, 190, 380, 600, 400), 190)
+  })
+
+  it("shows the start when the span is wider than the view", () => {
+    assert.equal(Model.revealOffset(0, 380, 1000, 1200, 400), 380)
+  })
+
+  it("never goes past the last offset nor below zero", () => {
+    // Scrolled further than the strip now goes, after it shrank.
+    assert.equal(Model.revealOffset(500, 0, 190, 200, 400), 0)
+    assert.equal(Model.revealOffset(500, 250, 400, 200, 400), 200)
+    assert.equal(Model.revealOffset(-20, 0, 100, 0, 400), 0)
+  })
+})
+
 describe("uniqueName", () => {
   it("returns a free name unchanged", () => {
     assert.equal(Model.uniqueName(["b.txt"], "a.txt", false), "a.txt")
