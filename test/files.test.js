@@ -1103,6 +1103,58 @@ describe("filterEntries", () => {
   })
 })
 
+describe("sameListing", () => {
+  it("matches the same rows by path, kind, size and date", () => {
+    const a = [entry("one.txt", { size: 1, modified: 10 }), entry("dir", { dir: true, modified: 20 })]
+    const copy = a.map((e) => Model.makeEntry({ path: e.path, dir: e.dir, size: e.size, modified: e.modified }))
+    assert.equal(Model.sameListing(a, a), true)
+    assert.equal(Model.sameListing(a, copy), true)
+    assert.equal(Model.sameListing([], []), true)
+  })
+
+  it("tells changed, reordered or missing rows apart", () => {
+    const a = [entry("one.txt", { size: 1, modified: 10 }), entry("two.txt", { size: 2, modified: 10 })]
+    assert.equal(Model.sameListing(a, [a[1], a[0]]), false)
+    assert.equal(Model.sameListing(a, [a[0]]), false)
+    assert.equal(Model.sameListing(a, [a[0], entry("two.txt", { size: 3, modified: 10 })]), false)
+    assert.equal(Model.sameListing(a, [a[0], entry("two.txt", { size: 2, modified: 11 })]), false)
+    assert.equal(Model.sameListing(a, [a[0], entry("two.txt", { dir: true, modified: 10 })]), false)
+    assert.equal(Model.sameListing(a, null), false)
+    assert.equal(Model.sameListing(undefined, a), false)
+  })
+})
+
+describe("rememberListing", () => {
+  it("keeps listings by path, the newest last, up to the cap", () => {
+    let cache = {}
+    for (let i = 0; i < 5; i++) cache = Model.rememberListing(cache, `/f${i}`, [i], 3)
+    assert.deepEqual(Object.keys(cache), ["/f2", "/f3", "/f4"])
+    // Seen again, a folder moves to the newest end with its new listing.
+    cache = Model.rememberListing(cache, "/f2", [22], 3)
+    assert.deepEqual(Object.keys(cache), ["/f3", "/f4", "/f2"])
+    assert.deepEqual(cache["/f2"], [22])
+    assert.equal(Object.keys(Model.rememberListing({}, "/a", [])).length, 1)
+  })
+
+  it("leaves the old cache as it was", () => {
+    const old = { "/a": [1] }
+    const next = Model.rememberListing(old, "/b", [2])
+    assert.deepEqual(old, { "/a": [1] })
+    assert.deepEqual(Object.keys(next), ["/a", "/b"])
+    assert.equal(Object.keys(Model.rememberListing(null, "/a", [1])).length, 1)
+  })
+
+  it("drops a folder too big to keep, or with no path or listing", () => {
+    const big = new Array(Model.LISTING_CACHE_BIG + 1).fill(0)
+    assert.deepEqual(Object.keys(Model.rememberListing({ "/a": [1], "/big": [2] }, "/big", big)), ["/a"])
+    assert.deepEqual(Object.keys(Model.rememberListing({ "/a": [1] }, "", [1])), ["/a"])
+    assert.deepEqual(Object.keys(Model.rememberListing({ "/a": [1] }, "/b", null)), ["/a"])
+    // Not kept, it still makes room only for what is kept.
+    const full = { "/a": [1], "/b": [2], "/c": [3] }
+    assert.deepEqual(Object.keys(Model.rememberListing(full, "/big", big, 3)), ["/a", "/b", "/c"])
+  })
+})
+
 describe("formatSize", () => {
   it("counts in decimal units", () => {
     assert.equal(Model.formatSize(1), "1 byte")

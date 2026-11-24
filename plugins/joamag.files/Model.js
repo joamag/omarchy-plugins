@@ -1017,6 +1017,38 @@ function filterEntries(list, query, showHidden) {
   return out
 }
 
+// Whether two listings show the same rows: the same files in the same
+// order, with the same size and date. A folder read again unchanged keeps
+// its rows, and its scroll, rather than being drawn anew. Object.is counts
+// two unknown values (NaN, a folder's size) as the same.
+function sameListing(a, b) {
+  if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false
+  for (var i = 0; i < a.length; i++) {
+    var x = a[i]
+    var y = b[i]
+    if (x !== y && (x.path !== y.path || x.dir !== y.dir || !Object.is(x.size, y.size) || !Object.is(x.modified, y.modified))) return false
+  }
+  return true
+}
+
+var LISTING_CACHE_MAX = 32
+var LISTING_CACHE_BIG = 5000
+
+// Listings of folders seen lately, by path, oldest first, so a folder shown
+// again is on screen at once while it is read again. The oldest go past
+// MAX, and a folder of more than LISTING_CACHE_BIG entries is not kept, to
+// hold memory in bounds.
+function rememberListing(cache, path, entries, max) {
+  var limit = max || LISTING_CACHE_MAX
+  var old = cache || {}
+  var keys = Object.keys(old).filter(function(k) { return k !== path })
+  var keep = String(path || "") !== "" && Array.isArray(entries) && entries.length <= LISTING_CACHE_BIG
+  var out = {}
+  for (var i = Math.max(0, keys.length - (keep ? limit - 1 : limit)); i < keys.length; i++) out[keys[i]] = old[keys[i]]
+  if (keep) out[path] = entries
+  return out
+}
+
 // ---------- Formatting ----------
 
 // Decimal units, the way GNOME Files counts.

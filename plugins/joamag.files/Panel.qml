@@ -45,6 +45,9 @@ Panel {
   // date stay the same, and the folder that listing is of.
   property var entryCache: ({})
   property string listedFolder: ""
+  // Listings of folders seen lately, by path, so a folder shown again (in
+  // the tab or as a column) is on screen at once while it is read again.
+  property var listingCache: ({})
   // The folder changed while nothing showed it; read it again on show.
   property bool folderDirty: false
   // Search results stream in and are added a batch at a time.
@@ -194,7 +197,9 @@ Panel {
   // whose index runs past a shorter list for a moment shows this instead.
   readonly property var blankEntry: Model.makeEntry({ path: "" })
   // Why nothing is listed, shown where the listing would be.
-  readonly property string emptyMessage: searchProc.running ? "Searching…" : Model.emptyText(location, query, deep, Model.prettyPath(location, home))
+  readonly property string emptyMessage: searchProc.running ? "Searching…" : reading ? "" : Model.emptyText(location, query, deep, Model.prettyPath(location, home))
+  // A folder not read yet shows nothing, rather than "empty", until it is.
+  readonly property bool reading: inFolder && listedFolder !== location
   readonly property bool columnsShown: view === "columns" && inFolder && !deep
   readonly property var cursorEntry: cursorIndex >= 0 && cursorIndex < entries.length ? entries[cursorIndex] : null
   readonly property bool busy: actionProc.running || transferProc.running || namesProc.running
@@ -288,8 +293,9 @@ Panel {
     if (parent === "") return
     // Out of the top of an archive, the cursor lands on the archive file.
     var from = inArchive && archiveAt.inner === "" ? archiveAt.archive : location
-    go(parent)
+    // Set first: a folder seen lately is listed while going there.
     pendingSelect = from
+    go(parent)
   }
 
   function newTab(path) {
@@ -392,8 +398,22 @@ Panel {
     } else if (inArchive) {
       loadArchive(archiveAt.archive, undefined, false)
     } else {
+      showListed()
       freeTimer.restart()
     }
+  }
+
+  // A folder read lately shows at once from that reading, and one never
+  // read shows nothing rather than the last folder's files; the folder
+  // model's own read follows and changes only what changed.
+  function showListed() {
+    if (listedFolder === location) return
+    var seen = listingCache[location]
+    var cache = {}
+    for (var i = 0; i < (seen || []).length; i++) cache[seen[i].path] = seen[i]
+    entryCache = cache
+    listedFolder = seen ? location : ""
+    folderEntries = seen || []
   }
 
   function refreshPlaces() {
@@ -411,6 +431,8 @@ Panel {
       folderDirty = true
       return
     }
+    // Half read, the folder would show as empty or cut short.
+    if (folderModel.status === FolderListModel.Loading) return
     folderDirty = false
     var cache = entryCache
     var next = {}
@@ -433,6 +455,7 @@ Panel {
       out.push(entry)
     }
     entryCache = next
+    listingCache = Model.rememberListing(listingCache, location, out)
     if (same && listedFolder === location) return
     var refresh = listedFolder === location
     listedFolder = location
@@ -3456,6 +3479,9 @@ Panel {
 
     readonly property var chain: Model.crumbs(root.location, root.home, root.drives)
     readonly property real columnWidth: Style.space(190)
+    // The column after the folder on screen keeps one width, folder or file,
+    // so the strip does not move as the cursor does.
+    readonly property real trailWidth: Math.max(columnWidth, Style.space(230), width - columnWidth * chain.length)
     // The column under the cursor's folder or file, faded in as it opens.
     property real trailOpacity: 1
 
@@ -3492,6 +3518,27 @@ Panel {
       NumberAnimation { id: fadeIn; target: columnsPane; property: "trailOpacity"; to: 1; duration: 120 }
     }
 
+    // The folders above the one on screen, a column each. Only the columns
+    // whose folder changed are added or removed: rebuilding them all would
+    // read every folder again and redraw the whole strip.
+    ListModel { id: parentColumns }
+
+    function syncColumns() {
+      var want = shown ? chain.slice(0, chain.length - 1) : []
+      var keep = 0
+      while (keep < parentColumns.count && keep < want.length && parentColumns.get(keep).folderPath === want[keep].path) keep++
+      if (parentColumns.count > keep) parentColumns.remove(keep, parentColumns.count - keep)
+      for (var i = 0; i < want.length; i++) {
+        var open = chain[i + 1].path
+        if (i >= keep) parentColumns.append({ folderPath: want[i].path, openPath: open })
+        else if (parentColumns.get(i).openPath !== open) parentColumns.setProperty(i, "openPath", open)
+      }
+    }
+
+    onChainChanged: syncColumns()
+    onShownChanged: syncColumns()
+    Component.onCompleted: syncColumns()
+
     // Moving the cursor brings the deepest columns back after a scroll back.
     Connections {
       target: root
@@ -3518,15 +3565,11 @@ Panel {
         height: columnsFlick.height
 
         Repeater {
-          model: columnsPane.shown ? columnsPane.chain.slice(0, columnsPane.chain.length - 1) : []
+          model: parentColumns
 
           FolderColumn {
-            required property var modelData
-            required property int index
             width: columnsPane.columnWidth
             height: columnsRow.height
-            folderPath: modelData.path
-            openPath: columnsPane.chain[index + 1].path
             foreground: columnsPane.foreground
             rowHeight: columnsPane.rowHeight
             sideways: columnsFlick
@@ -3677,26 +3720,28 @@ Panel {
         }
 
         // What is under the cursor: a folder's contents, or a file's preview.
-        FolderColumn {
-          visible: root.previewEntry !== null && root.previewEntry.dir
-          opacity: columnsPane.trailOpacity
-          width: visible ? Math.max(columnsPane.columnWidth, columnsPane.width - columnsRow.x - columnsPane.columnWidth * columnsPane.chain.length) : 0
+        Item {
+          width: columnsPane.trailWidth
           height: columnsRow.height
-          folderPath: visible ? root.previewEntry.path : ""
-          openPath: ""
-          foreground: columnsPane.foreground
-          rowHeight: columnsPane.rowHeight
-          passive: true
-          sideways: columnsFlick
-        }
+          opacity: columnsPane.trailOpacity
 
-        PreviewPane {
-          visible: root.previewEntry !== null && !root.previewEntry.dir && !root.showPreview
-          opacity: columnsPane.trailOpacity
-          width: visible ? Math.max(Style.space(230), columnsPane.width - columnsPane.columnWidth * columnsPane.chain.length) : 0
-          height: columnsRow.height
-          foreground: columnsPane.foreground
-          entry: visible ? root.previewEntry : null
+          FolderColumn {
+            anchors.fill: parent
+            visible: root.previewEntry !== null && root.previewEntry.dir
+            folderPath: visible ? root.previewEntry.path : ""
+            openPath: ""
+            foreground: columnsPane.foreground
+            rowHeight: columnsPane.rowHeight
+            passive: true
+            sideways: columnsFlick
+          }
+
+          PreviewPane {
+            anchors.fill: parent
+            visible: root.previewEntry !== null && !root.previewEntry.dir && !root.showPreview
+            foreground: columnsPane.foreground
+            entry: visible ? root.previewEntry : null
+          }
         }
       }
     }
@@ -3747,8 +3792,8 @@ Panel {
   }
 
   // A folder listed in its own column: the ancestors to the left of the
-  // folder on screen (the open child highlighted), or the folder under the
-  // cursor (passive, dimmed). Clicking an entry goes there.
+  // folder on screen (the open child highlighted and kept in sight), or the
+  // folder under the cursor (passive, dimmed). Clicking an entry goes there.
   component FolderColumn: Item {
     id: column
     required property string folderPath
@@ -3760,19 +3805,58 @@ Panel {
     property Flickable sideways: null
 
     property var columnEntries: []
+    // Read since the folder was set, or known from the listing cache: until
+    // then an empty column says nothing rather than "Empty folder".
+    property bool listed: false
+
+    // Shows a listing sorted and filtered the way the view is, unless it is
+    // what is on screen already, so a column read again unchanged keeps its
+    // rows and its scroll.
+    function show(list) {
+      var next = Model.sortEntries(Model.filterEntries(list, "", root.showHidden), root.sortKey, root.sortDescending)
+      listed = true
+      if (Model.sameListing(next, columnEntries)) return
+      columnEntries = next
+      revealOpen()
+    }
+
+    // A folder seen lately shows at once from the listing cache; the folder
+    // model's own read follows.
+    function load() {
+      listed = false
+      var seen = folderPath !== "" ? root.listingCache[folderPath] : undefined
+      if (seen) show(seen)
+      else columnEntries = []
+    }
 
     function snapshot() {
+      // Half read, the folder would show as empty or cut short.
+      if (folderPath === "" || columnModel.status === FolderListModel.Loading) return
       var out = []
       for (var i = 0; i < columnModel.count; i++) {
+        var modified = columnModel.get(i, "fileModified")
         out.push(Model.makeEntry({
           path: columnModel.get(i, "filePath"),
-          name: columnModel.get(i, "fileName"),
           dir: columnModel.get(i, "fileIsDir") === true,
-          size: columnModel.get(i, "fileSize")
+          size: columnModel.get(i, "fileSize"),
+          modified: modified ? modified.getTime() : NaN
         }))
       }
-      columnEntries = Model.sortEntries(Model.filterEntries(out, "", root.showHidden), root.sortKey, root.sortDescending)
+      root.listingCache = Model.rememberListing(root.listingCache, folderPath, out)
+      show(out)
     }
+
+    // The folder this column leads through stays in sight.
+    function revealOpen() {
+      var at = openPath !== "" ? Model.indexOfPath(columnEntries, openPath) : -1
+      if (at < 0) return
+      columnList.forceLayout()
+      columnList.positionViewAtIndex(at, ListView.Contain)
+    }
+
+    onFolderPathChanged: load()
+    onOpenPathChanged: revealOpen()
+    Component.onCompleted: load()
 
     FolderListModel {
       id: columnModel
@@ -3780,7 +3864,9 @@ Panel {
       showDirsFirst: true
       showDotAndDotDot: false
       showHidden: true
-      onStatusChanged: columnTimer.restart()
+      showOnlyReadable: false
+      caseSensitive: false
+      onStatusChanged: if (status === FolderListModel.Ready) Qt.callLater(column.snapshot)
       onCountChanged: columnTimer.restart()
     }
 
@@ -3803,17 +3889,18 @@ Panel {
       clip: true
       interactive: false
       boundsBehavior: Flickable.StopAtBounds
-      model: column.columnEntries
+      model: column.columnEntries.length
+      reuseItems: true
       opacity: column.passive ? 0.7 : 1
-
 
       delegate: Item {
         id: item
-        required property var modelData
+        required property int index
+        readonly property var entry: column.columnEntries[index] || root.blankEntry
         width: columnList.width
         height: column.rowHeight
 
-        readonly property bool open: modelData.path === column.openPath
+        readonly property bool open: entry.path === column.openPath
 
         CursorSurface {
           anchors.fill: parent
@@ -3831,8 +3918,8 @@ Panel {
           Text {
             anchors.verticalCenter: parent.verticalCenter
             textFormat: Text.PlainText
-            text: Model.kindIcon(item.modelData.kind)
-            color: item.modelData.dir ? Color.accent : column.foreground
+            text: Model.kindIcon(item.entry.kind)
+            color: item.entry.dir ? Color.accent : column.foreground
             font.family: root.fontFamily
             font.pixelSize: Style.font.bodySmall
           }
@@ -3841,7 +3928,7 @@ Panel {
             width: parent.width - Style.space(36)
             anchors.verticalCenter: parent.verticalCenter
             textFormat: Text.PlainText
-            text: item.modelData.name
+            text: item.entry.name
             color: column.foreground
             font.family: root.fontFamily
             font.pixelSize: Style.font.bodySmall
@@ -3850,7 +3937,7 @@ Panel {
           }
 
           Text {
-            visible: item.modelData.dir
+            visible: item.entry.dir
             anchors.verticalCenter: parent.verticalCenter
             textFormat: Text.PlainText
             text: "›"
@@ -3868,9 +3955,9 @@ Panel {
           acceptedButtons: Qt.LeftButton | Qt.MiddleButton
           cursorShape: Qt.PointingHandCursor
           onClicked: function(mouse) {
-            if (item.modelData.dir) root.openFolder(item.modelData.path, root.newTabClick(mouse))
+            if (item.entry.dir) root.openFolder(item.entry.path, root.newTabClick(mouse))
             else {
-              root.pendingSelect = item.modelData.path
+              root.pendingSelect = item.entry.path
               root.go(column.folderPath)
             }
           }
@@ -3880,9 +3967,9 @@ Panel {
           id: itemDrop
           anchors.fill: parent
           keys: ["text/uri-list"]
-          enabled: item.modelData.dir
+          enabled: item.entry.dir
           onDropped: function(event) {
-            if (root.dropUrls(event.urls, item.modelData.path, event.proposedAction === Qt.CopyAction)) event.accept()
+            if (root.dropUrls(event.urls, item.entry.path, event.proposedAction === Qt.CopyAction)) event.accept()
           }
         }
       }
@@ -3892,7 +3979,7 @@ Panel {
 
     Text {
       anchors.centerIn: parent
-      visible: column.columnEntries.length === 0 && column.folderPath !== ""
+      visible: column.listed && column.columnEntries.length === 0 && column.folderPath !== ""
       textFormat: Text.PlainText
       text: "Empty folder"
       color: column.foreground
