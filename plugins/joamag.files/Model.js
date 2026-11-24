@@ -251,6 +251,12 @@ function uriList(paths) {
   return out.length > 0 ? out.join("\r\n") + "\r\n" : ""
 }
 
+// What a drag of files carries: the list of files file managers, browsers
+// and most apps take, and the paths as text for terminals and text fields.
+function dragData(paths) {
+  return { "text/uri-list": uriList(paths), "text/plain": (paths || []).join("\n") }
+}
+
 // ---------- Archives ----------
 
 function isArchiveName(name) {
@@ -704,6 +710,17 @@ function typeFor(ext, kind) {
 
 function kindIcon(kind) {
   return KIND_ICONS[kind] || KIND_ICONS.file
+}
+
+// The icon theme's name for a dragged entry, the picture under the pointer.
+var DRAG_ICONS = {
+  dir: "folder", image: "image-x-generic", video: "video-x-generic", audio: "audio-x-generic", pdf: "application-pdf",
+  text: "text-x-generic", code: "text-x-script", archive: "package-x-generic", disc: "media-optical", sheet: "x-office-spreadsheet",
+  document: "x-office-document", slides: "x-office-presentation", font: "font-x-generic", file: "text-x-generic"
+}
+
+function dragIcon(entry) {
+  return entry && DRAG_ICONS[entry.kind] ? DRAG_ICONS[entry.kind] : "text-x-generic"
 }
 
 function isImage(entry) {

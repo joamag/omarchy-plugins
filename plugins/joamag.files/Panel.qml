@@ -1900,6 +1900,20 @@ Panel {
     }
   }
 
+  // The popup covers the whole screen, which is how a click outside closes
+  // it; while files are dragged out it takes input over its card only, so
+  // the app under the pointer, and not the popup, gets the drag.
+  Region {
+    id: screenRegion
+    width: panel.screenW
+    height: panel.screenH
+  }
+
+  Region {
+    id: cardRegion
+    item: panel.loadedContent
+  }
+
   KeyboardPanel {
     id: panel
     anchorItem: button
@@ -1907,6 +1921,7 @@ Panel {
     bar: root.bar
     open: root.opened
     focusTarget: panel.loadedContent ? panel.loadedContent.view : null
+    mask: root.dragPaths.length > 0 && panel.loadedContent ? cardRegion : screenRegion
     contentWidth: panel.fittedContentWidth(Style.space(720))
     contentHeight: panel.fittedContentHeight(Style.space(560))
 
@@ -2925,13 +2940,17 @@ Panel {
   component DragCarrier: Item {
     id: carrier
     required property bool dragging
+    // The entry pressed on, carried on its own if the drag starts before the
+    // selection it belongs to is noted, and pictured under the pointer.
+    required property var entry
     width: 1
     height: 1
     Drag.active: dragging
     Drag.dragType: Drag.Automatic
     Drag.supportedActions: Qt.MoveAction | Qt.CopyAction
     Drag.proposedAction: Qt.MoveAction
-    Drag.mimeData: ({ "text/uri-list": Model.uriList(root.dragPaths) })
+    Drag.mimeData: Model.dragData(root.dragPaths.length > 0 ? root.dragPaths : [entry.path])
+    Drag.imageSource: Quickshell.iconPath(Model.dragIcon(entry), "text-x-generic")
     Drag.onDragFinished: function(action) {
       root.dragPaths = []
       carrier.x = 0
@@ -3078,6 +3097,7 @@ Panel {
     DragCarrier {
       id: carrier
       dragging: mouse.drag.active
+      entry: row.entry
     }
 
     DropArea {
@@ -3285,6 +3305,7 @@ Panel {
         DragCarrier {
           id: tileCarrier
           dragging: tileMouse.drag.active
+          entry: tile.entry
         }
 
         DropArea {
@@ -3480,6 +3501,7 @@ Panel {
               DragCarrier {
                 id: cellCarrier
                 dragging: cellMouse.drag.active
+                entry: cell.entry
               }
 
               DropArea {

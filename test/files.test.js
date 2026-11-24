@@ -216,6 +216,13 @@ describe("uriList", () => {
   })
 })
 
+describe("dragData", () => {
+  it("carries the files as a URI list and the paths as text", () => {
+    assert.deepEqual(Model.dragData(["/a b", "/c"]), { "text/uri-list": "file:///a%20b\r\nfile:///c\r\n", "text/plain": "/a b\n/c" })
+    assert.deepEqual(Model.dragData(null), { "text/uri-list": "", "text/plain": "" })
+  })
+})
+
 describe("isArchiveName", () => {
   it("knows the suffixes bsdtar reads, ignoring case", () => {
     for (const name of ["a.zip", "a.TAR.GZ", "a.tgz", "a.tar.zst", "a.7z", "a.rar", "a.iso", "a.jar"]) assert.equal(Model.isArchiveName(name), true, name)
@@ -718,6 +725,16 @@ describe("kindIcon", () => {
   it("falls back to the plain file glyph", () => {
     assert.equal(Model.kindIcon("dir"), Model.KIND_ICONS.dir)
     assert.equal(Model.kindIcon("unknown"), Model.KIND_ICONS.file)
+  })
+})
+
+describe("dragIcon", () => {
+  it("names the icon theme's picture for the kind", () => {
+    assert.equal(Model.dragIcon(entry("d", { dir: true })), "folder")
+    assert.equal(Model.dragIcon(entry("a.png")), "image-x-generic")
+    assert.equal(Model.dragIcon(entry("a.zip")), "package-x-generic")
+    assert.equal(Model.dragIcon(entry("a.weird")), "text-x-generic")
+    assert.equal(Model.dragIcon(null), "text-x-generic")
   })
 })
 
