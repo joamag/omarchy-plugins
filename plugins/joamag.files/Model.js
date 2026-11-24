@@ -1219,6 +1219,17 @@ function hints(mode) {
   return HINTS[mode] || HINTS.browse
 }
 
+// Where a menu goes in an area: its corner at the pointer, or its right
+// edge on X for a button at the right end of the header; turned to the
+// other side of the anchor where it would run off the area, and kept inside.
+function menuPosition(x, y, width, height, areaWidth, areaHeight, alignRight) {
+  var left = alignRight ? x - width : x
+  if (!alignRight && left + width > areaWidth) left = x - width
+  var top = y
+  if (top + height > areaHeight) top = y - height
+  return { x: Math.max(0, Math.min(areaWidth - width, left)), y: Math.max(0, Math.min(areaHeight - height, top)) }
+}
+
 // Right click on an item. Trash items can only go back or go for good;
 // what is inside an archive can be opened, copied out or extracted.
 function itemMenu(entry, count, clipboard, bookmarked) {

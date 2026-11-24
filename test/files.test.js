@@ -1316,6 +1316,25 @@ describe("hints", () => {
   })
 })
 
+describe("menuPosition", () => {
+  it("opens at the pointer where it fits", () => {
+    assert.deepEqual(Model.menuPosition(100, 50, 200, 120, 700, 500, false), { x: 100, y: 50 })
+  })
+
+  it("turns to the other side of the pointer near the right and the bottom", () => {
+    assert.deepEqual(Model.menuPosition(650, 450, 200, 120, 700, 500, false), { x: 450, y: 330 })
+  })
+
+  it("hangs from a header button by its right edge", () => {
+    assert.deepEqual(Model.menuPosition(690, 40, 200, 300, 700, 500, true), { x: 490, y: 40 })
+  })
+
+  it("stays inside an area too small for it", () => {
+    assert.deepEqual(Model.menuPosition(30, 20, 200, 300, 150, 250, false), { x: 0, y: 0 })
+    assert.deepEqual(Model.menuPosition(100, 20, 200, 120, 700, 500, true), { x: 0, y: 20 })
+  })
+})
+
 describe("itemMenu", () => {
   it("offers restore and delete for a trash item", () => {
     assert.deepEqual(Model.itemMenu({ trashName: "a.2" }, 1, false, false).map((i) => i.id), ["restore", "purge"])

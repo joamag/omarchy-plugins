@@ -171,6 +171,9 @@ Panel {
   // every change, which a big folder pays for on every keystroke. A row
   // whose index runs past a shorter list for a moment shows this instead.
   readonly property var blankEntry: Model.makeEntry({ path: "" })
+  // Why nothing is listed, shown where the listing would be.
+  readonly property string emptyMessage: searchProc.running ? "Searching…" : Model.emptyText(location, query, deep, Model.prettyPath(location, home))
+  readonly property bool columnsShown: view === "columns" && inFolder && !deep
   readonly property var cursorEntry: cursorIndex >= 0 && cursorIndex < entries.length ? entries[cursorIndex] : null
   readonly property bool busy: actionProc.running || transferProc.running || namesProc.running
   readonly property var conflictJob: transferJob ? transferJob.jobs[Model.conflictIndex(transferJob.jobs)] || null : null
@@ -1322,9 +1325,12 @@ Panel {
 
   // ---- Menus, toasts and the window -------------------------------------
 
-  function openMenu(items, x, y, entry) {
+  // X and Y are in window coordinates (mapToItem(null, ...)), or -1 for the
+  // middle of the view; ALIGNRIGHT puts the menu's right edge on X, under a
+  // button at the right end of the header.
+  function openMenu(items, x, y, entry, alignRight) {
     if (!items || items.length === 0) return
-    menu = { items: items, x: x, y: y, entry: entry || null }
+    menu = { items: items, x: x, y: y, entry: entry || null, alignRight: alignRight === true }
     menuIndex = 0
     while (menuIndex < items.length && items[menuIndex].disabled) menuIndex++
   }
@@ -2079,8 +2085,8 @@ Panel {
             glyph: "󰇙"
             tip: "More"
             onClicked: {
-              var p = moreButton.mapToItem(viewRoot, 0, moreButton.height + Style.space(4))
-              root.openMenu(root.folderMenu(), p.x + moreButton.width, p.y, null)
+              var p = moreButton.mapToItem(null, moreButton.width, moreButton.height + Style.space(4))
+              root.openMenu(root.folderMenu(), p.x, p.y, null, true)
             }
           }
         }
@@ -2152,7 +2158,7 @@ Panel {
 
             ColumnsPane {
               anchors.fill: parent
-              visible: root.view === "columns" && root.inFolder && !root.deep
+              visible: root.columnsShown
               foreground: viewRoot.foreground
               rowHeight: viewRoot.rowHeight
               shown: visible && viewRoot.active
@@ -2169,11 +2175,12 @@ Panel {
               }
             }
 
+            // The columns view says it in the column of the folder on screen.
             Text {
               anchors.centerIn: parent
-              visible: root.entries.length === 0
+              visible: root.entries.length === 0 && !root.columnsShown
               textFormat: Text.PlainText
-              text: searchProc.running ? "Searching…" : Model.emptyText(root.location, root.query, root.deep, Model.prettyPath(root.location, root.home))
+              text: root.emptyMessage
               color: viewRoot.foreground
               opacity: 0.5
               font.family: root.fontFamily
@@ -2207,9 +2214,9 @@ Panel {
           }
 
           Text {
-            visible: root.lastError !== ""
+            visible: root.renameError !== "" || root.lastError !== ""
             textFormat: Text.PlainText
-            text: root.lastError
+            text: root.renameError !== "" ? root.renameError : root.lastError
             color: Color.urgent
             font.family: root.fontFamily
             font.pixelSize: Style.font.caption
@@ -2329,7 +2336,7 @@ Panel {
 
     // ---------- Overlays ----------
     Toast {
-      anchors.horizontalCenter: parent.horizontalCenter
+      x: main.x + (main.width - width) / 2
       anchors.bottom: parent.bottom
       anchors.bottomMargin: footer.height + Style.space(14)
       foreground: viewRoot.foreground
@@ -2337,7 +2344,7 @@ Panel {
     }
 
     GoMenu {
-      anchors.horizontalCenter: parent.horizontalCenter
+      x: main.x + (main.width - width) / 2
       anchors.bottom: parent.bottom
       anchors.bottomMargin: footer.height + Style.space(14)
       foreground: viewRoot.foreground
@@ -2591,7 +2598,7 @@ Panel {
       }
 
       Text {
-        visible: chip.tabIndex < 9
+        visible: chip.tabIndex < 9 && chip.width >= Style.space(110)
         textFormat: Text.PlainText
         text: String(chip.tabIndex + 1)
         color: chip.foreground
@@ -3008,7 +3015,8 @@ Panel {
   }
 
   // The inline name editor: the name minus its extension starts selected,
-  // Enter renames, Esc keeps the old name, a clash or a bad name says why.
+  // Enter renames, Esc keeps the old name; a clash or a bad name says why on
+  // the footer's error line.
   component RenameField: TextField {
     id: field
     required property var entry
@@ -3039,28 +3047,6 @@ Panel {
       }
     }
     onTextEdited: root.renameError = ""
-
-    Rectangle {
-      visible: root.renameError !== "" && field.active
-      anchors.top: parent.bottom
-      anchors.left: parent.left
-      width: errorText.implicitWidth + Style.space(12)
-      height: errorText.implicitHeight + Style.space(6)
-      z: 5
-      color: Color.popups.background
-      border.width: 1
-      border.color: Color.urgent
-
-      Text {
-        id: errorText
-        anchors.centerIn: parent
-        textFormat: Text.PlainText
-        text: root.renameError
-        color: Color.urgent
-        font.family: root.fontFamily
-        font.pixelSize: Style.font.caption
-      }
-    }
   }
 
   // The grid view: a tile per entry, with the picture itself for images.
@@ -3303,6 +3289,20 @@ Panel {
         Item {
           width: columnsPane.columnWidth
           height: columnsRow.height
+
+          Text {
+            anchors.centerIn: parent
+            width: parent.width - Style.space(16)
+            visible: root.entries.length === 0
+            horizontalAlignment: Text.AlignHCenter
+            textFormat: Text.PlainText
+            text: root.emptyMessage
+            color: columnsPane.foreground
+            opacity: 0.45
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.caption
+            wrapMode: Text.Wrap
+          }
 
           ListView {
             id: currentColumn
@@ -4323,16 +4323,13 @@ Panel {
       padding: Style.space(4)
       width: menuLayer.cardWidth
       height: (root.menu ? root.menu.items.length : 0) * menuLayer.itemHeight + menuCard.contentTopInset + menuCard.contentBottomInset
-      x: {
-        if (!root.menu || root.menu.x < 0) return (menuLayer.width - width) / 2
-        var p = menuLayer.mapFromItem(null, root.menu.x, 0)
-        return Math.max(0, Math.min(menuLayer.width - width, p.x - (root.menu.entry === null && root.menu.x > menuLayer.width / 2 ? width : 0)))
+      readonly property var place: {
+        if (!root.menu || root.menu.x < 0) return { x: (menuLayer.width - width) / 2, y: (menuLayer.height - height) / 2 }
+        var p = menuLayer.mapFromItem(null, root.menu.x, root.menu.y)
+        return Model.menuPosition(p.x, p.y, width, height, menuLayer.width, menuLayer.height, root.menu.alignRight)
       }
-      y: {
-        if (!root.menu || root.menu.y < 0) return (menuLayer.height - height) / 2
-        var p = menuLayer.mapFromItem(null, 0, root.menu.y)
-        return Math.max(0, Math.min(menuLayer.height - height, p.y))
-      }
+      x: place.x
+      y: place.y
 
       MouseArea { anchors.fill: parent }
 
