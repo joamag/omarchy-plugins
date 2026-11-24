@@ -12,7 +12,7 @@ import "Model.js" as Model
 // with an optional preview, then a status line, the actions and a key hint
 // line. It pops out into a regular window with the places sidebar and docks
 // back into the bar with the same tabs. Left click opens (or docks the
-// window back), middle click pops out, right click opens Nautilus.
+// window back), right click pops out or docks, middle click opens Nautilus.
 Panel {
   id: root
   moduleName: "joamag.files"
@@ -1979,8 +1979,8 @@ Panel {
     tooltipText: root.opened ? "" : Model.tooltip(root.tabs, root.activeTab, root.locationLabel)
 
     onPressed: function(b) {
-      if (b === Qt.RightButton) root.openNautilus()
-      else if (b === Qt.MiddleButton) root.toggleDetached()
+      if (b === Qt.RightButton) root.toggleDetached()
+      else if (b === Qt.MiddleButton) root.openNautilus()
       else if (root.detached) root.dock()
       else root.toggle()
     }

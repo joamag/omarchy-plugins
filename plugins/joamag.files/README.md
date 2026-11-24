@@ -15,7 +15,7 @@ The popup and the window share the tabs; they are saved on the widget's `shell.j
 
 ## Interactions
 
-- Left click on the bar: open the popup, or dock the window back into it. Middle click: pop out into a window or dock. Right click: open the folder on screen in Nautilus.
+- Left click on the bar: open the popup, or dock the window back into it. Right click: pop out into a window or dock. Middle click: open the folder on screen in Nautilus.
 - Click selects, Ctrl+click adds to the selection, Shift+click selects a range, double click opens. Right click on an item or on empty space opens a menu.
 - A middle click or Ctrl+double click on a folder (or an archive) opens it in a new tab. In the sidebar, the path bar, the Go to card and the columns' parent folders, Ctrl+click and middle click open a new tab.
 - Ctrl+P jumps to a folder: the other open tabs, the folders opened here (the last 50, remembered across restarts), the folders used lately in any app, the bookmarks, the standard folders and the mounted drives, narrowed as you type by letters in order the way an editor's quick open matches (`dl` finds Downloads). A typed `/` or `~` path is offered last. Enter or a click opens the folder in the tab (a folder open in another tab switches to it), Ctrl+Enter, Ctrl+click or a middle click opens it in a new tab.
