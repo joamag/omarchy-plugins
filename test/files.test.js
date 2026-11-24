@@ -1063,6 +1063,8 @@ describe("folderMenu", () => {
     assert.deepEqual(menu.map((i) => i.id), ["newfolder", "newfile", "paste", "selectall", "hidden", "sort:name", "sort:modified", "sort:size", "sort:type", "bookmark", "nautilus"])
     assert.equal(menu.find((i) => i.id === "paste").disabled, true)
     assert.equal(menu.find((i) => i.id === "hidden").label, "Hide hidden files")
+    assert.equal(menu.find((i) => i.id === "hidden").icon, Model.GLYPHS.hiddenHidden)
+    assert.equal(Model.folderMenu(HOME, false, false, "name", false).find((i) => i.id === "hidden").icon, Model.GLYPHS.hiddenShown)
     assert.match(menu.find((i) => i.id === "sort:size").label, /✓$/)
     assert.equal(Model.folderMenu(HOME, true, false, "name", true).find((i) => i.id === "bookmark").label, "Remove bookmark")
   })

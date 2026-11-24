@@ -31,7 +31,9 @@ var GLYPHS = {
   bookmark: "󰃀",
   drive: "󰋊",
   removable: "󱊞",
-  eject: "󰇪"
+  eject: "󰇪",
+  hiddenShown: "󰈈",
+  hiddenHidden: "󰈉"
 }
 
 var EXTENSIONS = {
@@ -978,7 +980,7 @@ function folderMenu(path, clipboard, showHidden, sortKey, bookmarked) {
     items.push({ id: "paste", label: "Paste", icon: "󰆒", shortcut: "p", disabled: !clipboard })
   }
   items.push({ id: "selectall", label: "Select all", icon: "󰄬", shortcut: "Ctrl+A" })
-  items.push({ id: "hidden", label: showHidden ? "Hide hidden files" : "Show hidden files", icon: showHidden ? "󰈉" : "󰈈", shortcut: "Ctrl+H" })
+  items.push({ id: "hidden", label: showHidden ? "Hide hidden files" : "Show hidden files", icon: showHidden ? GLYPHS.hiddenHidden : GLYPHS.hiddenShown, shortcut: "Ctrl+H" })
   for (var i = 0; i < SORT_KEYS.length; i++) items.push({ id: "sort:" + SORT_KEYS[i].key, label: "Sort by " + SORT_KEYS[i].label.toLowerCase() + (sortKey === SORT_KEYS[i].key ? "  ✓" : ""), icon: "󰒺" })
   if (!isVirtual(path)) {
     items.push({ id: "bookmark", label: bookmarked ? "Remove bookmark" : "Bookmark this folder", icon: "󰃀", shortcut: "Ctrl+D" })

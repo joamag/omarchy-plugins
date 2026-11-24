@@ -1538,6 +1538,10 @@ Panel {
           spacing: Style.space(6)
 
           readonly property real square: Style.spacing.controlHeight
+          // Square buttons beside the path: back, forward, up (and Go to in
+          // the popup), the filter, the views, hidden files, the preview,
+          // pop out or dock, and ⋮; one gap after each.
+          readonly property int squares: (viewRoot.windowed ? 3 : 4) + 1 + Model.VIEWS.length + 4
 
           IconButton { glyph: "󰁍"; tip: "Back (Alt+←)"; enabled: Model.canGoBack(root.tab); onClicked: root.back() }
           IconButton { glyph: "󰁔"; tip: "Forward (Alt+→)"; enabled: Model.canGoForward(root.tab); onClicked: root.forward() }
@@ -1552,7 +1556,7 @@ Panel {
           // Path bar, the path field or the filter field share this slot.
           Item {
             id: pathSlot
-            width: header.width - header.children.length * header.spacing - header.square * (viewRoot.windowed ? 9 : 10)
+            width: header.width - (header.square + header.spacing) * header.squares
             height: parent.height
 
             Crumbs {
@@ -1619,6 +1623,13 @@ Panel {
             }
           }
 
+          // Dot files and folders, shown or not; remembered across restarts.
+          IconButton {
+            glyph: root.showHidden ? Model.GLYPHS.hiddenShown : Model.GLYPHS.hiddenHidden
+            tip: (root.showHidden ? "Hide" : "Show") + " hidden files and folders (. or Ctrl+H)"
+            selected: root.showHidden
+            onClicked: root.toggleHidden()
+          }
           IconButton { glyph: "󰋽"; tip: "Preview pane (i)"; selected: root.showPreview; onClicked: root.togglePreview() }
           IconButton {
             glyph: viewRoot.windowed ? "󰘕" : "󰘖"
