@@ -19,6 +19,18 @@ var RANGES = [
 // range; intraday moves, a year of weekly or five of monthly closes does not.
 var SERIES_TTL_MS = { "1d": 60000, "5d": 300000, "1mo": 900000, "6mo": 1800000, "1y": 3600000, "5y": 3600000 }
 
+// Popup tabs: the chart and watchlist, and the headlines.
+var TABS = [
+  { key: "markets", label: "Markets" },
+  { key: "news", label: "News" }
+]
+
+// News tab: the feed name quotes.sh gives the top stories, how many
+// headlines a list keeps and how long one stays fresh.
+var TOP_FEED = "markets"
+var NEWS_LIMIT = 30
+var NEWS_TTL_MS = 300000
+
 // Friendly labels for the common indices, which Yahoo only knows by caret
 // symbols nobody wants to read in a bar.
 var ALIASES = {
@@ -459,4 +471,174 @@ function chartGeometry(points, width, height, baseline, padTop, padBottom) {
   geo.min = stats.min
   geo.max = stats.max
   return geo
+}
+
+// Named references RSS titles carry; numeric ones ("&#x2019;") are decoded
+// from their code point.
+var ENTITIES = { amp: "&", lt: "<", gt: ">", quot: "\"", apos: "'", nbsp: " " }
+
+// Feed text back to plain text: CDATA wrappers dropped, character references
+// decoded, anything unknown left as it was.
+function decodeEntities(text) {
+  var s = String(text || "").replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, "$1")
+  return s.replace(/&(#x[0-9a-fA-F]+|#[0-9]+|[a-zA-Z]+);/g, function(all, ref) {
+    if (ref.charAt(0) !== "#") return Object.prototype.hasOwnProperty.call(ENTITIES, ref) ? ENTITIES[ref] : all
+    var code = ref.charAt(1) === "x" ? parseInt(ref.slice(2), 16) : parseInt(ref.slice(1), 10)
+    return code > 0 && code <= 0x10ffff ? String.fromCodePoint(code) : all
+  })
+}
+
+// A headline or publisher as it shows: decoded, on one line.
+function newsText(text) {
+  return decodeEntities(text).replace(/\s+/g, " ").trim()
+}
+
+// Offsets of the zone names RSS dates use, in minutes east of UTC.
+var ZONES = { GMT: 0, UT: 0, UTC: 0, Z: 0, EST: -300, EDT: -240, CST: -360, CDT: -300, MST: -420, MDT: -360, PST: -480, PDT: -420 }
+
+// RSS pubDate (RFC 822) to unix seconds: "Tue, 24 Nov 2026 12:55 GMT" as
+// CNBC writes its channel date, "Tue, 24 Nov 2026 12:56:00 GMT" or a numeric
+// offset. Parsed by hand because Date.parse reads RFC 822 differently from one
+// JavaScript engine to the next.
+function parseRssDate(text) {
+  var m = /(\d{1,2})\s+([A-Za-z]{3})\s+(\d{4})\s+(\d{1,2}):(\d{2})(?::(\d{2}))?\s*([A-Za-z]+|[+-]\d{4})?/.exec(String(text || ""))
+  if (!m) return NaN
+  var month = MONTHS.indexOf(m[2].charAt(0).toUpperCase() + m[2].slice(1).toLowerCase())
+  var zone = (m[7] || "GMT").toUpperCase()
+  var offset = /^[+-]\d{4}$/.test(zone)
+    ? (zone.charAt(0) === "-" ? -1 : 1) * (Number(zone.slice(1, 3)) * 60 + Number(zone.slice(3)))
+    : ZONES[zone]
+  if (month < 0 || offset === undefined) return NaN
+  return Date.UTC(Number(m[3]), month, Number(m[1]), Number(m[4]), Number(m[5]), Number(m[6] || 0)) / 1000 - offset * 60
+}
+
+// Text of the first <tag> inside an RSS item, attributes allowed, or "".
+function rssField(item, tag) {
+  var m = new RegExp("<" + tag + "(?:\\s[^>]*)?>([\\s\\S]*?)</" + tag + ">").exec(item)
+  return m ? m[1] : ""
+}
+
+// Headlines of one RSS feed, credited to `source`. Only <item> blocks count,
+// so the channel's own title and image never pass for a story; items without
+// a title or a link are dropped.
+function parseRss(xml, source) {
+  var out = []
+  var items = String(xml || "").match(/<item[\s>][\s\S]*?<\/item>/g) || []
+  for (var i = 0; i < items.length; i++) {
+    var title = newsText(rssField(items[i], "title"))
+    var link = newsText(rssField(items[i], "link"))
+    if (title === "" || link === "") continue
+    out.push({ title: title, publisher: String(source || ""), time: parseRssDate(rssField(items[i], "pubDate")), link: link })
+  }
+  return out
+}
+
+// Several feeds' headlines as one list, newest first, up to `limit`. The same
+// story twice (same link, or same title in another feed) shows once; items
+// without a time keep their order below the dated ones.
+function mergeNews(lists, limit) {
+  var all = []
+  var seen = {}
+  for (var i = 0; i < lists.length; i++) {
+    var list = lists[i] || []
+    for (var j = 0; j < list.length; j++) {
+      var item = list[j]
+      if (!item || !item.title || !item.link) continue
+      var title = newsText(item.title)
+      var byLink = "l:" + item.link
+      var byTitle = "t:" + title.toLowerCase()
+      if (seen[byLink] || seen[byTitle]) continue
+      seen[byLink] = seen[byTitle] = true
+      all.push({ title: title, publisher: newsText(item.publisher), time: num(item.time), link: String(item.link), order: all.length })
+    }
+  }
+  all.sort(function(a, b) {
+    var ta = isFinite(a.time) ? a.time : -Infinity
+    var tb = isFinite(b.time) ? b.time : -Infinity
+    if (ta === tb) return a.order - b.order
+    return tb > ta ? 1 : -1
+  })
+  var out = []
+  for (var k = 0; k < all.length && k < limit; k++) {
+    out.push({ title: all[k].title, publisher: all[k].publisher, time: all[k].time, link: all[k].link })
+  }
+  return out
+}
+
+// quotes.sh news output: a symbol's Yahoo headlines as { feed, items }, or
+// one { feed, source, xml } line per RSS feed for the top stories, with
+// { feed, source, error } for a feed that failed. Returns the merged list and
+// every failure, so one feed down still shows the others.
+function parseNews(raw) {
+  var feed = ""
+  var lists = []
+  var errors = []
+  var lines = String(raw || "").split("\n")
+  for (var i = 0; i < lines.length; i++) {
+    var line = lines[i].trim()
+    if (line === "") continue
+    try {
+      var obj = JSON.parse(line)
+      if (!obj || typeof obj !== "object" || !obj.feed) continue
+      feed = String(obj.feed)
+      if (obj.error) errors.push(obj.source ? obj.source + ": " + obj.error : String(obj.error))
+      if (typeof obj.xml === "string") lists.push(parseRss(obj.xml, obj.source))
+      else if (Array.isArray(obj.items)) lists.push(obj.items)
+    } catch (e) {
+      // skip
+    }
+  }
+  return { feed: feed, items: mergeNews(lists, NEWS_LIMIT), error: errors.join(" · ") }
+}
+
+// Cache entry after a news fetch. One that brought nothing back keeps the
+// headlines already on screen and does not count as fresh, so the next look
+// tries again; the error is kept either way for the status line.
+function newsEntry(previous, result, now) {
+  if (result.items.length > 0 || result.error === "") return { items: result.items, error: result.error, fetchedAt: now }
+  return { items: previous && previous.items ? previous.items : [], error: result.error, fetchedAt: 0 }
+}
+
+function newsFresh(entry) {
+  if (!entry || !entry.fetchedAt) return false
+  return Date.now() - entry.fetchedAt < NEWS_TTL_MS
+}
+
+// How long ago a headline came out: "now", "9m ago", "3h ago", "2d ago", then
+// the date once it is a week old. A clock slightly behind the feed reads now.
+function formatAge(unixSeconds, nowMs) {
+  var t = num(unixSeconds)
+  if (!isFinite(t)) return ""
+  var minutes = Math.floor(((nowMs === undefined ? Date.now() : nowMs) / 1000 - t) / 60)
+  if (minutes < 1) return "now"
+  if (minutes < 60) return minutes + "m ago"
+  if (minutes < 24 * 60) return Math.floor(minutes / 60) + "h ago"
+  if (minutes < 7 * 24 * 60) return Math.floor(minutes / (24 * 60)) + "d ago"
+  return formatDay(t)
+}
+
+// Line under a headline: publisher and age, whichever are known.
+function newsMeta(item, nowMs) {
+  var parts = []
+  if (item.publisher) parts.push(item.publisher)
+  var age = formatAge(item.time, nowMs)
+  if (age) parts.push(age)
+  return parts.join(" · ")
+}
+
+// Text in the news list while it has nothing to show, naming the feed.
+function newsPlaceholder(loading, error, feed) {
+  var top = feed === TOP_FEED
+  if (loading) return "Loading " + (top ? "top stories" : shortLabel(feed) + " news") + "…"
+  if (error) return String(error)
+  return top ? "No top stories right now" : "No news for " + shortLabel(feed)
+}
+
+// Shell command that opens a headline in the browser, or "" for anything but
+// an http(s) link. Feeds are outside data, so the URL is single quoted with
+// its own quotes escaped and can never break out of the argument.
+function browserCommand(url) {
+  var link = String(url || "").trim()
+  if (!/^https?:\/\/\S+$/i.test(link)) return ""
+  return "omarchy-launch-browser '" + link.replace(/'/g, "'\\''") + "'"
 }

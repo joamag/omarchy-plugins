@@ -515,6 +515,258 @@ describe("chartGeometry", () => {
   })
 })
 
+describe("decodeEntities", () => {
+  it("decodes the named references feeds use", () => {
+    assert.equal(Model.decodeEntities("Jensen Huang&apos;s return"), "Jensen Huang's return")
+    assert.equal(Model.decodeEntities("Best Buy &amp; more"), "Best Buy & more")
+    assert.equal(Model.decodeEntities("&lt;b&gt; &quot;x&quot;&nbsp;"), "<b> \"x\" ")
+  })
+
+  it("decodes numeric references in hex and decimal", () => {
+    assert.equal(Model.decodeEntities("won&#x2019;t"), "won’t")
+    assert.equal(Model.decodeEntities("&#169; Dow Jones"), "© Dow Jones")
+    assert.equal(Model.decodeEntities("&#x1F4C8;"), "\u{1F4C8}")
+  })
+
+  it("drops CDATA wrappers and decodes once only", () => {
+    assert.equal(Model.decodeEntities("<![CDATA[Sanofi & Insmed]]>"), "Sanofi & Insmed")
+    assert.equal(Model.decodeEntities("&amp;lt;"), "&lt;")
+  })
+
+  it("leaves what it does not know alone", () => {
+    assert.equal(Model.decodeEntities("&bogus; &#0; &#x110000; & alone"), "&bogus; &#0; &#x110000; & alone")
+    assert.equal(Model.decodeEntities("&constructor;"), "&constructor;")
+    assert.equal(Model.decodeEntities(undefined), "")
+  })
+})
+
+describe("newsText", () => {
+  it("decodes and folds a feed field onto one trimmed line", () => {
+    assert.equal(Model.newsText("\n  Sunday&#x2019;s pot roast\n   costs more  "), "Sunday’s pot roast costs more")
+    assert.equal(Model.newsText(null), "")
+  })
+})
+
+describe("parseRssDate", () => {
+  const utc = (h, m, s) => Date.UTC(2026, 10, 24, h, m, s) / 1000
+
+  it("reads RFC 822 dates with or without seconds", () => {
+    assert.equal(Model.parseRssDate("Tue, 24 Nov 2026 12:56:00 GMT"), utc(12, 56, 0))
+    assert.equal(Model.parseRssDate("Tue, 24 Nov 2026 12:55 GMT"), utc(12, 55, 0))
+    assert.equal(Model.parseRssDate("24 nov 2026 12:55:09"), utc(12, 55, 9))
+  })
+
+  it("applies zone names and numeric offsets", () => {
+    assert.equal(Model.parseRssDate("Tue, 24 Nov 2026 07:56:00 EST"), utc(12, 56, 0))
+    assert.equal(Model.parseRssDate("Tue, 24 Nov 2026 07:56:00 -0500"), utc(12, 56, 0))
+    assert.equal(Model.parseRssDate("Tue, 24 Nov 2026 14:26:00 +0130"), utc(12, 56, 0))
+    assert.equal(Model.parseRssDate("Tue, 24 Nov 2026 12:56:00 utc"), utc(12, 56, 0))
+  })
+
+  it("gives NaN for anything it cannot place", () => {
+    assert.ok(Number.isNaN(Model.parseRssDate("yesterday")))
+    assert.ok(Number.isNaN(Model.parseRssDate("Tue, 24 Foo 2026 12:56 GMT")))
+    assert.ok(Number.isNaN(Model.parseRssDate("Tue, 24 Nov 2026 12:56 XYZ")))
+    assert.ok(Number.isNaN(Model.parseRssDate(undefined)))
+  })
+})
+
+describe("rssField", () => {
+  it("reads the first tag, attributes allowed, never a prefixed one", () => {
+    assert.equal(Model.rssField('<guid isPermaLink="false">WP-1</guid>', "guid"), "WP-1")
+    assert.equal(Model.rssField("<media:title>a</media:title><title>b</title><title>c</title>", "title"), "b")
+    assert.equal(Model.rssField("<titles>a</titles>", "title"), "")
+    assert.equal(Model.rssField("<link>x</link>", "pubDate"), "")
+  })
+})
+
+describe("parseRss", () => {
+  it("reads CNBC's items with decoded titles and their times", () => {
+    const items = Model.parseRss(fixture("cnbc-top-news.xml"), "CNBC")
+    assert.equal(items.length, 3)
+    assert.deepEqual(items[0], {
+      title: "Stock futures decline as Nvidia pulls back, giving back part of Monday’s rally: Live updates",
+      publisher: "CNBC",
+      time: Date.UTC(2026, 10, 24, 12, 37, 27) / 1000,
+      link: "https://www.cnbc.com/2026/11/23/stock-market-today-live-updates.html",
+    })
+    assert.equal(items[1].title, "Six key questions raised by Jensen Huang's return to Nvidia")
+    assert.equal(items[2].title, "Stocks making the biggest moves premarket: Nvidia, Anthropic, Best Buy & more")
+  })
+
+  it("never takes the channel's own title or image for a story", () => {
+    const items = Model.parseRss(fixture("marketwatch-top-stories.xml"), "MarketWatch")
+    assert.deepEqual(items.map((i) => i.title), [
+      "Sunday’s pot roast now costs more than a Thanksgiving feast. Why beef won’t get cheaper for years.",
+      "HPE just posted its strongest growth ever \u2014 but its stock is sinking",
+      "The biggest biotech deal in nearly three years carries a hefty $41 billion price tag",
+    ])
+    assert.ok(items.every((i) => i.publisher === "MarketWatch" && i.link.startsWith("https://www.marketwatch.com/story/")))
+  })
+
+  it("drops items without a title or a link and copes with no feed", () => {
+    const xml = '<item><title>no link</title></item><item rdf:about="x"><title>ok</title><link>https://a.b/c</link></item><item><link>https://a.b/d</link></item>'
+    assert.deepEqual(Model.parseRss(xml, undefined), [{ title: "ok", publisher: "", time: NaN, link: "https://a.b/c" }])
+    assert.deepEqual(Model.parseRss(null, "CNBC"), [])
+  })
+})
+
+describe("mergeNews", () => {
+  it("merges feeds newest first and keeps undated items last, in order", () => {
+    const a = [{ title: "A old", link: "https://a/1", time: 100 }, { title: "A undated", link: "https://a/2" }]
+    const b = [{ title: "B new", link: "https://b/1", time: 300, publisher: "B" }, { title: "B undated", link: "https://b/2", time: "soon" }]
+    const merged = Model.mergeNews([a, b], 10)
+    assert.deepEqual(merged.map((i) => i.title), ["B new", "A old", "A undated", "B undated"])
+    assert.deepEqual(merged[0], { title: "B new", publisher: "B", time: 300, link: "https://b/1" })
+  })
+
+  it("shows a story once, matched by link or by title", () => {
+    const a = [{ title: "Sanofi buys Insmed", link: "https://cnbc/1", time: 200 }]
+    const b = [
+      { title: "Other story", link: "https://cnbc/1", time: 300 },
+      { title: "SANOFI  buys   Insmed", link: "https://mw/9", time: 250 },
+      { title: "Fresh", link: "https://mw/10", time: 150 },
+    ]
+    assert.deepEqual(Model.mergeNews([a, b], 10).map((i) => i.link), ["https://cnbc/1", "https://mw/10"])
+  })
+
+  it("drops junk and stops at the limit", () => {
+    const list = [null, { title: "", link: "x" }, { title: "no link" }, ...Array.from({ length: 5 }, (_, i) => ({ title: `t${i}`, link: `l${i}`, time: i }))]
+    assert.deepEqual(Model.mergeNews([list, undefined], 3).map((i) => i.title), ["t4", "t3", "t2"])
+    assert.deepEqual(Model.mergeNews([], 3), [])
+  })
+})
+
+describe("parseNews", () => {
+  it("reads a symbol's headlines", () => {
+    const raw = JSON.stringify({ feed: "AAPL", items: [{ title: "Older", publisher: "Motley Fool", time: 10, link: "https://y/1" }, { title: "Newer", publisher: "Yahoo Finance", time: 20, link: "https://y/2" }] })
+    const news = Model.parseNews(raw)
+    assert.equal(news.feed, "AAPL")
+    assert.deepEqual(news.items.map((i) => i.title), ["Newer", "Older"])
+    assert.equal(news.error, "")
+  })
+
+  it("merges the top stories feeds newest first", () => {
+    const raw = [
+      JSON.stringify({ feed: "markets", source: "CNBC", xml: fixture("cnbc-top-news.xml") }),
+      JSON.stringify({ feed: "markets", source: "MarketWatch", xml: fixture("marketwatch-top-stories.xml") }),
+    ].join("\n")
+    const news = Model.parseNews(raw)
+    assert.equal(news.feed, Model.TOP_FEED)
+    assert.deepEqual(news.items.map((i) => i.publisher), ["CNBC", "MarketWatch", "MarketWatch", "MarketWatch", "CNBC", "CNBC"])
+    assert.equal(news.items[0].title, "Stocks making the biggest moves premarket: Nvidia, Anthropic, Best Buy & more")
+    assert.equal(news.error, "")
+  })
+
+  it("keeps the feeds that answered and names the ones that did not", () => {
+    const raw = [
+      JSON.stringify({ feed: "markets", source: "CNBC", xml: fixture("cnbc-top-news.xml") }),
+      JSON.stringify({ feed: "markets", source: "MarketWatch", error: "fetch failed" }),
+    ].join("\n")
+    const news = Model.parseNews(raw)
+    assert.equal(news.items.length, 3)
+    assert.equal(news.error, "MarketWatch: fetch failed")
+    assert.deepEqual(Model.parseNews('{"feed":"AAPL","items":[],"error":"news failed"}'), { feed: "AAPL", items: [], error: "news failed" })
+  })
+
+  it("skips junk lines and caps the list", () => {
+    const many = Array.from({ length: Model.NEWS_LIMIT + 5 }, (_, i) => ({ title: `t${i}`, link: `https://y/${i}`, time: i }))
+    const raw = `not json\n{}\n{"items":[]}\n${JSON.stringify({ feed: "NVDA", items: many })}\n`
+    const news = Model.parseNews(raw)
+    assert.equal(news.feed, "NVDA")
+    assert.equal(news.items.length, Model.NEWS_LIMIT)
+    assert.deepEqual(Model.parseNews(""), { feed: "", items: [], error: "" })
+  })
+})
+
+describe("newsEntry", () => {
+  const previous = { items: [{ title: "kept" }], error: "", fetchedAt: 5 }
+
+  it("stores a fetch that brought headlines, keeping any partial failure", () => {
+    assert.deepEqual(Model.newsEntry(previous, { items: [{ title: "new" }], error: "" }, 9), { items: [{ title: "new" }], error: "", fetchedAt: 9 })
+    assert.deepEqual(Model.newsEntry(null, { items: [{ title: "new" }], error: "MarketWatch: fetch failed" }, 9).error, "MarketWatch: fetch failed")
+    // A feed with nothing in it is an answer, not a failure.
+    assert.deepEqual(Model.newsEntry(previous, { items: [], error: "" }, 9), { items: [], error: "", fetchedAt: 9 })
+  })
+
+  it("keeps the headlines on screen when a fetch fails, and tries again next time", () => {
+    assert.deepEqual(Model.newsEntry(previous, { items: [], error: "news failed" }, 9), { items: [{ title: "kept" }], error: "news failed", fetchedAt: 0 })
+    assert.deepEqual(Model.newsEntry(undefined, { items: [], error: "news failed" }, 9), { items: [], error: "news failed", fetchedAt: 0 })
+  })
+})
+
+describe("newsFresh", () => {
+  it("honours the five minute TTL", () => {
+    assert.equal(Model.newsFresh({ fetchedAt: Date.now() - 60000 }), true)
+    assert.equal(Model.newsFresh({ fetchedAt: Date.now() - Model.NEWS_TTL_MS - 1 }), false)
+    assert.equal(Model.newsFresh({ fetchedAt: 0 }), false)
+    assert.equal(Model.newsFresh(null), false)
+  })
+})
+
+describe("formatAge", () => {
+  const t = 1795524188
+  const at = (seconds) => (t + seconds) * 1000
+
+  it("counts minutes, hours and days, then gives the date", () => {
+    assert.equal(Model.formatAge(t, at(30)), "now")
+    assert.equal(Model.formatAge(t, at(9 * 60)), "9m ago")
+    assert.equal(Model.formatAge(t, at(3 * 3600 + 300)), "3h ago")
+    assert.equal(Model.formatAge(t, at(2 * 86400)), "2d ago")
+    assert.equal(Model.formatAge(t, at(8 * 86400)), Model.formatDay(t))
+  })
+
+  it("reads a story from slightly ahead of the clock as now", () => {
+    assert.equal(Model.formatAge(t, at(-120)), "now")
+    assert.equal(Model.formatAge(Date.now() / 1000), "now")
+    assert.equal(Model.formatAge(NaN, at(0)), "")
+  })
+})
+
+describe("newsMeta", () => {
+  it("joins publisher and age when known", () => {
+    const now = (1795524188 + 9 * 60) * 1000
+    assert.equal(Model.newsMeta({ publisher: "CNBC", time: 1795524188 }, now), "CNBC · 9m ago")
+    assert.equal(Model.newsMeta({ publisher: "", time: 1795524188 }, now), "9m ago")
+    assert.equal(Model.newsMeta({ publisher: "CNBC", time: NaN }, now), "CNBC")
+    assert.equal(Model.newsMeta({}, now), "")
+  })
+})
+
+describe("newsPlaceholder", () => {
+  it("names the feed on its way, ahead of any error", () => {
+    assert.equal(Model.newsPlaceholder(true, "", "^GSPC"), "Loading S&P 500 news…")
+    assert.equal(Model.newsPlaceholder(true, "news failed", Model.TOP_FEED), "Loading top stories…")
+  })
+
+  it("shows the error, or that the feed is empty", () => {
+    assert.equal(Model.newsPlaceholder(false, "CNBC: fetch failed · MarketWatch: fetch failed", Model.TOP_FEED), "CNBC: fetch failed · MarketWatch: fetch failed")
+    assert.equal(Model.newsPlaceholder(false, "", "AMD"), "No news for AMD")
+    assert.equal(Model.newsPlaceholder(false, "", Model.TOP_FEED), "No top stories right now")
+  })
+})
+
+describe("browserCommand", () => {
+  it("opens http(s) links as one quoted argument", () => {
+    assert.equal(Model.browserCommand(" https://www.cnbc.com/a.html "), "omarchy-launch-browser 'https://www.cnbc.com/a.html'")
+    assert.equal(Model.browserCommand("HTTP://example.com"), "omarchy-launch-browser 'HTTP://example.com'")
+  })
+
+  it("keeps a quote in the link from breaking out of the argument", () => {
+    const url = "https://example.com/it's'; touch /tmp/pwned; echo '"
+    const command = Model.browserCommand(url.replace(/ /g, "%20"))
+    // The same quoting under bash, with printf standing in for the launcher.
+    const result = require("node:child_process").spawnSync("bash", ["-c", command.replace(/^omarchy-launch-browser /, "printf '%s\\n' ")], { encoding: "utf8" })
+    assert.equal(result.stdout, url.replace(/ /g, "%20") + "\n")
+  })
+
+  it("refuses anything that is not a web link", () => {
+    for (const url of ["javascript:alert(1)", "file:///etc/passwd", "ftp://x", "https://a b", "https://", "", undefined]) {
+      assert.equal(Model.browserCommand(url), "", String(url))
+    }
+  })
+})
+
 describe("quotes.sh", () => {
   // A curl stand-in answering from fixtures by URL, logging every URL it was
   // asked for, and failing FLAKY once before succeeding.
@@ -523,7 +775,10 @@ describe("quotes.sh", () => {
 url="\${@: -1}"
 [[ -n \${FAKE_LOG:-} ]] && printf '%s\\n' "$url" >> "$FAKE_LOG"
 case "$url" in
+  *finance/search*newsCount=10*) cat "${FIXTURES}/yahoo-search-news-aapl.json" ;;
   *finance/search*) cat "${FIXTURES}/yahoo-search-tes.json" ;;
+  *cnbc.com*) cat "${FIXTURES}/cnbc-top-news.xml" ;;
+  *dowjones.io*) [[ -n \${FAKE_DOWN:-} ]] || cat "${FIXTURES}/marketwatch-top-stories.xml" ;;
   *chart/%5EGSPC*) cat "${FIXTURES}/yahoo-chart-gspc.json" ;;
   *chart/AMD*) cat "${FIXTURES}/yahoo-chart-amd-5d.json" ;;
   *chart/FLAKY*) if [[ -f "$FAKE_STATE" ]]; then cat "${FIXTURES}/yahoo-chart-gspc.json"; else touch "$FAKE_STATE"; cat "${FIXTURES}/yahoo-chart-error.json"; fi ;;
@@ -586,6 +841,47 @@ esac`)
     fakeCommand(dir, "curl", "exit 7")
     const [search] = runJson("joamag.stocks", "quotes.sh", ["search", "tes"], { bin: dir }).json
     assert.deepEqual(search, { query: "tes", results: [], error: "search failed" })
+  })
+
+  it("condenses a symbol's news", (t) => {
+    const dir = fakeCurl(tmpdir(t))
+    const log = path.join(dir, "urls.log")
+    const result = runJson("joamag.stocks", "quotes.sh", ["news", "AAPL"], { bin: dir, env: { FAKE_LOG: log } })
+    assert.equal(result.json.length, 1)
+    const [news] = result.json
+    assert.equal(news.feed, "AAPL")
+    assert.equal(news.items.length, 3)
+    assert.deepEqual(Object.keys(news.items[0]).sort(), ["link", "publisher", "time", "title"])
+    assert.equal(news.items[0].publisher, "Yahoo Finance")
+    assert.equal(news.items[0].time, 1795524188)
+    assert.match(fs.readFileSync(log, "utf8"), /search\?q=AAPL&quotesCount=0&newsCount=10/)
+  })
+
+  it("reports a news transport failure without breaking the envelope", (t) => {
+    const dir = tmpdir(t)
+    fakeCommand(dir, "curl", "exit 7")
+    const [news] = runJson("joamag.stocks", "quotes.sh", ["news", "^GSPC"], { bin: dir }).json
+    assert.deepEqual(news, { feed: "^GSPC", items: [], error: "news failed" })
+  })
+
+  it("hands every top stories feed over whole, in order", (t) => {
+    const dir = fakeCurl(tmpdir(t))
+    const result = runJson("joamag.stocks", "quotes.sh", ["news"], { bin: dir })
+    assert.equal(result.status, 0)
+    assert.deepEqual(result.json.map((line) => [line.feed, line.source]), [["markets", "CNBC"], ["markets", "MarketWatch"]])
+    assert.ok(result.json.every((line) => line.xml.includes("<item>")))
+    // What the popup does with it: one list, both feeds, newest first.
+    const news = Model.parseNews(result.stdout)
+    assert.equal(news.items.length, 6)
+    assert.equal(news.error, "")
+  })
+
+  it("marks a top stories feed that did not answer and keeps the other", (t) => {
+    const dir = fakeCurl(tmpdir(t))
+    const result = runJson("joamag.stocks", "quotes.sh", ["news"], { bin: dir, env: { FAKE_DOWN: "1" } })
+    assert.equal(result.json[0].source, "CNBC")
+    assert.deepEqual(result.json[1], { feed: "markets", source: "MarketWatch", error: "fetch failed" })
+    assert.equal(Model.parseNews(result.stdout).error, "MarketWatch: fetch failed")
   })
 
   it("rejects bad invocations", () => {

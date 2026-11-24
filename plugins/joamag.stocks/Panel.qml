@@ -49,6 +49,17 @@ Panel {
   property int dragIndex: -1
   property int dragTarget: -1
   property real dragOffset: 0
+  // Popup tab, one of Model.TABS; every open starts on markets.
+  property string tab: "markets"
+  // News tab: whose headlines show ("symbol" for the charted symbol, "top"
+  // for the top stories), feed -> { items, error, fetchedAt }, and the feed
+  // the running fetch is for.
+  property string newsScope: "symbol"
+  property var newsCache: ({})
+  property bool newsLoading: false
+  property string newsQuery: ""
+  // Symbol the remove dialog is asking about ("" = no dialog).
+  property string removalSymbol: ""
 
   // Chart point under the pointer, or null. While set, the hero shows that
   // point's price and its change against the previous close. A held chart
@@ -99,16 +110,20 @@ Panel {
   readonly property bool chartLoading: Model.chartLoading(range, activeQuote, quotesLoading, seriesLoading)
   readonly property var chartSeries: Model.chartSeries(activeSeries, heldSeries, chartLoading)
   readonly property bool chartHeld: chartSeries !== null && chartSeries !== activeSeries
+  readonly property string newsFeed: newsScope === "top" ? Model.TOP_FEED : activeSymbol
+  readonly property var newsItems: newsCache[newsFeed] ? newsCache[newsFeed].items : []
 
   readonly property var actions: [
-    { label: "Refresh", icon: "󰑐", tooltip: "Refresh quotes", spins: true, run: function() { root.refresh() } },
+    { label: "Refresh", icon: "󰑐", tooltip: root.tab === "news" ? "Refresh headlines" : "Refresh quotes", spins: true, run: function() { root.refreshView() } },
     { label: "Pin", icon: "󰐃", tooltip: "Show " + Model.shortLabel(root.activeSymbol) + " in the bar", run: function() { root.pinSymbol(root.activeSymbol) } },
     { label: "Open", icon: "󰏌", tooltip: "Open " + Model.shortLabel(root.activeSymbol) + " on Yahoo Finance", run: function() { root.openInBrowser(root.activeSymbol) } },
     { label: "Add", icon: "󰐕", tooltip: "Add a symbol to the watchlist", run: function() { root.startAdding() } }
   ]
 
-  // Keyboard cursor walks the watchlist rows first, then the footer actions.
-  readonly property int cursorCount: symbols.length + actions.length
+  // Keyboard cursor walks the list first (the watchlist rows, or the headlines
+  // on the news tab), then the footer actions.
+  readonly property int listCount: tab === "news" ? newsItems.length : symbols.length
+  readonly property int cursorCount: listCount + actions.length
 
   function trendColor(value) {
     var t = Model.trend(value)
@@ -122,6 +137,13 @@ Panel {
     quotesLoading = true
     quotesProc.command = [root.scriptPath, "quotes"].concat(symbols)
     quotesProc.running = true
+  }
+
+  // Refresh asked for from the popup: the headlines on the news tab, quotes
+  // everywhere else. The timer and the bar's middle click stay on quotes.
+  function refreshView() {
+    if (tab === "news") ensureNews(true)
+    else refresh()
   }
 
   function applyQuotes(raw) {
@@ -170,10 +192,53 @@ Panel {
     seriesCache = next
   }
 
+  function ensureNews(force) {
+    if (!opened || tab !== "news") return
+    var key = newsFeed
+    if ((force !== true && Model.newsFresh(newsCache[key])) || newsProc.running) return
+    newsLoading = true
+    newsQuery = key
+    newsProc.command = key === Model.TOP_FEED ? [root.scriptPath, "news"] : [root.scriptPath, "news", key]
+    newsProc.running = true
+  }
+
+  function applyNews(raw) {
+    var result = Model.parseNews(raw)
+    var next = {}
+    for (var key in newsCache) next[key] = newsCache[key]
+    next[newsQuery] = Model.newsEntry(newsCache[newsQuery], result, Date.now())
+    newsCache = next
+    if (result.error !== "") lastError = result.error
+  }
+
   function selectSymbol(symbol) {
     if (symbols.indexOf(symbol) < 0) return
     selectedSymbol = symbol
     ensureSeries()
+  }
+
+  function setTab(key) {
+    var next = key === "news" ? "news" : "markets"
+    if (next === tab) return
+    if (editing) cancelAdding()
+    tab = next
+    cursorActive = false
+    cursorIndex = next === "markets" ? Math.max(0, symbols.indexOf(activeSymbol)) : 0
+    ensureNews()
+  }
+
+  function setNewsScope(scope) {
+    newsScope = scope === "top" ? "top" : "symbol"
+    cursorIndex = 0
+  }
+
+  // Headline links come from outside feeds, so the command is built by
+  // Model.browserCommand, which only lets an http(s) link through, quoted.
+  function openHeadline(item) {
+    var command = item ? Model.browserCommand(item.link) : ""
+    if (!root.bar || command === "") return
+    root.bar.run(command)
+    root.close()
   }
 
   function setRange(key) {
@@ -242,6 +307,31 @@ Panel {
     return true
   }
 
+  // ✕ on a row and `x` ask first through the dialog; the removeSymbol IPC
+  // stays immediate for scripts. The last symbol cannot go anyway, so it gets
+  // the usual message rather than a question.
+  function confirmRemove(symbol) {
+    if (symbols.indexOf(symbol) < 0) return
+    if (symbols.length <= 1) {
+      removeSymbol(symbol)
+      return
+    }
+    removeConfirm.selectedIndex = 1
+    removalSymbol = symbol
+    Qt.callLater(function() { removeConfirm.forceActiveFocus() })
+  }
+
+  function cancelRemove() {
+    removalSymbol = ""
+    Qt.callLater(function() { if (keyCatcher) keyCatcher.forceActiveFocus() })
+  }
+
+  function commitRemove() {
+    var symbol = removalSymbol
+    cancelRemove()
+    removeSymbol(symbol)
+  }
+
   function moveSymbol(symbol, delta) {
     var idx = symbols.indexOf(symbol)
     var target = idx + delta
@@ -289,6 +379,7 @@ Panel {
   }
 
   function startAdding() {
+    setTab("markets")
     editing = true
     addError = ""
     addField.text = ""
@@ -404,11 +495,12 @@ Panel {
 
   function activateCursor() {
     if (!cursorActive) return
-    if (cursorIndex < symbols.length) {
-      selectSymbol(symbols[cursorIndex])
+    if (cursorIndex < listCount) {
+      if (tab === "news") openHeadline(newsItems[cursorIndex])
+      else selectSymbol(symbols[cursorIndex])
       return
     }
-    var action = actions[cursorIndex - symbols.length]
+    var action = actions[cursorIndex - listCount]
     if (action) action.run()
   }
 
@@ -424,25 +516,29 @@ Panel {
     function cycleSymbol(): void { root.cycleSymbol(1) }
     function addSymbol(symbol: string): string { return root.addSymbol(symbol) ? "ok" : "exists" }
     function removeSymbol(symbol: string): string { return root.removeSymbol(String(symbol || "").trim().toUpperCase()) ? "ok" : "unknown" }
-    function version(): string { return "0.5.0" }
+    function version(): string { return "0.6.0" }
   }
 
   onOpenedChanged: {
     if (opened) {
+      tab = "markets"
       selectedSymbol = barSymbol
       cursorActive = false
       cursorIndex = Math.max(0, symbols.indexOf(barSymbol))
       cancelDrag()
       refresh()
       ensureSeries()
-    } else if (editing) {
-      cancelAdding()
+    } else {
+      if (editing) cancelAdding()
+      removalSymbol = ""
     }
   }
 
   onSymbolsChanged: refresh()
 
   onActiveSeriesChanged: if (activeSeries && activeSeries.points && activeSeries.points.length > 0) heldSeries = activeSeries
+
+  onNewsFeedChanged: ensureNews()
 
   implicitWidth: button.implicitWidth
   implicitHeight: button.implicitHeight
@@ -472,6 +568,16 @@ Panel {
   Process {
     id: searchProc
     stdout: StdioCollector { waitForEnd: true; onStreamFinished: root.applySearch(text) }
+  }
+
+  Process {
+    id: newsProc
+    stdout: StdioCollector { waitForEnd: true; onStreamFinished: root.applyNews(text) }
+    onExited: {
+      root.newsLoading = false
+      // The symbol or the feed may have moved while this fetch ran.
+      Qt.callLater(root.ensureNews)
+    }
   }
 
   Timer {
@@ -524,13 +630,14 @@ Panel {
     PanelKeyCatcher {
       id: keyCatcher
       anchors.fill: parent
-      blocked: root.editing
-      onDeleteRequested: if (root.cursorActive && root.cursorIndex < root.symbols.length) root.removeSymbol(root.symbols[root.cursorIndex])
+      blocked: root.editing || root.removalSymbol !== ""
+      onDeleteRequested: if (root.tab === "markets" && root.cursorActive && root.cursorIndex < root.symbols.length) root.confirmRemove(root.symbols[root.cursorIndex])
       onMoveRequested: function(dx, dy) {
         if (dy !== 0) { root.moveCursor(dy); return }
-        // Left/right steps the range while the cursor sits on the chart or
-        // the watchlist, and moves along the footer once it reaches it.
-        if (root.cursorActive && root.cursorIndex >= root.symbols.length) root.moveCursor(dx)
+        // Left/right steps the range (the feed, on news) while the cursor
+        // sits on the list, and moves along the footer once it reaches it.
+        if (root.cursorActive && root.cursorIndex >= root.listCount) root.moveCursor(dx)
+        else if (root.tab === "news") root.setNewsScope(dx > 0 ? "top" : "symbol")
         else root.stepRange(dx)
       }
       onActivateRequested: root.activateCursor()
@@ -539,10 +646,11 @@ Panel {
       onTextKey: function(text) {
         if (text === "o") root.openInBrowser(root.activeSymbol)
         else if (text === "p") root.pinSymbol(root.activeSymbol)
-        else if (text === "r") root.refresh()
+        else if (text === "r") root.refreshView()
         else if (text === "a") root.startAdding()
-        else if (text === "J") root.moveSymbol(root.cursorSymbol(), 1)
-        else if (text === "K") root.moveSymbol(root.cursorSymbol(), -1)
+        else if (text === "n") root.setTab(root.tab === "news" ? "markets" : "news")
+        else if (text === "J" && root.tab === "markets") root.moveSymbol(root.cursorSymbol(), 1)
+        else if (text === "K" && root.tab === "markets") root.moveSymbol(root.cursorSymbol(), -1)
       }
 
       Column {
@@ -552,10 +660,44 @@ Panel {
         anchors.top: parent.top
         spacing: Style.space(12)
 
+        // ---------- Tabs: Markets · News ----------
+        Row {
+          id: tabRow
+          width: parent.width
+          spacing: Style.space(6)
+
+          readonly property real cellWidth: (width - spacing * (Model.TABS.length - 1)) / Model.TABS.length
+
+          Repeater {
+            model: Model.TABS
+
+            Button {
+              required property var modelData
+              width: tabRow.cellWidth
+              height: Style.spacing.controlHeight
+              text: modelData.label
+              fontSize: Style.font.bodySmall
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+              horizontalPadding: Style.spacing.sm
+              verticalPadding: Style.spacing.xs
+              bordered: true
+              active: root.tab === modelData.key
+              onClicked: root.setTab(modelData.key)
+            }
+          }
+        }
+
+        // The Markets sections below keep their place on the news tab, only
+        // hidden, so the news view can sit over them at the same height.
+
         // ---------- Hero: selected symbol · name/state · price and change ----------
         Item {
+          id: hero
           width: parent.width
           implicitHeight: Math.max(heroLabels.implicitHeight, heroValues.implicitHeight)
+          opacity: root.tab === "markets" ? 1 : 0
+          enabled: root.tab === "markets"
 
           Column {
             id: heroLabels
@@ -642,45 +784,17 @@ Panel {
         Item {
           width: parent.width
           implicitHeight: Style.space(132)
+          opacity: root.tab === "markets" ? 1 : 0
+          enabled: root.tab === "markets"
 
-          // Activity line in the gap above the chart: a short segment sweeps
-          // across while quotes or a chart series are on their way, and holds
-          // still under the shell's reduced motion.
-          Item {
-            id: activityLine
+          // Activity line in the gap above the chart while quotes or a chart
+          // series are on their way.
+          ActivityLine {
             anchors.left: parent.left
             anchors.right: parent.right
             anchors.bottom: parent.top
             anchors.bottomMargin: Style.space(5)
-            height: 2
-            clip: true
-            opacity: root.loading ? 1 : 0
-            visible: opacity > 0
-
-            Behavior on opacity { NumberAnimation { duration: Style.duration(200) } }
-
-            Rectangle {
-              anchors.fill: parent
-              color: Util.alpha(root.foreground, 0.08)
-            }
-
-            Rectangle {
-              id: activitySweep
-              width: Style.reduceMotion ? parent.width : parent.width * 0.28
-              height: parent.height
-              color: Color.accent
-              opacity: Style.reduceMotion ? 0.4 : 1
-
-              NumberAnimation on x {
-                from: -activitySweep.width
-                to: activityLine.width
-                duration: 1100
-                easing.type: Easing.InOutQuad
-                loops: Animation.Infinite
-                running: activityLine.visible && root.opened && !Style.reduceMotion
-                onRunningChanged: if (!running) activitySweep.x = 0
-              }
-            }
+            active: root.loading
           }
 
           // The chart and the labels read from it, dimmed while a held chart
@@ -852,6 +966,8 @@ Panel {
           id: rangeRow
           width: parent.width
           spacing: Style.space(6)
+          opacity: root.tab === "markets" ? 1 : 0
+          enabled: root.tab === "markets"
 
           readonly property real cellWidth: (width - spacing * (Model.RANGES.length - 1)) / Model.RANGES.length
 
@@ -876,12 +992,17 @@ Panel {
         }
 
         // ---------- Watchlist ----------
-        PanelSeparator { foreground: root.foreground }
+        PanelSeparator {
+          foreground: root.foreground
+          opacity: root.tab === "markets" ? 1 : 0
+        }
 
         Column {
           id: watchlist
           width: parent.width
           spacing: Style.space(2)
+          opacity: root.tab === "markets" ? 1 : 0
+          enabled: root.tab === "markets"
 
           PanelSectionHeader {
             text: "WATCHLIST"
@@ -1121,7 +1242,7 @@ Panel {
               height: actionRow.cellHeight
               iconText: modelData.icon
               iconSize: Style.font.title
-              iconSpinning: modelData.spins === true && root.loading
+              iconSpinning: modelData.spins === true && (root.tab === "news" ? root.newsLoading : root.loading)
               text: modelData.label
               tooltipText: modelData.tooltip
               fontSize: Style.font.bodySmall
@@ -1130,17 +1251,195 @@ Panel {
               horizontalPadding: Style.spacing.controlPaddingX
               verticalPadding: Style.spacing.controlPaddingY
               bordered: true
-              hasCursor: root.cursorActive && root.cursorIndex === root.symbols.length + index
+              hasCursor: root.cursorActive && root.cursorIndex === root.listCount + index
               onClicked: modelData.run()
               onHovered: function(h) {
                 if (h) {
                   root.cursorActive = true
-                  root.cursorIndex = root.symbols.length + index
+                  root.cursorIndex = root.listCount + index
                 }
               }
             }
           }
         }
+      }
+
+      // ---------- News: the symbol's headlines or the top stories ----------
+      // Sits over the Markets sections, in the same place and at the same
+      // height, so switching tabs never resizes the popup; the headlines
+      // scroll inside it.
+      Item {
+        id: newsView
+        anchors.left: column.left
+        anchors.right: column.right
+        y: column.y + hero.y
+        height: watchlist.y + watchlist.height - hero.y
+        visible: root.tab === "news"
+
+        Row {
+          id: scopeRow
+          width: parent.width
+          spacing: Style.space(6)
+
+          readonly property real cellWidth: (width - spacing) / 2
+
+          Repeater {
+            model: [
+              { key: "symbol", label: Model.shortLabel(root.activeSymbol) },
+              { key: "top", label: "Top stories" }
+            ]
+
+            Button {
+              required property var modelData
+              width: scopeRow.cellWidth
+              height: Style.spacing.controlHeight
+              text: modelData.label
+              fontSize: Style.font.caption
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+              horizontalPadding: Style.spacing.sm
+              verticalPadding: Style.spacing.xs
+              bordered: true
+              active: root.newsScope === modelData.key
+              onClicked: root.setNewsScope(modelData.key)
+            }
+          }
+        }
+
+        ActivityLine {
+          anchors.left: parent.left
+          anchors.right: parent.right
+          anchors.bottom: newsList.top
+          anchors.bottomMargin: Style.space(5)
+          active: root.newsLoading
+        }
+
+        ListView {
+          id: newsList
+          anchors.left: parent.left
+          anchors.right: parent.right
+          anchors.top: scopeRow.bottom
+          anchors.topMargin: Style.space(12)
+          anchors.bottom: newsHint.top
+          anchors.bottomMargin: Style.space(4)
+          clip: true
+          spacing: Style.space(2)
+          boundsBehavior: Flickable.StopAtBounds
+          model: root.newsItems
+          // Follows the keyboard cursor so j / k never walk out of view.
+          currentIndex: root.cursorActive && root.cursorIndex < root.newsItems.length ? root.cursorIndex : -1
+          onCurrentIndexChanged: if (currentIndex >= 0) positionViewAtIndex(currentIndex, ListView.Contain)
+
+          // One headline: the title on up to two lines, publisher and age
+          // under it. Click opens it in the browser.
+          delegate: CursorSurface {
+            id: headline
+            required property var modelData
+            required property int index
+
+            width: newsList.width
+            implicitHeight: headlineText.implicitHeight + Style.spacing.lg
+            hasCursor: root.cursorActive && root.cursorIndex === index
+            foreground: root.foreground
+
+            Column {
+              id: headlineText
+              anchors.left: parent.left
+              anchors.right: parent.right
+              anchors.verticalCenter: parent.verticalCenter
+              anchors.leftMargin: Style.space(8)
+              anchors.rightMargin: Style.space(8)
+              spacing: Style.space(2)
+
+              Text {
+                textFormat: Text.PlainText
+                text: String(headline.modelData.title)
+                color: root.foreground
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.body
+                wrapMode: Text.WordWrap
+                maximumLineCount: 2
+                elide: Text.ElideRight
+                width: parent.width
+              }
+
+              Text {
+                textFormat: Text.PlainText
+                text: Model.newsMeta(headline.modelData)
+                color: root.foreground
+                opacity: 0.5
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+                elide: Text.ElideRight
+                width: parent.width
+              }
+            }
+
+            MouseArea {
+              anchors.fill: parent
+              hoverEnabled: true
+              cursorShape: Qt.PointingHandCursor
+              onContainsMouseChanged: if (containsMouse) {
+                root.cursorActive = true
+                root.cursorIndex = headline.index
+              }
+              onClicked: root.openHeadline(headline.modelData)
+            }
+          }
+        }
+
+        Row {
+          anchors.centerIn: newsList
+          visible: root.newsItems.length === 0
+          spacing: Style.space(6)
+
+          Spinner {
+            visible: root.newsLoading
+            spinning: root.newsLoading
+            opacity: 0.5
+            anchors.verticalCenter: parent.verticalCenter
+          }
+
+          Text {
+            text: Model.newsPlaceholder(root.newsLoading, root.newsCache[root.newsFeed] ? root.newsCache[root.newsFeed].error : "", root.newsFeed)
+            color: root.foreground
+            opacity: 0.5
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.bodySmall
+            anchors.verticalCenter: parent.verticalCenter
+          }
+        }
+
+        Text {
+          id: newsHint
+          anchors.left: parent.left
+          anchors.right: parent.right
+          anchors.bottom: parent.bottom
+          textFormat: Text.PlainText
+          text: "h / l switch feed · Enter opens · n back to Markets"
+          color: root.foreground
+          opacity: 0.35
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.caption
+          elide: Text.ElideRight
+        }
+      }
+
+      // Asks before a symbol leaves the watchlist, and holds the keyboard
+      // while open: Enter removes, Esc or a click outside the card keeps it.
+      ConfirmDialog {
+        id: removeConfirm
+        anchors.fill: parent
+        z: 10
+        opened: root.removalSymbol !== ""
+        message: "Remove " + Model.shortLabel(root.removalSymbol) + " from the watchlist?"
+        confirmText: "Remove"
+        background: Color.popups.background
+        foreground: root.foreground
+        fontFamily: root.fontFamily
+        onCanceled: root.cancelRemove()
+        onConfirmed: root.commitRemove()
+        Keys.onPressed: function(event) { if (removeConfirm.handleKey(event)) event.accepted = true }
       }
     }
   }
@@ -1365,7 +1664,7 @@ Panel {
         anchors.fill: parent
         hoverEnabled: true
         cursorShape: Qt.PointingHandCursor
-        onClicked: root.removeSymbol(row.symbol)
+        onClicked: root.confirmRemove(row.symbol)
       }
     }
   }
@@ -1482,6 +1781,43 @@ Panel {
         ctx.beginPath()
         ctx.arc(Math.min(width - 3, last.x), last.y, 3, 0, Math.PI * 2)
         ctx.fill()
+      }
+    }
+  }
+
+  // Thin strip in the gap above a chart or a list: a short segment sweeps
+  // across while `active`, and holds still under the shell's reduced motion.
+  component ActivityLine: Item {
+    id: line
+    property bool active: false
+
+    height: 2
+    clip: true
+    opacity: active ? 1 : 0
+    visible: opacity > 0
+
+    Behavior on opacity { NumberAnimation { duration: Style.duration(200) } }
+
+    Rectangle {
+      anchors.fill: parent
+      color: Util.alpha(root.foreground, 0.08)
+    }
+
+    Rectangle {
+      id: sweep
+      width: Style.reduceMotion ? parent.width : parent.width * 0.28
+      height: parent.height
+      color: Color.accent
+      opacity: Style.reduceMotion ? 0.4 : 1
+
+      NumberAnimation on x {
+        from: -sweep.width
+        to: line.width
+        duration: 1100
+        easing.type: Easing.InOutQuad
+        loops: Animation.Infinite
+        running: line.visible && root.opened && !Style.reduceMotion
+        onRunningChanged: if (!running) sweep.x = 0
       }
     }
   }

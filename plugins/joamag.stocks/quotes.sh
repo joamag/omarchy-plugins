@@ -6,6 +6,7 @@
 #   quotes.sh quotes SYMBOL [SYMBOL...]   intraday (1d, 5 minute) data per symbol
 #   quotes.sh series SYMBOL RANGE         closes for RANGE: 1d 5d 1mo 6mo 1y 5y
 #   quotes.sh search QUERY                symbol suggestions for the add field
+#   quotes.sh news [SYMBOL]               headlines for SYMBOL, or the top stories
 #
 # Each object carries symbol, name, currency, price, prevClose, high, low,
 # state and points ([unix time, close] pairs). Failures become
@@ -15,6 +16,12 @@ set -o pipefail
 
 UA="Mozilla/5.0 (X11; Linux x86_64) omarchy-stocks/0.1"
 BASE="https://query1.finance.yahoo.com/v8/finance/chart"
+
+# Top stories for the news tab, as "source|url" pairs.
+FEEDS=(
+  "CNBC|https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=100003114"
+  "MarketWatch|https://feeds.content.dowjones.io/public/rss/mw_topstories"
+)
 
 urlencode() {
   local s="$1" out="" c hex i
@@ -101,6 +108,48 @@ search() {
     printf '{"query":%s,"results":[],"error":"search failed"}\n' "$(json_string "$query")"
 }
 
+# Headlines for one symbol: one JSON line with up to ten items, each with
+# title, publisher, time and link.
+symbol_news() {
+  local sym="$1"
+  curl -sS --max-time 6 -A "$UA" \
+    "https://query2.finance.yahoo.com/v1/finance/search?q=$(urlencode "$sym")&quotesCount=0&newsCount=10&listsCount=0" 2>/dev/null |
+    jq -c --arg feed "$sym" '
+      { feed: $feed,
+        items: [ (.news // [])[]
+                 | select(.title != null and .link != null)
+                 | { title: .title,
+                     publisher: (.publisher // ""),
+                     time: .providerPublishTime,
+                     link: .link } ] }' 2>/dev/null ||
+    printf '{"feed":%s,"items":[],"error":"news failed"}\n' "$(json_string "$sym")"
+}
+
+# One RSS feed handed over whole as a JSON line; Model.js reads the items, so
+# no XML tool is needed here.
+rss() {
+  local source="$1" url="$2" body
+  body=$(curl -sS --max-time 8 -A "$UA" "$url" 2>/dev/null)
+  if [[ $body != *"<item"* ]]; then
+    printf '{"feed":"markets","source":%s,"error":"fetch failed"}\n' "$(json_string "$source")"
+    return
+  fi
+  jq -Rsc --arg source "$source" '{ feed: "markets", source: $source, xml: . }' <<<"$body"
+}
+
+# Top stories: every feed fetched in parallel, one line each, in FEEDS order.
+top_news() {
+  local tmp i=0 entry
+  tmp=$(mktemp -d) || exit 1
+  trap 'rm -rf "$tmp"' EXIT
+  for entry in "${FEEDS[@]}"; do
+    rss "${entry%%|*}" "${entry#*|}" >"$tmp/$i.json" &
+    (( i++ ))
+  done
+  wait
+  for (( j = 0; j < i; j++ )); do cat "$tmp/$j.json"; done
+}
+
 mode=${1:-}
 shift || true
 
@@ -125,8 +174,11 @@ case "$mode" in
     [[ -n ${1:-} ]] || exit 1
     search "$1"
     ;;
+  news)
+    if [[ -n ${1:-} ]]; then symbol_news "$1"; else top_news; fi
+    ;;
   *)
-    echo "Usage: quotes.sh quotes SYMBOL... | series SYMBOL RANGE | search QUERY" >&2
+    echo "Usage: quotes.sh quotes SYMBOL... | series SYMBOL RANGE | search QUERY | news [SYMBOL]" >&2
     exit 1
     ;;
 esac

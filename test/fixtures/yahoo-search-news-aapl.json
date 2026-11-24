@@ -1,0 +1,50 @@
+{
+  "explains": [],
+  "count": 3,
+  "quotes": [],
+  "news": [
+    {
+      "uuid": "6d621d0a-dfe6-458f-9d31-bec1693a676d",
+      "title": "Jensen Huang's return revives an old Wall Street trade: Bet on the comeback CEO",
+      "publisher": "Yahoo Finance",
+      "link": "https://finance.yahoo.com/markets/article/jensen-huangs-return-revives-an-old-wall-street-trade-bet-on-the-comeback-ceo-124308005.html",
+      "providerPublishTime": 1795524188,
+      "type": "STORY",
+      "relatedTickers": [
+        "^GSPC",
+        "AAPL",
+        "NVDA",
+        "SBUX"
+      ]
+    },
+    {
+      "uuid": "e3731eba-b0db-3260-aab0-5d8980ed3afd",
+      "title": "Cloud AI Update - Audi Integrates Cutting-Edge AI for In-Car Microsoft Access",
+      "publisher": "Simply Wall St.",
+      "link": "https://finance.yahoo.com/technology/ai/articles/cloud-ai-audi-integrates-cutting-123730181.html",
+      "providerPublishTime": 1795523850,
+      "type": "STORY",
+      "relatedTickers": [
+        "MSFT",
+        "GOOG",
+        "AAPL"
+      ]
+    },
+    {
+      "uuid": "70e3a98b-35bd-3503-8f3e-c9e8ccd906fc",
+      "title": "Nvidia Regains Nearly $1 Trillion in Value -- Apple Still Holds the Top Spot",
+      "publisher": "GuruFocus.com",
+      "link": "https://finance.yahoo.com/markets/stocks/articles/nvidia-regains-nearly-1-trillion-120207012.html",
+      "providerPublishTime": 1795521727,
+      "type": "STORY",
+      "relatedTickers": [
+        "NVDA",
+        "AAPL"
+      ]
+    }
+  ],
+  "nav": [],
+  "lists": [],
+  "researchReports": [],
+  "totalTime": 78
+}

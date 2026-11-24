@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss xmlns:content="http://purl.org/rss/1.0/modules/content/" xmlns:media="http://search.yahoo.com/mrss/" xmlns:dc="http://purl.org/dc/elements/1.1/" version="2.0"
+>
+<channel>
+<title>MarketWatch.com - Top Stories</title>
+<description>MarketWatch, a leading publisher of business and financial news, offers users up-to-the minute news, investment tools, and subscription products.</description>
+<link>http://www.marketwatch.com/</link>
+<language>en-us</language>
+<copyright>Copyright &#169; Dow Jones &amp; Company, Inc. All rights reserved.</copyright>
+<lastBuildDate>Tue, 24 Nov 2026 12:59:26 GMT</lastBuildDate>
+<ttl>60</ttl>
+<image>
+<title>MarketWatch.com - Top Stories</title>
+<url>https://www.marketwatch.com/rss/marketwatch.gif</url>
+<link>http://www.marketwatch.com/</link>
+</image>
+<item>
+<guid isPermaLink="false">WP-MKTW-0005364964</guid>
+<title>Sunday&#x2019;s pot roast now costs more than a Thanksgiving feast. Why beef won&#x2019;t get cheaper for years.</title>
+<description>A four-pound chuck roast runs $36.33. Walmart feeds 10 for $35. The turkey is the bait. The cow is the bill.</description>
+<link>https://www.marketwatch.com/story/sundays-pot-roast-now-costs-more-than-a-thanksgiving-feast-why-beef-wont-get-cheaper-for-years-7daa1b3f?mod=mw_rss_topstories</link>
+<pubDate>Tue, 24 Nov 2026 12:56:00 GMT</pubDate>
+<dc:creator>Charlie Garcia</dc:creator>
+<media:content url="https://images.mktw.net/im-30972457" medium="image" type="image/jpeg">
+<media:credit>Getty Images</media:credit>
+</media:content>
+</item>
+<item>
+<guid isPermaLink="false">WP-MKTW-0005365890</guid>
+<title>HPE just posted its strongest growth ever &#x2014; but its stock is sinking</title>
+<description>HPE boosted its financial forecast on Monday in the face of strong AI demand.</description>
+<link>https://www.marketwatch.com/story/hpe-just-posted-its-strongest-growth-ever-and-its-stock-is-tacking-on-more-big-gains-4421cebb?mod=mw_rss_topstories</link>
+<pubDate>Tue, 24 Nov 2026 12:54:00 GMT</pubDate>
+<dc:creator>Emily Bary</dc:creator>
+<media:content url="https://images.mktw.net/im-14671864" medium="image" type="image/jpeg">
+<media:credit>HPE</media:credit>
+</media:content>
+</item>
+<item>
+<guid isPermaLink="false">WP-MKTW-0005366539</guid>
+<title>The biggest biotech deal in nearly three years carries a hefty $41 billion price tag</title>
+<description>French drugmaker Sanofi on Tuesday agreed to pay $41 billion for U.S. biotech Insmed, a hefty price that will help the pharmaceutical giant offset the patent expiration on a key drug.</description>
+<link>https://www.marketwatch.com/story/the-biggest-biotech-deal-in-nearly-three-years-carries-a-hefty-41-billion-price-tag-dd7fa228?mod=mw_rss_topstories</link>
+<pubDate>Tue, 24 Nov 2026 12:50:00 GMT</pubDate>
+<dc:creator>Steve Goldstein</dc:creator>
+<media:content url="https://images.mktw.net/im-84195130" medium="image" type="image/jpeg">
+<media:credit>Sylvain Thomas/Agence France-Presse/Getty Images</media:credit>
+</media:content>
+</item>
+</channel>
+</rss>
