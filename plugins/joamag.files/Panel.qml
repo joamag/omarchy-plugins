@@ -220,6 +220,11 @@ Panel {
   readonly property bool vertical: bar ? bar.vertical : false
   readonly property color foreground: bar ? bar.foreground : Color.foreground
   readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
+  // An icon sits centred in a box of one width with one gap before its
+  // label, so labels start the same distance from their icons everywhere:
+  // the sidebar, the menus, the path bar, the tabs and every view.
+  readonly property real iconBox: Style.space(18)
+  readonly property real iconGap: Style.space(6)
 
   // A view asks for focus on one of its fields, or on itself.
   signal focusRequested(string what)
@@ -2729,7 +2734,7 @@ Panel {
         Row {
           id: crumbRow
           anchors.centerIn: parent
-          spacing: Style.space(4)
+          spacing: crumb.index === 0 ? root.iconGap : Style.space(4)
 
           Text {
             visible: crumb.index > 0
@@ -2744,6 +2749,8 @@ Panel {
 
           Text {
             visible: crumb.index === 0
+            width: root.iconBox
+            horizontalAlignment: Text.AlignHCenter
             textFormat: Text.PlainText
             text: Model.placeIcon(crumb.modelData.path, root.home, root.places, root.drives)
             color: crumbsRoot.foreground
@@ -2807,9 +2814,11 @@ Panel {
       anchors.leftMargin: Style.space(8)
       anchors.rightMargin: Style.space(4)
       anchors.verticalCenter: parent.verticalCenter
-      spacing: Style.space(6)
+      spacing: root.iconGap
 
       Text {
+        width: root.iconBox
+        horizontalAlignment: Text.AlignHCenter
         textFormat: Text.PlainText
         text: Model.placeIcon(chip.tabData.path, root.home, root.places, root.drives)
         color: chip.foreground
@@ -2826,7 +2835,7 @@ Panel {
         font.pixelSize: Style.font.bodySmall
         font.bold: chip.isActive
         elide: Text.ElideRight
-        width: Math.max(0, parent.width - Style.space(40))
+        width: Math.max(0, parent.width - root.iconBox - Style.space(28))
         anchors.verticalCenter: parent.verticalCenter
       }
 
@@ -2904,7 +2913,7 @@ Panel {
     readonly property real innerWidth: width - Style.space(16)
     readonly property real gap: Style.space(10)
     readonly property real nameMin: Style.space(150)
-    readonly property real fixedWidth: Style.space(20) + sizeWidth + dateWidth + gap * 3
+    readonly property real fixedWidth: root.iconBox + root.iconGap + sizeWidth + dateWidth + gap * 2
     readonly property real typeWidth: innerWidth - fixedWidth - (showWhere ? Style.space(100) + gap : 0) - Style.space(110) - gap >= nameMin ? Style.space(110) : 0
     readonly property real whereWidth: {
       if (!showWhere) return 0
@@ -2922,7 +2931,7 @@ Panel {
       height: Style.space(24)
       spacing: listPane.gap
 
-      SortHead { width: Style.space(20) + listPane.gap + listPane.nameWidth; key: "name"; label: "Name"; leading: Style.space(20) + listPane.gap; foreground: listPane.foreground }
+      SortHead { width: root.iconBox + root.iconGap + listPane.nameWidth; key: "name"; label: "Name"; leading: root.iconBox + root.iconGap; foreground: listPane.foreground }
       Text {
         visible: listPane.whereWidth > 0
         width: listPane.whereWidth
@@ -3137,47 +3146,54 @@ Panel {
       spacing: Style.space(10)
       opacity: row.isCut ? 0.45 : (row.entry.hidden ? 0.7 : 1)
 
-      Text {
-        width: Style.space(20)
-        anchors.verticalCenter: parent.verticalCenter
-        horizontalAlignment: Text.AlignHCenter
-        textFormat: Text.PlainText
-        text: Model.kindIcon(row.entry.kind)
-        color: row.entry.dir ? Color.accent : row.foreground
-        font.family: root.fontFamily
-        font.pixelSize: Style.font.body
-      }
-
-      Item {
-        width: row.nameWidth
+      // The icon and the name as a pair, the gap between them the one
+      // every icon has.
+      Row {
         height: parent.height
+        spacing: root.iconGap
 
         Text {
-          visible: !row.renaming
-          anchors.left: parent.left
-          anchors.right: parent.right
+          width: root.iconBox
           anchors.verticalCenter: parent.verticalCenter
+          horizontalAlignment: Text.AlignHCenter
           textFormat: Text.PlainText
-          text: row.entry.name
-          color: row.foreground
+          text: Model.kindIcon(row.entry.kind)
+          color: row.entry.dir ? Color.accent : row.foreground
           font.family: root.fontFamily
-          font.pixelSize: Style.font.bodySmall
-          font.bold: row.entry.dir
-          elide: Text.ElideMiddle
+          font.pixelSize: Style.font.body
         }
 
-        // A text field is the heaviest thing a row could carry; only the
-        // row being renamed gets one.
-        Loader {
-          active: row.renaming
-          anchors.fill: parent
-          anchors.topMargin: 1
-          anchors.bottomMargin: 1
-          sourceComponent: Component {
-            RenameField {
-              active: true
-              entry: row.entry
-              foreground: row.foreground
+        Item {
+          width: row.nameWidth
+          height: parent.height
+
+          Text {
+            visible: !row.renaming
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.verticalCenter: parent.verticalCenter
+            textFormat: Text.PlainText
+            text: row.entry.name
+            color: row.foreground
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.bodySmall
+            font.bold: row.entry.dir
+            elide: Text.ElideMiddle
+          }
+
+          // A text field is the heaviest thing a row could carry; only the
+          // row being renamed gets one.
+          Loader {
+            active: row.renaming
+            anchors.fill: parent
+            anchors.topMargin: 1
+            anchors.bottomMargin: 1
+            sourceComponent: Component {
+              RenameField {
+                active: true
+                entry: row.entry
+                foreground: row.foreground
+              }
             }
           }
         }
@@ -3649,11 +3665,13 @@ Panel {
                 anchors.fill: parent
                 anchors.leftMargin: Style.space(6)
                 anchors.rightMargin: Style.space(6)
-                spacing: Style.space(6)
+                spacing: root.iconGap
                 opacity: cell.entry.hidden ? 0.7 : 1
 
                 Text {
                   anchors.verticalCenter: parent.verticalCenter
+                  width: root.iconBox
+                  horizontalAlignment: Text.AlignHCenter
                   textFormat: Text.PlainText
                   text: Model.kindIcon(cell.entry.kind)
                   color: cell.entry.dir ? Color.accent : columnsPane.foreground
@@ -3662,7 +3680,7 @@ Panel {
                 }
 
                 Item {
-                  width: parent.width - Style.space(36)
+                  width: parent.width - root.iconBox - Style.space(24)
                   height: parent.height
 
                   Text {
@@ -3931,10 +3949,12 @@ Panel {
           anchors.fill: parent
           anchors.leftMargin: Style.space(6)
           anchors.rightMargin: Style.space(6)
-          spacing: Style.space(6)
+          spacing: root.iconGap
 
           Text {
             anchors.verticalCenter: parent.verticalCenter
+            width: root.iconBox
+            horizontalAlignment: Text.AlignHCenter
             textFormat: Text.PlainText
             text: Model.kindIcon(item.entry.kind)
             color: item.entry.dir ? Color.accent : column.foreground
@@ -3943,7 +3963,7 @@ Panel {
           }
 
           Text {
-            width: parent.width - Style.space(36)
+            width: parent.width - root.iconBox - Style.space(24)
             anchors.verticalCenter: parent.verticalCenter
             textFormat: Text.PlainText
             text: item.entry.name
@@ -4474,11 +4494,11 @@ Panel {
       anchors.fill: parent
       anchors.leftMargin: Style.space(8)
       anchors.rightMargin: Style.space(6)
-      spacing: Style.space(8)
+      spacing: root.iconGap
 
       Text {
         anchors.verticalCenter: parent.verticalCenter
-        width: Style.space(18)
+        width: root.iconBox
         horizontalAlignment: Text.AlignHCenter
         textFormat: Text.PlainText
         text: sideRow.glyph
@@ -4489,7 +4509,7 @@ Panel {
 
       Text {
         anchors.verticalCenter: parent.verticalCenter
-        width: parent.width - Style.space(26) - sideDetail.width - sideEject.width - parent.spacing * 2
+        width: parent.width - root.iconBox - sideDetail.width - sideEject.width - parent.spacing * 3
         textFormat: Text.PlainText
         text: sideRow.label
         color: sideRow.foreground
@@ -4708,6 +4728,7 @@ Panel {
           height: Style.space(20)
 
           Row {
+            id: goRow
             anchors.fill: parent
             spacing: Style.space(8)
 
@@ -4730,15 +4751,31 @@ Panel {
               }
             }
 
-            Text {
+            Row {
               anchors.verticalCenter: parent.verticalCenter
-              textFormat: Text.PlainText
-              text: modelData.icon + "  " + modelData.label
-              color: goCard.foreground
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.caption
-              elide: Text.ElideRight
-              width: parent.width - Style.space(28)
+              spacing: root.iconGap
+
+              Text {
+                anchors.verticalCenter: parent.verticalCenter
+                width: root.iconBox
+                horizontalAlignment: Text.AlignHCenter
+                textFormat: Text.PlainText
+                text: modelData.icon
+                color: goCard.foreground
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+              }
+
+              Text {
+                anchors.verticalCenter: parent.verticalCenter
+                textFormat: Text.PlainText
+                text: modelData.label
+                color: goCard.foreground
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+                elide: Text.ElideRight
+                width: goRow.width - Style.space(28) - root.iconBox - root.iconGap
+              }
             }
           }
 
@@ -4813,11 +4850,12 @@ Panel {
               anchors.fill: parent
               anchors.leftMargin: Style.space(8)
               anchors.rightMargin: Style.space(8)
-              spacing: Style.space(8)
+              spacing: root.iconGap
 
               Text {
                 anchors.verticalCenter: parent.verticalCenter
-                width: Style.space(16)
+                width: root.iconBox
+                horizontalAlignment: Text.AlignHCenter
                 textFormat: Text.PlainText
                 text: menuItem.modelData.icon || ""
                 color: menuItem.modelData.danger ? Color.urgent : menuLayer.foreground
@@ -4827,7 +4865,7 @@ Panel {
 
               Text {
                 anchors.verticalCenter: parent.verticalCenter
-                width: parent.width - Style.space(24) - menuShortcut.width - parent.spacing
+                width: parent.width - root.iconBox - menuShortcut.width - parent.spacing * 2
                 textFormat: Text.PlainText
                 text: menuItem.modelData.label
                 color: menuItem.modelData.danger ? Color.urgent : menuLayer.foreground
@@ -5142,33 +5180,38 @@ Panel {
                 anchors.rightMargin: Style.space(8)
                 spacing: Style.space(10)
 
-                Text {
+                Row {
+                  id: jumpName
                   anchors.verticalCenter: parent.verticalCenter
-                  width: Style.space(18)
-                  horizontalAlignment: Text.AlignHCenter
-                  textFormat: Text.PlainText
-                  text: jumpRow.item ? jumpRow.item.icon : ""
-                  color: jumpRow.item && jumpRow.item.source === "tab" ? Color.accent : jumpLayer.foreground
-                  font.family: root.fontFamily
-                  font.pixelSize: Style.font.body
+                  spacing: root.iconGap
+
+                  Text {
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: root.iconBox
+                    horizontalAlignment: Text.AlignHCenter
+                    textFormat: Text.PlainText
+                    text: jumpRow.item ? jumpRow.item.icon : ""
+                    color: jumpRow.item && jumpRow.item.source === "tab" ? Color.accent : jumpLayer.foreground
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.body
+                  }
+
+                  Text {
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: Math.min(implicitWidth, jumpRow.width * 0.4)
+                    textFormat: Text.PlainText
+                    text: jumpRow.item ? jumpRow.item.label : ""
+                    color: jumpLayer.foreground
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.bodySmall
+                    font.bold: true
+                    elide: Text.ElideRight
+                  }
                 }
 
                 Text {
-                  id: jumpLabel
                   anchors.verticalCenter: parent.verticalCenter
-                  width: Math.min(implicitWidth, parent.width * 0.4)
-                  textFormat: Text.PlainText
-                  text: jumpRow.item ? jumpRow.item.label : ""
-                  color: jumpLayer.foreground
-                  font.family: root.fontFamily
-                  font.pixelSize: Style.font.bodySmall
-                  font.bold: true
-                  elide: Text.ElideRight
-                }
-
-                Text {
-                  anchors.verticalCenter: parent.verticalCenter
-                  width: Math.max(0, parent.width - Style.space(18) - parent.spacing * 3 - jumpLabel.width - jumpSource.width)
+                  width: Math.max(0, parent.width - parent.spacing * 2 - jumpName.width - jumpSource.width)
                   textFormat: Text.PlainText
                   text: jumpRow.item && jumpRow.item.source !== "typed" ? Model.prettyPath(jumpRow.item.path, root.home) : ""
                   color: jumpLayer.foreground
@@ -5311,10 +5354,12 @@ Panel {
 
           Row {
             id: allRow
-            spacing: Style.space(8)
+            spacing: root.iconGap
 
             Text {
               anchors.verticalCenter: parent.verticalCenter
+              width: root.iconBox
+              horizontalAlignment: Text.AlignHCenter
               textFormat: Text.PlainText
               text: conflict.all ? "󰄲" : "󰄱"
               color: conflict.foreground
