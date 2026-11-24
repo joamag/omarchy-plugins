@@ -21,7 +21,7 @@ The popup and the window share the tabs; they are saved on the widget's `shell.j
 - Type in the filter to narrow the folder on screen as you type; Enter searches every folder below it by name (hidden files too while they are shown), ↓ goes to the results, Esc clears.
 - Drag files onto a folder, a tab, a sidebar place or a path segment to move them there (hold Ctrl to copy), or out to another app. Files dropped from another app are copied in.
 - Paste where a name is already taken asks first: skip, keep both (the new one becomes `name (copy).ext`) or replace (the old one goes to the Trash), for that file or for the rest too. Pasting next to the original makes a copy without asking.
-- Move to Trash shows a note with Undo; in the Trash, Enter restores an item to where it was (under a "(copy)" name if that name was taken again meanwhile). Delete for good and Empty Trash ask first.
+- Move to Trash shows a note with Undo (or Ctrl+Z); in the Trash, Enter restores an item to where it was (under a "(copy)" name if that name was taken again meanwhile). Delete for good and Empty Trash ask first.
 - Opening a drive that is not mounted mounts it; the eject button in the sidebar unmounts and ejects it, and any tab on it goes home.
 
 ## Keys
@@ -40,6 +40,7 @@ The panel keys of the other widgets and the Nautilus shortcuts both work; `?` sh
 | `r`, F2 | Rename (Enter keeps it, Esc cancels) |
 | `a`, Ctrl+Shift+N, `n` | New folder, new file |
 | `d`, Delete | Move to Trash (delete for good inside the Trash) |
+| Ctrl+Z | Undo the last move to the Trash |
 | Shift+Delete | Delete for good |
 | `o` | Open with |
 | `/`, Ctrl+F | Filter; Enter searches below |

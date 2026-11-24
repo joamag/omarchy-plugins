@@ -77,6 +77,8 @@ Panel {
   // Delete for good or empty the Trash: { kind, entries, message, confirmText }.
   property var confirm: null
   property var toast: null
+  // Trash names of the last move to the Trash, for Undo and Ctrl+Z.
+  property var lastTrashed: []
   property string lastError: ""
   property bool detached: false
   property var apps: []
@@ -689,8 +691,12 @@ Panel {
   }
 
   function undoTrash(names) {
-    var items = names.map(function(n) { return { trashName: n } })
-    act("restore", ["restore"].concat(names), { entries: items })
+    var list = names || lastTrashed
+    if (!list || list.length === 0) return
+    lastTrashed = []
+    toast = null
+    var items = list.map(function(n) { return { trashName: n } })
+    act("restore", ["restore"].concat(list), { entries: items })
   }
 
   // ---- Places, drives and bookmarks -------------------------------------
@@ -752,6 +758,7 @@ Panel {
     case "trash":
       for (i = 0; i < (ctx.entries || []).length; i++) if (ctx.entries[i].dir) list = Model.retargetTabs(list, ctx.entries[i].path, "")
       var names = r.trashed.filter(function(t) { return t.name !== "" }).map(function(t) { return t.name })
+      lastTrashed = names
       if (r.trashed.length > 0) showToast("Moved " + Model.itemsLabel(r.trashed.length, Model.baseName(r.trashed[0].path)) + " to Trash", names.length > 0 ? names : null)
       selected = []
       break
@@ -978,6 +985,7 @@ Panel {
       case Qt.Key_V: paste(location); return true
       case Qt.Key_A: selectAll(); return true
       case Qt.Key_D: toggleBookmark(location); return true
+      case Qt.Key_Z: undoTrash(null); return true
       case Qt.Key_N: if (shift) newItem("mkdir"); return shift
       case Qt.Key_1: setView("list"); return true
       case Qt.Key_2: setView("grid"); return true
@@ -1799,7 +1807,7 @@ Panel {
       interactive: false
       model: crumbsRoot.parts
       // The deepest segment stays in view when the path is long.
-      onCountChanged: positionViewAtEnd()
+      onContentWidthChanged: positionViewAtEnd()
       onWidthChanged: positionViewAtEnd()
 
       delegate: Item {
@@ -1985,10 +1993,21 @@ Panel {
     required property bool shown
 
     readonly property bool showWhere: root.inTrash || root.inRecent || root.deep
-    readonly property real typeWidth: Style.space(110)
     readonly property real sizeWidth: Style.space(74)
     readonly property real dateWidth: Style.space(84)
-    readonly property real whereWidth: showWhere ? Math.min(Style.space(200), width * 0.28) : 0
+    // The name keeps room to be read: in a narrow pane the type column goes
+    // first, then the location column narrows and goes too.
+    readonly property real innerWidth: width - Style.space(16)
+    readonly property real gap: Style.space(10)
+    readonly property real nameMin: Style.space(150)
+    readonly property real fixedWidth: Style.space(20) + sizeWidth + dateWidth + gap * 3
+    readonly property real typeWidth: innerWidth - fixedWidth - (showWhere ? Style.space(100) + gap : 0) - Style.space(110) - gap >= nameMin ? Style.space(110) : 0
+    readonly property real whereWidth: {
+      if (!showWhere) return 0
+      var room = innerWidth - fixedWidth - (typeWidth > 0 ? typeWidth + gap : 0) - gap - nameMin
+      return room >= Style.space(60) ? Math.min(Style.space(200), room) : 0
+    }
+    readonly property real nameWidth: innerWidth - fixedWidth - (typeWidth > 0 ? typeWidth + gap : 0) - (whereWidth > 0 ? whereWidth + gap : 0)
 
     Row {
       id: columnsHead
@@ -1997,11 +2016,11 @@ Panel {
       anchors.leftMargin: Style.space(8)
       anchors.rightMargin: Style.space(8)
       height: Style.space(24)
-      spacing: Style.space(10)
+      spacing: listPane.gap
 
-      SortHead { width: columnsHead.width - Style.space(30) - listPane.whereWidth - listPane.typeWidth - listPane.sizeWidth - listPane.dateWidth - columnsHead.spacing * (listPane.showWhere ? 4 : 3); key: "name"; label: "Name"; leading: Style.space(30); foreground: listPane.foreground }
+      SortHead { width: Style.space(20) + listPane.gap + listPane.nameWidth; key: "name"; label: "Name"; leading: Style.space(20) + listPane.gap; foreground: listPane.foreground }
       Text {
-        visible: listPane.showWhere
+        visible: listPane.whereWidth > 0
         width: listPane.whereWidth
         anchors.verticalCenter: parent.verticalCenter
         textFormat: Text.PlainText
@@ -2012,7 +2031,7 @@ Panel {
         font.pixelSize: Style.font.caption
         font.bold: true
       }
-      SortHead { width: listPane.typeWidth; key: "type"; label: "Type"; foreground: listPane.foreground }
+      SortHead { visible: listPane.typeWidth > 0; width: listPane.typeWidth; key: "type"; label: "Type"; foreground: listPane.foreground }
       SortHead { width: listPane.sizeWidth; key: "size"; label: "Size"; alignRight: true; foreground: listPane.foreground }
       SortHead { width: listPane.dateWidth; key: "modified"; label: root.inTrash ? "Deleted" : (root.inRecent ? "Used" : "Modified"); alignRight: true; foreground: listPane.foreground }
     }
@@ -2047,6 +2066,7 @@ Panel {
         entry: modelData
         entryIndex: index
         foreground: listPane.foreground
+        nameWidth: listPane.nameWidth
         whereWidth: listPane.whereWidth
         typeWidth: listPane.typeWidth
         sizeWidth: listPane.sizeWidth
@@ -2164,6 +2184,7 @@ Panel {
     required property var entry
     required property int entryIndex
     required property color foreground
+    required property real nameWidth
     required property real whereWidth
     required property real typeWidth
     required property real sizeWidth
@@ -2201,7 +2222,7 @@ Panel {
       }
 
       Item {
-        width: parent.width - Style.space(20) - row.whereWidth - row.typeWidth - row.sizeWidth - row.dateWidth - parent.spacing * (row.whereWidth > 0 ? 5 : 4)
+        width: row.nameWidth
         height: parent.height
 
         Text {
@@ -2243,6 +2264,7 @@ Panel {
       }
 
       Text {
+        visible: row.typeWidth > 0
         width: row.typeWidth
         anchors.verticalCenter: parent.verticalCenter
         textFormat: Text.PlainText
@@ -3292,11 +3314,7 @@ Panel {
         foreground: toastCard.foreground
         fontFamily: root.fontFamily
         bordered: true
-        onClicked: {
-          var names = root.toast.undo
-          root.toast = null
-          root.undoTrash(names)
-        }
+        onClicked: root.undoTrash(root.toast.undo)
       }
     }
   }
