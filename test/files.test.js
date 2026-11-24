@@ -1314,6 +1314,32 @@ describe("steppedScroll", () => {
   })
 })
 
+describe("columnWidth", () => {
+  it("keeps a whole width inside the range", () => {
+    assert.equal(Model.columnWidth(250), 250)
+    assert.equal(Model.columnWidth(200.6), 201)
+    assert.equal(Model.columnWidth("300"), 300)
+    assert.equal(Model.columnWidth(10), Model.COLUMN_MIN)
+    assert.equal(Model.columnWidth(5000), Model.COLUMN_MAX)
+  })
+
+  it("falls back to the default for anything that is not a number", () => {
+    assert.equal(Model.columnWidth(undefined), Model.COLUMN_WIDTH)
+    assert.equal(Model.columnWidth("wide"), Model.COLUMN_WIDTH)
+    assert.equal(Model.columnWidth(Infinity), Model.COLUMN_WIDTH)
+  })
+})
+
+describe("longestNames", () => {
+  it("picks the longest names, longest first", () => {
+    const list = [entry("a"), entry("abcd.txt"), entry("ab"), entry("abcdef")]
+    assert.deepEqual(Model.longestNames(list, 2), ["abcd.txt", "abcdef"])
+    assert.equal(Model.longestNames(list).length, 4)
+    assert.equal(Model.longestNames(Array.from({ length: 20 }, (_, i) => entry(`f${i}`))).length, 8)
+    assert.deepEqual(Model.longestNames(null, 3), [])
+  })
+})
+
 describe("uniqueName", () => {
   it("returns a free name unchanged", () => {
     assert.equal(Model.uniqueName(["b.txt"], "a.txt", false), "a.txt")

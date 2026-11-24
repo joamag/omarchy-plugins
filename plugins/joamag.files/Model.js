@@ -1173,6 +1173,31 @@ function steppedScroll(offset, rows, pitch, contentSize, viewSize) {
   return Math.max(0, Math.min(last, row * pitch))
 }
 
+// ---------- Columns ----------
+
+// Width of every column in the columns view, before the shell's spacing
+// scale, and the room a row takes besides the name (margins, icon and
+// arrow) when a column is fitted to its names.
+var COLUMN_WIDTH = 190
+var COLUMN_MIN = 120
+var COLUMN_MAX = 480
+var COLUMN_CHROME = 56
+
+// A column width from settings or a dragged divider, whole and in range.
+function columnWidth(value) {
+  var n = Math.round(Number(value))
+  if (!isFinite(n)) return COLUMN_WIDTH
+  return Math.max(COLUMN_MIN, Math.min(COLUMN_MAX, n))
+}
+
+// The COUNT longest names, the ones worth measuring when a column is
+// fitted: the length in characters picks them well enough.
+function longestNames(entries, count) {
+  return (entries || []).map(function(e) { return String(e.name || "") })
+    .sort(function(a, b) { return b.length - a.length })
+    .slice(0, count || 8)
+}
+
 // ---------- Copy, move and name conflicts ----------
 
 // The first free "name (copy).ext", "name (copy 2).ext" ... Folders and dot

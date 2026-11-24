@@ -23,6 +23,7 @@
       "showPreview": false,
       "sortKey": "name",
       "sortDescending": false,
+      "columnWidth": 190,
       "tabs": [],
       "activeTab": 0,
       "recentFolders": []
@@ -52,6 +53,15 @@
         "type": "boolean",
         "label": "Sort in reverse order",
         "defaultValue": false
+      },
+      {
+        "key": "columnWidth",
+        "type": "integer",
+        "label": "Column width in the columns view",
+        "min": 120,
+        "max": 480,
+        "step": 10,
+        "defaultValue": 190
       }
     ]
   }

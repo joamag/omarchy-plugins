@@ -48,6 +48,8 @@ Panel {
   // Listings of folders seen lately, by path, so a folder shown again (in
   // the tab or as a column) is on screen at once while it is read again.
   property var listingCache: ({})
+  // A column width while a divider is being dragged, 0 otherwise.
+  property int columnDrag: 0
   // The folder changed while nothing showed it; read it again on show.
   property bool folderDirty: false
   // Search results stream in and are added a batch at a time.
@@ -149,6 +151,7 @@ Panel {
   readonly property bool showPreview: setting("showPreview", false) === true
   readonly property string sortKey: Model.normalizeSortKey(setting("sortKey", "name"))
   readonly property bool sortDescending: setting("sortDescending", false) === true
+  readonly property int columnWidth: Model.columnWidth(setting("columnWidth", Model.COLUMN_WIDTH))
   readonly property string scriptPath: String(Qt.resolvedUrl("files.sh")).replace(/^file:\/\//, "")
 
   readonly property var tab: tabs[Math.max(0, Math.min(tabs.length - 1, activeTab))]
@@ -336,6 +339,22 @@ Panel {
 
   function setView(key) {
     updateTab(Model.withView(tab, key))
+  }
+
+  // Dragging a column divider sizes every column at once; the width is
+  // kept when the divider is let go, or set outright by a double click.
+  function resizeColumns(units) {
+    columnDrag = Model.columnWidth(units)
+  }
+
+  function keepColumnWidth() {
+    if (columnDrag <= 0) return
+    setColumnWidth(columnDrag)
+    columnDrag = 0
+  }
+
+  function setColumnWidth(units) {
+    persistSettings({ columnWidth: Model.columnWidth(units) })
   }
 
   // ---- Settings ---------------------------------------------------------
@@ -3478,7 +3497,7 @@ Panel {
     required property bool shown
 
     readonly property var chain: Model.crumbs(root.location, root.home, root.drives)
-    readonly property real columnWidth: Style.space(190)
+    readonly property real columnWidth: Style.space(root.columnDrag || root.columnWidth)
     // The column after the folder on screen keeps one width, folder or file,
     // so the strip does not move as the cursor does.
     readonly property real trailWidth: Math.max(columnWidth, Style.space(230), width - columnWidth * chain.length)
@@ -3497,7 +3516,8 @@ Panel {
     function slideTo(x) {
       var target = Math.max(0, Math.min(lastX(), x))
       slide.stop()
-      if (Math.abs(target - columnsFlick.contentX) > columnWidth * 2) {
+      // While a divider is dragged the strip follows it at once.
+      if (root.columnDrag > 0 || Math.abs(target - columnsFlick.contentX) > columnWidth * 2) {
         columnsFlick.contentX = target
         trailOpacity = 1
         return
@@ -3580,6 +3600,13 @@ Panel {
         Item {
           width: columnsPane.columnWidth
           height: columnsRow.height
+
+          HoverHandler { id: currentHover }
+
+          PanelToolTip {
+            visible: currentHover.hovered
+            text: Model.prettyPath(root.location, root.home)
+          }
 
           Text {
             anchors.centerIn: parent
@@ -3711,11 +3738,9 @@ Panel {
 
           StepScroll { flick: currentColumn; pitch: columnsPane.rowHeight; sideways: columnsFlick; sidePitch: columnsPane.columnWidth }
 
-          Rectangle {
-            anchors.right: parent.right
-            width: 1
-            height: parent.height
-            color: Qt.rgba(columnsPane.foreground.r, columnsPane.foreground.g, columnsPane.foreground.b, 0.12)
+          ColumnDivider {
+            foreground: columnsPane.foreground
+            entries: root.entries
           }
         }
 
@@ -3883,6 +3908,13 @@ Panel {
       function onSortDescendingChanged() { column.snapshot() }
     }
 
+    HoverHandler { id: columnHover }
+
+    PanelToolTip {
+      visible: columnHover.hovered && column.folderPath !== ""
+      text: Model.prettyPath(column.folderPath, root.home)
+    }
+
     ListView {
       id: columnList
       anchors.fill: parent
@@ -3988,11 +4020,65 @@ Panel {
       font.pixelSize: Style.font.caption
     }
 
+    // The dimmed last column fills what is left, so it has no divider.
+    ColumnDivider {
+      visible: !column.passive
+      foreground: column.foreground
+      entries: column.columnEntries
+    }
+  }
+
+  // The line after a column. Dragged, it sizes every column at once;
+  // double clicked, it fits them to the longest names in ENTRIES.
+  component ColumnDivider: Item {
+    id: divider
+    required property color foreground
+    required property var entries
+    property real startX: 0
+    property int startWidth: 0
+    anchors.right: parent.right
+    width: Style.space(7)
+    height: parent.height
+
+    readonly property bool active: dividerMouse.containsMouse || dividerMouse.pressed
+
     Rectangle {
       anchors.right: parent.right
-      width: 1
+      width: divider.active ? 2 : 1
       height: parent.height
-      color: Qt.rgba(column.foreground.r, column.foreground.g, column.foreground.b, 0.12)
+      color: divider.active ? Color.accent : Qt.rgba(divider.foreground.r, divider.foreground.g, divider.foreground.b, 0.12)
+    }
+
+    TextMetrics {
+      id: nameMetrics
+      font.family: root.fontFamily
+      font.pixelSize: Style.font.bodySmall
+    }
+
+    MouseArea {
+      id: dividerMouse
+      anchors.fill: parent
+      hoverEnabled: true
+      preventStealing: true
+      cursorShape: Qt.SplitHCursor
+      // Measured on the window, since the column moves as it resizes.
+      onPressed: function(mouse) {
+        divider.startX = mapToItem(null, mouse.x, 0).x
+        divider.startWidth = root.columnDrag || root.columnWidth
+      }
+      onPositionChanged: function(mouse) {
+        if (pressed) root.resizeColumns(divider.startWidth + (mapToItem(null, mouse.x, 0).x - divider.startX) / Style.spaceReal(1))
+      }
+      onReleased: root.keepColumnWidth()
+      onDoubleClicked: {
+        var widest = 0
+        var names = Model.longestNames(divider.entries, 8)
+        for (var i = 0; i < names.length; i++) {
+          nameMetrics.text = names[i]
+          widest = Math.max(widest, nameMetrics.advanceWidth)
+        }
+        if (widest > 0) root.setColumnWidth(Math.ceil(widest / Style.spaceReal(1)) + Model.COLUMN_CHROME)
+      }
     }
   }
 
