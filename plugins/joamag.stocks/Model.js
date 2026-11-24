@@ -316,6 +316,29 @@ function seriesFresh(entry, range) {
   return Date.now() - entry.fetchedAt < ttl
 }
 
+// Whether the active chart itself is on its way: the 1d chart comes with the
+// symbol's quote, the longer ranges with their own series. Refreshing a quote
+// that is already there does not count, so a symbol Yahoo has no chart for
+// keeps its message through every timed refresh.
+function chartLoading(range, quote, quotesLoading, seriesLoading) {
+  return range === "1d" ? !!quotesLoading && !quote : !!seriesLoading
+}
+
+// Series the big chart draws: the active one, or while a fetch for it is
+// running and nothing is there yet, the last chart that had points, held on
+// screen so the frame never goes blank between ranges or symbols.
+function chartSeries(active, held, loading) {
+  if (active || !loading) return active || null
+  return held && held.points && held.points.length > 0 ? held : null
+}
+
+// Text in the big chart while it has nothing to draw, naming the range that
+// is on its way.
+function chartPlaceholder(loading, error, range) {
+  if (loading) return "Loading " + rangeLabel(range) + " chart…"
+  return error ? String(error) : "No chart data"
+}
+
 function pad2(n) { return (n < 10 ? "0" : "") + n }
 
 var MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]

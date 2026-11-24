@@ -340,6 +340,72 @@ describe("seriesFresh", () => {
   })
 })
 
+describe("chartLoading", () => {
+  it("waits on the quote for the 1d chart and on the series for the rest", () => {
+    assert.equal(Model.chartLoading("1d", undefined, true, false), true)
+    assert.equal(Model.chartLoading("5d", GSPC, false, true), true)
+    assert.equal(Model.chartLoading("5d", undefined, true, false), false)
+  })
+
+  it("ignores a refresh of a quote the chart already has", () => {
+    assert.equal(Model.chartLoading("1d", GSPC, true, false), false)
+    // A failed quote is still an answer: its message stays put while the
+    // next timed refresh runs instead of flipping to a loading state.
+    assert.equal(Model.chartLoading("1d", BAD, true, false), false)
+    // A series fetch still finishing for another range is not the 1d chart's.
+    assert.equal(Model.chartLoading("1d", undefined, false, true), false)
+  })
+
+  it("is idle once nothing is being fetched", () => {
+    assert.equal(Model.chartLoading("1d", undefined, false, false), false)
+    assert.equal(Model.chartLoading("1y", null, undefined, undefined), false)
+  })
+})
+
+describe("chartSeries", () => {
+  const active = { points: [[1, 7742.16]], prevClose: 7666.6 }
+  const held = { points: [[1, 457.5], [2, 458.015]], prevClose: 457.06 }
+
+  it("draws the active series whenever there is one", () => {
+    assert.equal(Model.chartSeries(active, held, true), active)
+    assert.equal(Model.chartSeries(active, held, false), active)
+    // A quote with no intraday points is still the chart to show, never
+    // swapped for another symbol's held one.
+    const empty = { points: [], prevClose: 90.52 }
+    assert.equal(Model.chartSeries(empty, held, true), empty)
+  })
+
+  it("holds the last chart while the active one is fetched", () => {
+    assert.equal(Model.chartSeries(null, held, true), held)
+    assert.equal(Model.chartSeries(undefined, held, true), held)
+  })
+
+  it("lets the held chart go once nothing is loading", () => {
+    assert.equal(Model.chartSeries(null, held, false), null)
+    assert.equal(Model.chartSeries(undefined, undefined, false), null)
+  })
+
+  it("holds nothing without points to draw", () => {
+    assert.equal(Model.chartSeries(null, null, true), null)
+    assert.equal(Model.chartSeries(null, { points: [] }, true), null)
+    assert.equal(Model.chartSeries(null, { prevClose: 1 }, true), null)
+  })
+})
+
+describe("chartPlaceholder", () => {
+  it("names the range on its way while loading, ahead of any error", () => {
+    assert.equal(Model.chartPlaceholder(true, "", "5d"), "Loading 5D chart…")
+    assert.equal(Model.chartPlaceholder(true, "No data for AMD", "1y"), "Loading 1Y chart…")
+    assert.equal(Model.chartPlaceholder(true, "", "bogus"), "Loading 1D chart…")
+  })
+
+  it("shows the last error, or that there is nothing to draw", () => {
+    assert.equal(Model.chartPlaceholder(false, "fetch failed", "1d"), "fetch failed")
+    assert.equal(Model.chartPlaceholder(false, "", "1d"), "No chart data")
+    assert.equal(Model.chartPlaceholder(false, undefined, "5d"), "No chart data")
+  })
+})
+
 describe("pad2", () => {
   it("zero-pads single digits", () => {
     assert.equal(Model.pad2(7), "07")

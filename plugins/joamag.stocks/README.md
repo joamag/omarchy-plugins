@@ -10,6 +10,7 @@ Data comes from Yahoo Finance's public chart endpoint through `curl` and `jq`. N
 - Left click on the bar: open the popup. Right click: pin the next watchlist symbol to the bar. Scroll: walk the watchlist. Middle click: refresh.
 - In the popup, arrow keys or `j`/`k` move over the watchlist and footer actions, `h`/`l` (or left/right) change the chart range, Enter selects the row for the big chart, `o` opens the selected symbol on Yahoo Finance, `p` pins it to the bar, `a` adds a symbol, `x` removes the cursor row, `J`/`K` reorder, Esc closes.
 - Click a row to chart it, right click a row to open it in the browser, drag a row up or down to reorder the watchlist.
+- While quotes or a chart are loading, a thin line sweeps between the price and the chart and the Refresh icon turns. Switching range or symbol keeps the previous chart on screen, dimmed, until the new one arrives; rows still waiting for their first quote pulse, and the add field hint turns while a search or check runs. The bar stays still on timed refreshes, and every animation holds still under the shell's reduced motion setting.
 
 ## Editing the watchlist
 

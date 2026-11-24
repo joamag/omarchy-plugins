@@ -21,6 +21,9 @@ Panel {
   property var quotes: ({})
   // "symbol|range" -> { points, prevClose, fetchedAt }
   property var seriesCache: ({})
+  // Last series the big chart drew with points, held on screen while the next
+  // range or symbol is fetched.
+  property var heldSeries: null
   property string selectedSymbol: ""
   property string range: Model.normalizeRange(setting("range", "1d"))
   property bool quotesLoading: false
@@ -40,6 +43,7 @@ Panel {
   property var suggestions: []
   property int suggestionIndex: -1
   property string searchQuery: ""
+  readonly property bool searching: searchProc.running
   // Drag and drop reordering: the row being dragged, how far it has travelled
   // from the press and the index it would land on (-1 = no drag in progress).
   property int dragIndex: -1
@@ -47,8 +51,9 @@ Panel {
   property real dragOffset: 0
 
   // Chart point under the pointer, or null. While set, the hero shows that
-  // point's price and its change against the previous close.
-  readonly property var hoveredPoint: bigChart.hoverPoint
+  // point's price and its change against the previous close. A held chart
+  // belongs to another range or symbol, so it takes no hover.
+  readonly property var hoveredPoint: chartHeld ? null : bigChart.hoverPoint
   readonly property real hoveredChange: hoveredPoint && root.activeSeries ? hoveredPoint.v - Number(root.activeSeries.prevClose) : NaN
   readonly property real hoveredChangePct: {
     if (!hoveredPoint || !root.activeSeries) return NaN
@@ -86,9 +91,17 @@ Panel {
     return entry || null
   }
   readonly property real activeRangePct: range === "1d" ? Model.changePct(activeQuote) : Model.seriesChangePct(activeSeries)
+  // Market data on its way from Yahoo: sweeps the activity line above the
+  // chart and turns the Refresh icon.
+  readonly property bool loading: quotesLoading || seriesLoading
+  // What the big chart draws: the active series, or the held one, dimmed,
+  // while the active one is still being fetched.
+  readonly property bool chartLoading: Model.chartLoading(range, activeQuote, quotesLoading, seriesLoading)
+  readonly property var chartSeries: Model.chartSeries(activeSeries, heldSeries, chartLoading)
+  readonly property bool chartHeld: chartSeries !== null && chartSeries !== activeSeries
 
   readonly property var actions: [
-    { label: "Refresh", icon: "󰑐", tooltip: "Refresh quotes", run: function() { root.refresh() } },
+    { label: "Refresh", icon: "󰑐", tooltip: "Refresh quotes", spins: true, run: function() { root.refresh() } },
     { label: "Pin", icon: "󰐃", tooltip: "Show " + Model.shortLabel(root.activeSymbol) + " in the bar", run: function() { root.pinSymbol(root.activeSymbol) } },
     { label: "Open", icon: "󰏌", tooltip: "Open " + Model.shortLabel(root.activeSymbol) + " on Yahoo Finance", run: function() { root.openInBrowser(root.activeSymbol) } },
     { label: "Add", icon: "󰐕", tooltip: "Add a symbol to the watchlist", run: function() { root.startAdding() } }
@@ -411,7 +424,7 @@ Panel {
     function cycleSymbol(): void { root.cycleSymbol(1) }
     function addSymbol(symbol: string): string { return root.addSymbol(symbol) ? "ok" : "exists" }
     function removeSymbol(symbol: string): string { return root.removeSymbol(String(symbol || "").trim().toUpperCase()) ? "ok" : "unknown" }
-    function version(): string { return "0.4.0" }
+    function version(): string { return "0.5.0" }
   }
 
   onOpenedChanged: {
@@ -428,6 +441,8 @@ Panel {
   }
 
   onSymbolsChanged: refresh()
+
+  onActiveSeriesChanged: if (activeSeries && activeSeries.points && activeSeries.points.length > 0) heldSeries = activeSeries
 
   implicitWidth: button.implicitWidth
   implicitHeight: button.implicitHeight
@@ -571,7 +586,6 @@ Panel {
                 else {
                   var state = Model.marketStateLabel(root.activeQuote)
                   if (state) parts.push(state)
-                  if (root.quotesLoading) parts.push("Updating")
                 }
                 return parts.join(" · ").toUpperCase()
               }
@@ -629,33 +643,114 @@ Panel {
           width: parent.width
           implicitHeight: Style.space(132)
 
-          LineChart {
-            id: bigChart
-            anchors.fill: parent
-            points: root.activeSeries && root.activeSeries.points ? root.activeSeries.points : []
-            referenceValue: root.activeSeries ? Number(root.activeSeries.prevClose) : NaN
-            lineColor: root.trendColor(root.activeRangePct)
-            fillTop: Util.alpha(root.trendColor(root.activeRangePct), 0.28)
-            fillBottom: Util.alpha(root.trendColor(root.activeRangePct), 0.0)
-            baselineColor: Util.alpha(root.foreground, 0.35)
-            gridColor: Util.alpha(root.foreground, 0.08)
-            lineWidth: 1.6
-            padTop: Style.space(16)
-            padBottom: Style.space(14)
-            showEndDot: true
-          }
-
-          // Range extremes in the corners, axis labels along the bottom.
-          Text {
+          // Activity line in the gap above the chart: a short segment sweeps
+          // across while quotes or a chart series are on their way, and holds
+          // still under the shell's reduced motion.
+          Item {
+            id: activityLine
             anchors.left: parent.left
-            anchors.top: parent.top
-            text: isFinite(bigChart.maxValue) ? "H " + Model.formatNumber(bigChart.maxValue, Model.priceDecimals(bigChart.maxValue)) : ""
-            color: root.foreground
-            opacity: 0.55
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.caption
+            anchors.right: parent.right
+            anchors.bottom: parent.top
+            anchors.bottomMargin: Style.space(5)
+            height: 2
+            clip: true
+            opacity: root.loading ? 1 : 0
+            visible: opacity > 0
+
+            Behavior on opacity { NumberAnimation { duration: Style.duration(200) } }
+
+            Rectangle {
+              anchors.fill: parent
+              color: Util.alpha(root.foreground, 0.08)
+            }
+
+            Rectangle {
+              id: activitySweep
+              width: Style.reduceMotion ? parent.width : parent.width * 0.28
+              height: parent.height
+              color: Color.accent
+              opacity: Style.reduceMotion ? 0.4 : 1
+
+              NumberAnimation on x {
+                from: -activitySweep.width
+                to: activityLine.width
+                duration: 1100
+                easing.type: Easing.InOutQuad
+                loops: Animation.Infinite
+                running: activityLine.visible && root.opened && !Style.reduceMotion
+                onRunningChanged: if (!running) activitySweep.x = 0
+              }
+            }
           }
 
+          // The chart and the labels read from it, dimmed while a held chart
+          // stands in for the range or symbol being fetched.
+          Item {
+            anchors.fill: parent
+            opacity: root.chartHeld ? 0.35 : 1
+
+            Behavior on opacity { NumberAnimation { duration: Style.duration(200) } }
+
+            LineChart {
+              id: bigChart
+              anchors.fill: parent
+              points: root.chartSeries && root.chartSeries.points ? root.chartSeries.points : []
+              referenceValue: root.chartSeries ? Number(root.chartSeries.prevClose) : NaN
+              lineColor: root.trendColor(root.activeRangePct)
+              fillTop: Util.alpha(root.trendColor(root.activeRangePct), 0.28)
+              fillBottom: Util.alpha(root.trendColor(root.activeRangePct), 0.0)
+              baselineColor: Util.alpha(root.foreground, 0.35)
+              gridColor: Util.alpha(root.foreground, 0.08)
+              lineWidth: 1.6
+              padTop: Style.space(16)
+              padBottom: Style.space(14)
+              showEndDot: true
+            }
+
+            // Range extremes in the corners, axis labels along the bottom.
+            Text {
+              anchors.left: parent.left
+              anchors.top: parent.top
+              text: isFinite(bigChart.maxValue) ? "H " + Model.formatNumber(bigChart.maxValue, Model.priceDecimals(bigChart.maxValue)) : ""
+              color: root.foreground
+              opacity: 0.55
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+            }
+
+            Text {
+              anchors.left: parent.left
+              anchors.bottom: parent.bottom
+              text: bigChart.points.length > 0 ? Model.formatAxis(bigChart.points[0][0], root.range) : ""
+              color: root.foreground
+              opacity: 0.45
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+            }
+
+            Text {
+              anchors.horizontalCenter: parent.horizontalCenter
+              anchors.bottom: parent.bottom
+              text: isFinite(bigChart.minValue) ? "L " + Model.formatNumber(bigChart.minValue, Model.priceDecimals(bigChart.minValue)) : ""
+              color: root.foreground
+              opacity: 0.45
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+            }
+
+            Text {
+              anchors.right: parent.right
+              anchors.bottom: parent.bottom
+              text: bigChart.points.length > 0 ? Model.formatAxis(bigChart.points[bigChart.points.length - 1][0], root.range) : ""
+              color: root.foreground
+              opacity: 0.45
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+            }
+          }
+
+          // The range being shown stays at full strength over a held chart,
+          // so it names what is loading.
           Text {
             anchors.right: parent.right
             anchors.top: parent.top
@@ -666,44 +761,26 @@ Panel {
             font.bold: true
           }
 
-          Text {
-            anchors.left: parent.left
-            anchors.bottom: parent.bottom
-            text: bigChart.points.length > 0 ? Model.formatAxis(bigChart.points[0][0], root.range) : ""
-            color: root.foreground
-            opacity: 0.45
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.caption
-          }
-
-          Text {
-            anchors.horizontalCenter: parent.horizontalCenter
-            anchors.bottom: parent.bottom
-            text: isFinite(bigChart.minValue) ? "L " + Model.formatNumber(bigChart.minValue, Model.priceDecimals(bigChart.minValue)) : ""
-            color: root.foreground
-            opacity: 0.45
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.caption
-          }
-
-          Text {
-            anchors.right: parent.right
-            anchors.bottom: parent.bottom
-            text: bigChart.points.length > 0 ? Model.formatAxis(bigChart.points[bigChart.points.length - 1][0], root.range) : ""
-            color: root.foreground
-            opacity: 0.45
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.caption
-          }
-
-          Text {
+          Row {
             anchors.centerIn: parent
             visible: bigChart.points.length === 0
-            text: root.seriesLoading || root.quotesLoading ? "Loading chart…" : (root.lastError !== "" ? root.lastError : "No chart data")
-            color: root.foreground
-            opacity: 0.5
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.bodySmall
+            spacing: Style.space(6)
+
+            Spinner {
+              visible: root.chartLoading
+              spinning: root.chartLoading
+              opacity: 0.5
+              anchors.verticalCenter: parent.verticalCenter
+            }
+
+            Text {
+              text: Model.chartPlaceholder(root.chartLoading, root.lastError, root.range)
+              color: root.foreground
+              opacity: 0.5
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.bodySmall
+              anchors.verticalCenter: parent.verticalCenter
+            }
           }
 
           // Hover crosshair: hairline and dot on the nearest point, with a
@@ -712,7 +789,7 @@ Panel {
             anchors.fill: parent
             hoverEnabled: true
             acceptedButtons: Qt.NoButton
-            cursorShape: bigChart.points.length > 0 ? Qt.CrossCursor : Qt.ArrowCursor
+            cursorShape: bigChart.points.length > 0 && !root.chartHeld ? Qt.CrossCursor : Qt.ArrowCursor
             onPositionChanged: function(mouse) { bigChart.hoverIndex = bigChart.indexAt(mouse.x) }
             onExited: bigChart.hoverIndex = -1
           }
@@ -877,15 +954,39 @@ Panel {
                 }
               }
 
-              Text {
+              // Turns while a search or the Enter check runs. The spinner keeps
+              // its slot and the text keeps the idle hint's width, so the field
+              // does not change size each time a search comes and goes.
+              Row {
                 id: addHint
                 anchors.verticalCenter: parent.verticalCenter
-                textFormat: Text.PlainText
-                text: root.validating ? "Checking…" : "Enter adds · Esc done"
-                color: root.foreground
-                opacity: 0.5
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.caption
+                spacing: Style.space(6)
+
+                Spinner {
+                  spinning: root.searching || root.validating
+                  opacity: spinning ? 0.5 : 0
+                  font.pixelSize: Style.font.caption
+                  anchors.verticalCenter: parent.verticalCenter
+                }
+
+                Text {
+                  id: addHintText
+                  anchors.verticalCenter: parent.verticalCenter
+                  width: Math.max(implicitWidth, Math.ceil(idleHint.advanceWidth))
+                  horizontalAlignment: Text.AlignRight
+                  textFormat: Text.PlainText
+                  text: root.validating ? "Checking " + Model.shortLabel(root.pendingSymbol) + "…" : (root.searching ? "Searching…" : "Enter adds · Esc done")
+                  color: root.foreground
+                  opacity: 0.5
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+
+                  TextMetrics {
+                    id: idleHint
+                    font: addHintText.font
+                    text: "Enter adds · Esc done"
+                  }
+                }
               }
             }
 
@@ -1020,6 +1121,7 @@ Panel {
               height: actionRow.cellHeight
               iconText: modelData.icon
               iconSize: Style.font.title
+              iconSpinning: modelData.spins === true && root.loading
               text: modelData.label
               tooltipText: modelData.tooltip
               fontSize: Style.font.bodySmall
@@ -1058,6 +1160,9 @@ Panel {
     readonly property real pct: Model.changePct(quote)
     readonly property color trendColor: root.trendColor(pct)
     readonly property bool dragging: root.dragIndex === rowIndex
+    // No quote yet while one is being fetched: the row pulses until it lands,
+    // the way the Tailscale panel marks an account it is switching to.
+    readonly property bool pending: !quote && root.quotesLoading
 
     hasCursor: root.cursorActive && root.cursorIndex === rowIndex
     current: root.activeSymbol === symbol
@@ -1086,6 +1191,14 @@ Panel {
       // Leaves room for the remove control at the right edge.
       anchors.rightMargin: Style.space(8) + Style.space(18) + Style.space(6)
       spacing: Style.space(10)
+      opacity: row.pending ? 0.45 : 1
+
+      SequentialAnimation on opacity {
+        running: row.pending && root.opened && !Style.reduceMotion
+        loops: Animation.Infinite
+        NumberAnimation { to: 1.0; duration: Style.duration(950); easing.type: Easing.InOutSine }
+        NumberAnimation { to: 0.45; duration: Style.duration(950); easing.type: Easing.InOutSine }
+      }
 
       Column {
         width: parent.width - spark.width - values.width - parent.spacing * 2
@@ -1370,6 +1483,29 @@ Panel {
         ctx.arc(Math.min(width - 3, last.x), last.y, 3, 0, Math.PI * 2)
         ctx.fill()
       }
+    }
+  }
+
+  // Refresh glyph that turns while `spinning`, the way the disks and home
+  // widgets mark a busy row. Shared by the chart placeholder and the add
+  // field hint; holds still under the shell's reduced motion.
+  component Spinner: Text {
+    id: spinner
+    property bool spinning: false
+
+    textFormat: Text.PlainText
+    text: "󰑐"
+    color: root.foreground
+    font.family: root.fontFamily
+    font.pixelSize: Style.font.bodySmall
+
+    RotationAnimation on rotation {
+      from: 0
+      to: 360
+      duration: Style.duration(900)
+      loops: Animation.Infinite
+      running: spinner.spinning && !Style.reduceMotion
+      onRunningChanged: if (!running) spinner.rotation = 0
     }
   }
 }
