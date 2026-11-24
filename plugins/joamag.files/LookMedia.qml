@@ -28,14 +28,14 @@ Item {
     else player.play()
   }
 
-  // A video or a song plays as soon as it is shown.
-  onPathChanged: if (path !== "") player.play()
-
   MediaPlayer {
     id: player
     source: media.path !== "" ? Model.fileUrl(media.path) : ""
     videoOutput: media.video ? videoOut : null
     audioOutput: AudioOutput {}
+    // A video or a song plays as soon as it is shown: once the player has
+    // the file, since the path changes before the source follows it.
+    onSourceChanged: if (String(source) !== "") play()
   }
 
   Item {
