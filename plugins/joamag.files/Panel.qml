@@ -35,6 +35,9 @@ Panel {
   property int jumpIndex: 0
   // Space: the entry under the cursor in a large preview over the view.
   property bool lookOpen: false
+  // f: the start of a name typed to find it, the way Explorer does.
+  property bool finding: false
+  property string findText: ""
 
   // Places, bookmarks, drives and the trash count from files.sh, and the
   // free space of the filesystem the folder on screen lives on.
@@ -212,6 +215,7 @@ Panel {
   readonly property string hintMode: {
     if (prompt) return "prompt"
     if (jumpOpen) return "jump"
+    if (finding) return "find"
     if (renamePath !== "") return "rename"
     if (editingPath) return "path"
     if (filtering && filterFocused) return "filter"
@@ -266,6 +270,7 @@ Panel {
     menu = null
     goMenuOpen = false
     lookOpen = false
+    endFind()
     lastError = ""
   }
 
@@ -1475,6 +1480,47 @@ Panel {
     lookOpen = false
   }
 
+  // f, then the start of a name: the cursor goes to the first name that
+  // starts that way, as typing does in Explorer, until a second passes with
+  // nothing typed.
+  function startFind() {
+    finding = true
+    findText = ""
+    findTimer.restart()
+  }
+
+  function endFind() {
+    finding = false
+    findText = ""
+    findTimer.stop()
+  }
+
+  function findTo(text) {
+    findText = text
+    findTimer.restart()
+    var at = Model.typeAheadIndex(entries, text, cursorIndex)
+    if (at >= 0) {
+      cursorIndex = at
+      anchorIndex = at
+    }
+  }
+
+  // Letters add to the name and Backspace takes one back; Esc stops. Any
+  // other key, Enter among them, stops finding and does what it always
+  // does, so Enter opens what was found.
+  function findKey(event) {
+    var mods = event.modifiers & (Qt.ControlModifier | Qt.AltModifier | Qt.MetaModifier)
+    if (event.key === Qt.Key_Escape) endFind()
+    else if (event.key === Qt.Key_Backspace && findText !== "") findTo(findText.slice(0, -1))
+    else if (event.key === Qt.Key_Backspace) endFind()
+    else if (!mods && event.text.length === 1 && event.text >= " " && event.text !== "\u007f") findTo(findText + event.text)
+    else {
+      endFind()
+      return false
+    }
+    return true
+  }
+
   function closeJump() {
     jumpOpen = false
     focusRequested("view")
@@ -1648,6 +1694,7 @@ Panel {
     var alt = (event.modifiers & Qt.AltModifier) !== 0
     var columns = view === "grid" ? Math.max(1, gridColumns) : 1
 
+    if (finding && findKey(event)) return true
     if (keysOpen) {
       if (key === Qt.Key_Escape || text === "?" || key === Qt.Key_Return) keysOpen = false
       return true
@@ -1758,6 +1805,7 @@ Panel {
       return true
     case "o": openWith(cursorEntry); return true
     case "/": startFilter(); return true
+    case "f": startFind(); return true
     case "g": goMenuOpen = true; return true
     case "e": startPathEdit(); return true
     case "i": togglePreview(); return true
@@ -1899,6 +1947,13 @@ Panel {
       freeProc.command = [root.scriptPath, "free", root.location]
       if (!freeProc.running) freeProc.running = true
     }
+  }
+
+  // Finding stops a second after the last letter, or two when none came.
+  Timer {
+    id: findTimer
+    interval: root.findText === "" ? 2000 : 1000
+    onTriggered: root.endFind()
   }
 
   // Leading and trailing: a single step shows at once, a held key shows
@@ -2598,6 +2653,14 @@ Panel {
     // ---------- Overlays ----------
     Toast {
       x: main.x + (main.width - width) / 2
+      anchors.bottom: parent.bottom
+      anchors.bottomMargin: footer.height + Style.space(14)
+      foreground: viewRoot.foreground
+      background: viewRoot.background
+    }
+
+    FindBox {
+      x: main.x + Style.space(14)
       anchors.bottom: parent.bottom
       anchors.bottomMargin: footer.height + Style.space(14)
       foreground: viewRoot.foreground
@@ -4712,6 +4775,45 @@ Panel {
   }
 
   // Short-lived note at the bottom, with Undo after a move to the Trash.
+  // What f has typed so far, in the corner while finding.
+  component FindBox: BorderSurface {
+    id: findCard
+    required property color foreground
+    required property color background
+    visible: root.finding
+    z: 20
+    color: background
+    borderSpec: Border.flat(Color.accent, Style.normalBorderWidth)
+    padding: Style.space(8)
+    width: findRow.implicitWidth + findCard.contentLeftInset + findCard.contentRightInset
+    height: findRow.implicitHeight + findCard.contentTopInset + findCard.contentBottomInset
+
+    Row {
+      id: findRow
+      anchors.centerIn: parent
+      spacing: Style.space(8)
+
+      Text {
+        textFormat: Text.PlainText
+        text: "Find"
+        color: findCard.foreground
+        opacity: 0.5
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.caption
+      }
+
+      Text {
+        textFormat: Text.PlainText
+        text: root.findText + "▏"
+        // Red once no name starts with what was typed.
+        color: root.findText !== "" && Model.typeAheadIndex(root.entries, root.findText, root.cursorIndex) < 0 ? Color.urgent : findCard.foreground
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.caption
+        font.bold: true
+      }
+    }
+  }
+
   component Toast: BorderSurface {
     id: toastCard
     required property color foreground

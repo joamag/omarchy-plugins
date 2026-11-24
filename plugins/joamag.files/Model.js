@@ -103,12 +103,13 @@ var HINTS = {
     { key: "j/k", label: "move" }, { key: "l", label: "open" }, { key: "h", label: "up" }, { key: "Space", label: "preview" },
     { key: "y", label: "copy" }, { key: "x", label: "cut" }, { key: "p", label: "paste" }, { key: "r", label: "rename" },
     { key: "a", label: "folder" }, { key: "d", label: "trash" }, { key: "o", label: "open with" }, { key: "/", label: "filter" },
-    { key: "g", label: "go to" }, { key: "w", label: "window" }, { key: "?", label: "keys" }
+    { key: "f", label: "find" }, { key: "g", label: "go to" }, { key: "w", label: "window" }, { key: "?", label: "keys" }
   ],
   trash: [
     { key: "j/k", label: "move" }, { key: "Enter", label: "restore" }, { key: "Space", label: "preview" },
     { key: "Delete", label: "delete for good" }, { key: "g", label: "go to" }, { key: "?", label: "keys" }
   ],
+  find: [{ key: "type", label: "the start of a name" }, { key: "Backspace", label: "erase" }, { key: "Enter", label: "open" }, { key: "Esc", label: "stop" }],
   filter: [{ key: "type", label: "to filter" }, { key: "Enter", label: "search below" }, { key: "↓", label: "to the results" }, { key: "Esc", label: "clear" }],
   rename: [{ key: "Enter", label: "rename" }, { key: "Esc", label: "cancel" }],
   archive: [
@@ -128,7 +129,7 @@ var KEYS = [
   ["x  Ctrl+X", "Cut"], ["p  Ctrl+V", "Paste"], ["r  F2", "Rename"], ["a  Ctrl+Shift+N", "New folder"],
   ["n", "New file"], ["d  Delete", "Move to Trash"], ["Ctrl+Z", "Undo the move to Trash"], ["Shift+Delete", "Delete for good"],
   ["o", "Open with"], ["E", "Extract the archive here"], ["Z", "Compress to .zip"],
-  ["<  >", "Previous, next PDF page in the preview"], ["p, in the large preview", "Play or pause"], ["/  Ctrl+F", "Filter, Enter searches below"], ["g", "Go to a place"], ["Ctrl+P", "Jump to a recent folder"], ["e  Ctrl+L", "Type a path"], ["t  Ctrl+T", "New tab"],
+  ["<  >", "Previous, next PDF page in the preview"], ["p, in the large preview", "Play or pause"], ["/  Ctrl+F", "Filter, Enter searches below"], ["f", "Find a name by typing its start"], ["g", "Go to a place"], ["Ctrl+P", "Jump to a recent folder"], ["e  Ctrl+L", "Type a path"], ["t  Ctrl+T", "New tab"],
   ["q  Ctrl+W", "Close the tab"], ["[ ]  Ctrl+Tab", "Previous, next tab"], ["1-9", "Go to a tab"], ["v  Ctrl+1 2 3", "List, grid, columns"],
   [".  Ctrl+H", "Hidden files"], ["i", "Preview pane"], ["s", "Sort by the next column"], ["Ctrl+D", "Bookmark the folder"],
   ["w", "Pop out or dock"], ["N", "Open in Nautilus"], ["Esc", "Clear, then close"], ["Tab", "Next widget"]
@@ -1194,6 +1195,30 @@ function keepSelected(selected, list) {
   var out = []
   for (var i = 0; i < (selected || []).length; i++) if (indexOfPath(list, selected[i]) >= 0) out.push(selected[i])
   return out
+}
+
+// Where typing the start of a name lands the cursor, the way Explorer finds
+// it: a first letter moves on to the next name after the cursor with it, so
+// typing it again steps through them; more letters keep the cursor on its
+// name while it still fits and look further when it no longer does; the
+// same letter over and over steps through the names it starts. Names match
+// whatever their case; -1 when none does.
+function typeAheadIndex(list, prefix, from) {
+  var entries = list || []
+  var text = String(prefix || "").toLowerCase()
+  if (text === "" || entries.length === 0) return -1
+  var start = Math.max(0, Math.min(entries.length - 1, from || 0))
+  function next(head, offset) {
+    for (var i = 0; i < entries.length; i++) {
+      var at = (start + offset + i) % entries.length
+      if (entries[at].lower.indexOf(head) === 0) return at
+    }
+    return -1
+  }
+  if (text.length === 1) return next(text, 1)
+  var hit = next(text, 0)
+  if (hit < 0 && text.split("").every(function(c) { return c === text.charAt(0) })) hit = next(text.charAt(0), 1)
+  return hit
 }
 
 // ---------- Wheel ----------

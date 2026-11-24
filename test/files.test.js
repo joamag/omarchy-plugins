@@ -1355,6 +1355,37 @@ describe("keepSelected", () => {
   })
 })
 
+describe("typeAheadIndex", () => {
+  const names = ["alpha", "apple", "banana", "Berry", "cherry"].map((n) => entry(n))
+
+  it("moves to the next name after the cursor with the first letter, wrapping", () => {
+    assert.equal(Model.typeAheadIndex(names, "a", 0), 1)
+    assert.equal(Model.typeAheadIndex(names, "a", 1), 0)
+    assert.equal(Model.typeAheadIndex(names, "c", 0), 4)
+    assert.equal(Model.typeAheadIndex(names, "B", 4), 2)
+  })
+
+  it("keeps the name under the cursor while more letters still fit it", () => {
+    assert.equal(Model.typeAheadIndex(names, "ap", 1), 1)
+    assert.equal(Model.typeAheadIndex(names, "be", 2), 3)
+    assert.equal(Model.typeAheadIndex(names, "ch", 0), 4)
+  })
+
+  it("steps through the names a letter starts when it is typed over and over", () => {
+    assert.equal(Model.typeAheadIndex(names, "aa", 0), 1)
+    assert.equal(Model.typeAheadIndex(names, "bbb", 2), 3)
+  })
+
+  it("finds nothing for a start no name has", () => {
+    assert.equal(Model.typeAheadIndex(names, "zz", 0), -1)
+    assert.equal(Model.typeAheadIndex(names, "", 0), -1)
+    assert.equal(Model.typeAheadIndex([], "a", 0), -1)
+    assert.equal(Model.typeAheadIndex(null, "a", 0), -1)
+    // A cursor past the end starts from the last name.
+    assert.equal(Model.typeAheadIndex(names, "a", 99), 0)
+  })
+})
+
 describe("wheelRows", () => {
   it("turns a notch into the wheel step, up positive", () => {
     assert.deepEqual(Model.wheelRows(0, 120, 3), { rows: 3, carry: 0 })
@@ -1657,6 +1688,7 @@ describe("hints", () => {
     assert.equal(Model.hints("archive")[4].label, "copy out")
     assert.equal(Model.hints("prompt")[0].key, "Enter")
     assert.equal(Model.hints("jump")[3].key, "Ctrl+Enter")
+    assert.equal(Model.hints("find")[0].label, "the start of a name")
     assert.equal(Model.hints("whatever"), Model.HINTS.browse)
   })
 })

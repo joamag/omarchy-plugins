@@ -21,6 +21,7 @@ The popup and the window share the tabs; they are saved on the widget's `shell.j
 - A middle click or Ctrl+double click on a folder (or an archive) opens it in a new tab. In the sidebar, the path bar, the Go to card and the columns' parent folders, Ctrl+click and middle click open a new tab.
 - Ctrl+P jumps to a folder: the other open tabs, the folders opened here (the last 50, remembered across restarts), the folders used lately in any app, the bookmarks, the standard folders and the mounted drives, narrowed as you type by letters in order the way an editor's quick open matches (`dl` finds Downloads). A typed `/` or `~` path is offered last. Enter or a click opens the folder in the tab (a folder open in another tab switches to it), Ctrl+Enter, Ctrl+click or a middle click opens it in a new tab.
 - The wheel scrolls in whole rows with no glide: the system's wheel step per notch (three rows by default), one row of tiles in the grid, one column sideways in the columns view; a touchpad's movement adds up to whole rows. Pressing and dragging never scrolls the list, it moves files.
+- `f`, then the start of a name, finds it the way typing does in Explorer: the cursor goes to the first name after it that starts with those letters, the same letter again goes on to the next, and a small box shows what was typed. It stops a second after the last letter, with Esc, or with Enter, which opens what was found.
 - Copy path in the menu of a file or folder copies the full path of the item, or of every selected one, a line each, to paste into a terminal, an editor or a chat.
 - Click a path segment to go there, or the empty end of the path bar to type a path (`~/Downloads`, `/etc`, `file:///…`, or a name relative to the folder on screen).
 - Type in the filter to narrow the folder on screen as you type; Enter searches every folder below it by name (hidden files too while they are shown), ↓ goes to the results, Esc clears.
@@ -64,6 +65,7 @@ The panel keys of the other widgets and the Nautilus shortcuts both work; `?` sh
 | `Z` | Compress the selection |
 | `<` `>` | Previous, next page of the PDF in the preview pane or the large preview |
 | `/`, Ctrl+F | Filter; Enter searches below |
+| `f` | Find a name by typing its start (Enter opens it, Esc stops) |
 | `g` | Go to: `h` home, `k` desktop, `D` documents, `d` downloads, `m` music, `p` pictures, `v` videos, `r` recent, `t` trash, `/` system, digits for bookmarks and drives |
 | `e`, Ctrl+L | Type a path |
 | Ctrl+P | Jump to a recent folder (`↑` `↓` or Ctrl+N Ctrl+P choose, Ctrl+Enter opens in a new tab) |
