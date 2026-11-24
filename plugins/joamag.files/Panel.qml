@@ -2387,26 +2387,43 @@ Panel {
   }
 
   // Discrete wheel scrolling: a notch moves the view a whole number of rows
-  // (the system's wheel step; whole columns sideways) and lands on a row
-  // edge, with no glide, so the files stay where the wheel left them. A
-  // touchpad's small deltas add up to whole rows. The views do not flick:
-  // pressing and dragging moves files instead.
-  component StepScroll: WheelHandler {
+  // (the system's wheel step) and lands on a row edge, with no glide, so the
+  // files stay where the wheel left them; a touchpad's small deltas add up
+  // to whole rows. It lies over the view and takes only the wheel, so
+  // clicks, hovers and drags reach the rows. A sideways wheel (or
+  // Shift+wheel) moves SIDEWAYS a column at a time, for the columns view.
+  // The views do not flick: pressing and dragging moves files instead.
+  component StepScroll: MouseArea {
     id: stepScroll
     required property Flickable flick
     required property real pitch
-    property int rowsPerNotch: Math.max(1, Qt.styleHints.wheelScrollLines)
+    property Flickable sideways: null
+    property real sidePitch: 0
+    property int rowsPerNotch: Math.max(1, Number(Qt.styleHints.wheelScrollLines) || 3)
     property real carry: 0
-    target: null
-    onWheel: function(event) {
-      var horizontal = stepScroll.orientation === Qt.Horizontal
-      var delta = horizontal ? (event.angleDelta.x || event.pixelDelta.x) : (event.angleDelta.y || event.pixelDelta.y)
-      var step = Model.wheelRows(stepScroll.carry, delta, stepScroll.rowsPerNotch)
-      stepScroll.carry = step.carry
-      if (step.rows === 0) return
+    property real sideCarry: 0
+    anchors.fill: flick
+    acceptedButtons: Qt.NoButton
+    onWheel: function(wheel) {
+      var dx = wheel.angleDelta.x || wheel.pixelDelta.x
+      var dy = wheel.angleDelta.y || wheel.pixelDelta.y
       var f = stepScroll.flick
-      if (horizontal) f.contentX = f.originX + Model.steppedScroll(f.contentX - f.originX, -step.rows, stepScroll.pitch, f.contentWidth, f.width)
-      else f.contentY = f.originY + Model.steppedScroll(f.contentY - f.originY, -step.rows, stepScroll.pitch, f.contentHeight, f.height)
+      if (dy !== 0 && !(wheel.modifiers & Qt.ShiftModifier)) {
+        var step = Model.wheelRows(stepScroll.carry, dy, stepScroll.rowsPerNotch)
+        stepScroll.carry = step.carry
+        if (step.rows !== 0) f.contentY = f.originY + Model.steppedScroll(f.contentY - f.originY, -step.rows, stepScroll.pitch, f.contentHeight, f.height)
+        wheel.accepted = true
+        return
+      }
+      var side = stepScroll.sideways
+      if (side && (dx !== 0 || dy !== 0)) {
+        var across = Model.wheelRows(stepScroll.sideCarry, dx !== 0 ? dx : dy, 1)
+        stepScroll.sideCarry = across.carry
+        if (across.rows !== 0) side.contentX = side.originX + Model.steppedScroll(side.contentX - side.originX, -across.rows, stepScroll.sidePitch, side.contentWidth, side.width)
+        wheel.accepted = true
+        return
+      }
+      wheel.accepted = false
     }
   }
 
@@ -2712,7 +2729,6 @@ Panel {
         function onListingChanged() { list.contentY = list.keptY }
       }
 
-      StepScroll { flick: list; pitch: listPane.rowHeight }
       onCurrentIndexChanged: if (currentIndex >= 0) positionViewAtIndex(currentIndex, ListView.Contain)
       onCountChanged: if (currentIndex >= 0) positionViewAtIndex(currentIndex, ListView.Contain)
 
@@ -2748,6 +2764,8 @@ Panel {
         }
       }
     }
+
+    StepScroll { flick: list; pitch: listPane.rowHeight }
   }
 
   component SortHead: Item {
@@ -3072,7 +3090,6 @@ Panel {
         function onListingChanged() { grid.contentY = grid.keptY }
       }
 
-      StepScroll { flick: grid; pitch: grid.cellHeight; rowsPerNotch: 1 }
       onCurrentIndexChanged: if (currentIndex >= 0) positionViewAtIndex(currentIndex, GridView.Contain)
       onWidthChanged: if (gridPane.shown) root.gridColumns = Math.max(1, Math.floor(width / cellWidth))
       onVisibleChanged: if (visible) root.gridColumns = Math.max(1, Math.floor(width / cellWidth))
@@ -3233,6 +3250,8 @@ Panel {
         }
       }
     }
+
+    StepScroll { flick: grid; pitch: grid.cellHeight; rowsPerNotch: 1 }
   }
 
   // The columns view: one column per folder from the root of the path down
@@ -3259,7 +3278,6 @@ Panel {
       // The deepest column, where the cursor is, stays in view.
       onContentWidthChanged: contentX = Math.max(0, contentWidth - width)
 
-      StepScroll { flick: columnsFlick; pitch: columnsPane.columnWidth; orientation: Qt.Horizontal; rowsPerNotch: 1 }
 
       Row {
         id: columnsRow
@@ -3277,6 +3295,7 @@ Panel {
             openPath: columnsPane.chain[index + 1].path
             foreground: columnsPane.foreground
             rowHeight: columnsPane.rowHeight
+            sideways: columnsFlick
           }
         }
 
@@ -3297,7 +3316,6 @@ Panel {
             highlightFollowsCurrentItem: false
             onCurrentIndexChanged: if (currentIndex >= 0) positionViewAtIndex(currentIndex, ListView.Contain)
 
-            StepScroll { flick: currentColumn; pitch: columnsPane.rowHeight }
 
             delegate: Item {
               id: cell
@@ -3399,6 +3417,8 @@ Panel {
             }
           }
 
+          StepScroll { flick: currentColumn; pitch: columnsPane.rowHeight; sideways: columnsFlick; sidePitch: columnsPane.columnWidth }
+
           Rectangle {
             anchors.right: parent.right
             width: 1
@@ -3417,6 +3437,7 @@ Panel {
           foreground: columnsPane.foreground
           rowHeight: columnsPane.rowHeight
           passive: true
+          sideways: columnsFlick
         }
 
         PreviewPane {
@@ -3440,6 +3461,8 @@ Panel {
     required property color foreground
     required property real rowHeight
     property bool passive: false
+    // The columns view's flickable, moved sideways by a sideways wheel.
+    property Flickable sideways: null
 
     property var columnEntries: []
 
@@ -3488,7 +3511,6 @@ Panel {
       model: column.columnEntries
       opacity: column.passive ? 0.7 : 1
 
-      StepScroll { flick: columnList; pitch: column.rowHeight }
 
       delegate: Item {
         id: item
@@ -3569,6 +3591,8 @@ Panel {
         }
       }
     }
+
+    StepScroll { flick: columnList; pitch: column.rowHeight; sideways: column.sideways; sidePitch: column.width }
 
     Text {
       anchors.centerIn: parent
@@ -3659,7 +3683,6 @@ Panel {
       contentHeight: previewColumn.implicitHeight
       boundsBehavior: Flickable.StopAtBounds
 
-      StepScroll { flick: previewFlick; pitch: Style.space(20) }
 
       Column {
         id: previewColumn
@@ -3916,59 +3939,66 @@ Panel {
         }
       }
     }
+
+    StepScroll { flick: previewFlick; pitch: Style.space(20) }
   }
 
   // The window's sidebar: the standard folders, the bookmarks Nautilus
   // shares, drives with their free space and eject or mount, Recent and
   // the Trash. Folders take drops.
-  component Sidebar: Flickable {
+  component Sidebar: Item {
     id: side
     required property color foreground
-    clip: true
-    interactive: false
-    contentHeight: sideColumn.implicitHeight
-    boundsBehavior: Flickable.StopAtBounds
 
-    StepScroll { flick: side; pitch: Style.space(30) }
+    Flickable {
+      id: sideFlick
+      anchors.fill: parent
+      clip: true
+      interactive: false
+      contentHeight: sideColumn.implicitHeight
+      boundsBehavior: Flickable.StopAtBounds
 
-    Column {
-      id: sideColumn
-      width: side.width
-      spacing: Style.space(2)
+      Column {
+        id: sideColumn
+        width: side.width
+        spacing: Style.space(2)
 
-      PanelSectionHeader { text: "PLACES"; foreground: side.foreground; fontFamily: root.fontFamily }
-      Repeater {
-        model: root.places
-        SideRow { required property var modelData; glyph: modelData.icon; label: modelData.label; path: modelData.path; foreground: side.foreground }
-      }
-
-      Item { width: 1; height: Style.space(8) }
-      PanelSectionHeader { visible: root.bookmarks.length > 0; text: "BOOKMARKS"; foreground: side.foreground; fontFamily: root.fontFamily }
-      Repeater {
-        model: root.bookmarks
-        SideRow { required property var modelData; glyph: Model.GLYPHS.bookmark; label: modelData.label; path: modelData.path; foreground: side.foreground }
-      }
-
-      Item { width: 1; height: Style.space(8) }
-      PanelSectionHeader { text: "DRIVES"; foreground: side.foreground; fontFamily: root.fontFamily }
-      Repeater {
-        model: root.drives
-        SideRow {
-          required property var modelData
-          glyph: modelData.removable ? Model.GLYPHS.removable : Model.GLYPHS.drive
-          label: modelData.name
-          path: modelData.mount
-          drive: modelData
-          detail: modelData.mount ? Model.formatSize(modelData.avail) + " free" : "not mounted"
-          foreground: side.foreground
+        PanelSectionHeader { text: "PLACES"; foreground: side.foreground; fontFamily: root.fontFamily }
+        Repeater {
+          model: root.places
+          SideRow { required property var modelData; glyph: modelData.icon; label: modelData.label; path: modelData.path; foreground: side.foreground }
         }
-      }
 
-      Item { width: 1; height: Style.space(8) }
-      PanelSectionHeader { text: "MORE"; foreground: side.foreground; fontFamily: root.fontFamily }
-      SideRow { glyph: Model.GLYPHS.recent; label: "Recent"; path: Model.RECENT; foreground: side.foreground }
-      SideRow { glyph: Model.GLYPHS.trash; label: "Trash"; path: Model.TRASH; detail: root.placesData.trashCount > 0 ? String(root.placesData.trashCount) : ""; foreground: side.foreground }
+        Item { width: 1; height: Style.space(8) }
+        PanelSectionHeader { visible: root.bookmarks.length > 0; text: "BOOKMARKS"; foreground: side.foreground; fontFamily: root.fontFamily }
+        Repeater {
+          model: root.bookmarks
+          SideRow { required property var modelData; glyph: Model.GLYPHS.bookmark; label: modelData.label; path: modelData.path; foreground: side.foreground }
+        }
+
+        Item { width: 1; height: Style.space(8) }
+        PanelSectionHeader { text: "DRIVES"; foreground: side.foreground; fontFamily: root.fontFamily }
+        Repeater {
+          model: root.drives
+          SideRow {
+            required property var modelData
+            glyph: modelData.removable ? Model.GLYPHS.removable : Model.GLYPHS.drive
+            label: modelData.name
+            path: modelData.mount
+            drive: modelData
+            detail: modelData.mount ? Model.formatSize(modelData.avail) + " free" : "not mounted"
+            foreground: side.foreground
+          }
+        }
+
+        Item { width: 1; height: Style.space(8) }
+        PanelSectionHeader { text: "MORE"; foreground: side.foreground; fontFamily: root.fontFamily }
+        SideRow { glyph: Model.GLYPHS.recent; label: "Recent"; path: Model.RECENT; foreground: side.foreground }
+        SideRow { glyph: Model.GLYPHS.trash; label: "Trash"; path: Model.TRASH; detail: root.placesData.trashCount > 0 ? String(root.placesData.trashCount) : ""; foreground: side.foreground }
+      }
     }
+
+    StepScroll { flick: sideFlick; pitch: Style.space(30) }
   }
 
   component SideRow: CursorSurface {
