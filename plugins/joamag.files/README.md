@@ -1,6 +1,6 @@
 # joamag.files
 
-A file navigator in the Omarchy bar, in the spirit of GNOME Files: a popup under its bar button that pops out into its own window, with tabs. It complements Nautilus rather than replacing it, so anything it does not cover is one click (or `N`) away, opened at the folder on screen.
+A file navigator in the Omarchy bar, in the spirit of GNOME Files: a popup under its bar button that pops out into its own window, with tabs. It complements Nautilus rather than replacing it, so anything it does not cover is one click (or `N`) away, opened at the folder on screen; it can also be the [default file manager](#default-file-manager) the rest of the desktop opens folders in.
 
 ## Layout
 
@@ -93,22 +93,39 @@ Inline on the widget entry in `~/.config/omarchy/shell.json`; the widget writes 
 | `sortKey` | `"name"` | `name`, `modified`, `size` or `type`; folders always come first |
 | `sortDescending` | `false` | Reverse the order |
 | `columnWidth` | `190` | Width of each column in the columns view, 120 to 480, set by dragging a divider |
+| `defaultFileManager` | `false` | Open folders from other apps, Show in folder and Super+Shift+F in the widget (see [Default file manager](#default-file-manager)) |
 | `tabs` | `[]` | The open tabs as `{ "path": …, "view": "list" \| "grid" \| "columns" }`; empty opens home |
 | `activeTab` | `0` | The tab on screen |
 | `recentFolders` | `[]` | The folders opened here, newest first, for Ctrl+P |
+
+## Default file manager
+
+Turn on **Use as the default file manager** in the widget's settings and the widget takes over from Nautilus (or Omarchy's Files):
+
+- Folders other apps open (`xdg-open`, a download's "Open folder", `xdg-open .` in a terminal) show in the widget. A remote location (`sftp://`, `smb://`) still goes to the previous file manager.
+- "Show in folder" in a browser or another app opens the folder with the file picked. Apps ask for it over D-Bus (`org.freedesktop.FileManager1`), and a small service, `filemanager1.py`, answers for the widget. While Nautilus has a window open it keeps that name, and the widget takes over once Nautilus closes; it never takes the name away.
+- Super+Shift+F opens or closes the popup, and Super+Alt+Shift+F shows the focused terminal's folder.
+
+A folder from another app shows in the popup, or in the window when the widget is popped out, brought to the front on its workspace. When the widget is not running (not in the bar, or the shell is restarting), the previous file manager opens it.
+
+Switching it on adds a hidden app, `~/.local/share/applications/joamag-files.desktop`, and makes it the folder default with `xdg-mime`, remembering the previous one. It also adds the D-Bus service file in `~/.local/share/dbus-1/services/` and a marked block of two `o.rebind` lines at the end of `~/.config/hypr/bindings.lua`. Switching it off takes all of that out again: the folder default goes back to the system's, or to the one you had picked, and your bindings file is left as it was. The setting is applied again at every start, so a `shell.json` edited by hand is followed too. Turn it off before removing the widget.
 
 ## IPC
 
 ```
 omarchy-shell joamag.files toggle
 omarchy-shell joamag.files go ~/Downloads
+omarchy-shell joamag.files reveal ~/Downloads/report.pdf
+omarchy-shell joamag.files summon
 omarchy-shell joamag.files popOut
 omarchy-shell joamag.files dock
 omarchy-shell joamag.files version
 ```
 
+`reveal` opens the folder holding an item with the cursor on it. `summon` is what Super+Shift+F runs as the default file manager: it opens or closes the popup, or brings the popped out window to the front.
+
 ## Data source
 
-Qt's folder model (`Qt.labs.folderlistmodel`) lists the folder on screen and follows changes on disk. Everything else goes through `files.sh`: the standard folders (`xdg-user-dir`), the GTK bookmarks file Nautilus uses, drives from `lsblk` and `df`, Recent from `recently-used.xbel`, the Trash from `~/.local/share/Trash` (items trashed on other drives stay in that drive's own trash), search with `find`, "Open with" from `gio mime`, and thumbnails from the `.thumbnailer` files the system registers, made once per version of a file and kept in `~/.cache/joamag-files/thumbnails` (pictures unused for three months are dropped). PDF pages are drawn by Qt's PDF reader when it is installed (`qt6-webengine` ships it), and by the PDF thumbnailer otherwise. Archives are listed, extracted and made with `bsdtar` (libarchive, which pacman itself depends on); members looked at inside an archive are kept in `~/.cache/joamag-files/archives` for a week. The clipboard is set by `clipboard.py`, a small standard-library Python helper that speaks Wayland's data-control protocol to offer several formats at once and serves pastes in the background until something else is copied; without Python it falls back to `wl-copy` with the file managers' form only, and reading goes through `wl-paste`. Without wl-clipboard the widget keeps its own clipboard. Copies run `cp -a` and moves `mv`, with the progress measured as the copy lands; Cancel stops the item in flight, and a cancelled copy removes what it wrote. The Trash, restore, mount and eject go through `gio`. Nothing needs root.
+Qt's folder model (`Qt.labs.folderlistmodel`) lists the folder on screen and follows changes on disk. Everything else goes through `files.sh`: the standard folders (`xdg-user-dir`), the GTK bookmarks file Nautilus uses, drives from `lsblk` and `df`, Recent from `recently-used.xbel`, the Trash from `~/.local/share/Trash` (items trashed on other drives stay in that drive's own trash), search with `find`, "Open with" from `gio mime`, and thumbnails from the `.thumbnailer` files the system registers, made once per version of a file and kept in `~/.cache/joamag-files/thumbnails` (pictures unused for three months are dropped). PDF pages are drawn by Qt's PDF reader when it is installed (`qt6-webengine` ships it), and by the PDF thumbnailer otherwise. Archives are listed, extracted and made with `bsdtar` (libarchive, which pacman itself depends on); members looked at inside an archive are kept in `~/.cache/joamag-files/archives` for a week. The clipboard is set by `clipboard.py`, a small standard-library Python helper that speaks Wayland's data-control protocol to offer several formats at once and serves pastes in the background until something else is copied; without Python it falls back to `wl-copy` with the file managers' form only, and reading goes through `wl-paste`. Without wl-clipboard the widget keeps its own clipboard. Copies run `cp -a` and moves `mv`, with the progress measured as the copy lands; Cancel stops the item in flight, and a cancelled copy removes what it wrote. The Trash, restore, mount and eject go through `gio`. As the default file manager, the folder default is set with `xdg-mime`, and `filemanager1.py` (Python with PyGObject, which Omarchy installs) answers `org.freedesktop.FileManager1` on the session bus. Nothing needs root.
 
 Network shares, editing inside archives and file properties stay with Nautilus.

@@ -1,6 +1,7 @@
 import QtQuick
 import Qt.labs.folderlistmodel
 import Quickshell
+import Quickshell.Hyprland
 import Quickshell.Io
 import qs.Commons
 import qs.Ui
@@ -144,6 +145,9 @@ Panel {
   property var lastTrashed: []
   property string lastError: ""
   property bool detached: false
+  // The default file manager setting files.sh last applied: on, off, or
+  // nothing yet this start.
+  property string defaultApplied: ""
   property var apps: []
   property string appsPath: ""
   // The action files.sh is running and what it was about.
@@ -157,6 +161,7 @@ Panel {
   readonly property string sortKey: Model.normalizeSortKey(setting("sortKey", "name"))
   readonly property bool sortDescending: setting("sortDescending", false) === true
   readonly property int columnWidth: Model.columnWidth(setting("columnWidth", Model.COLUMN_WIDTH))
+  readonly property bool defaultManager: setting("defaultFileManager", false) === true
   readonly property string scriptPath: String(Qt.resolvedUrl("files.sh")).replace(/^file:\/\//, "")
 
   readonly property var tab: tabs[Math.max(0, Math.min(tabs.length - 1, activeTab))]
@@ -387,6 +392,17 @@ Panel {
     var changes = {}
     changes[key] = value
     persistSettings(changes)
+  }
+
+  // Folders from other apps, Show in folder and the file manager keys come
+  // here while the setting is on, and go back to the previous file manager
+  // when it is turned off. One run at a time; the last word wins.
+  function syncDefault() {
+    var want = defaultManager ? "on" : "off"
+    if (defaultProc.running || want === defaultApplied) return
+    defaultApplied = want
+    defaultProc.command = [root.scriptPath, "default", want]
+    defaultProc.running = true
   }
 
   function saveTabs() {
@@ -1681,6 +1697,33 @@ Panel {
     else popOut()
   }
 
+  // The window to the front, on whichever workspace it is. Found by its
+  // title, before it changes with the next folder.
+  function raiseWindow() {
+    var list = Hyprland.toplevels.values
+    for (var i = 0; i < list.length; i++) {
+      if (list[i].title !== window.title) continue
+      var address = String(list[i].address)
+      if (address.indexOf("0x") !== 0) address = "0x" + address
+      Hyprland.dispatch('hl.dsp.focus({window = hl.get_window("address:' + address + '")})')
+      return
+    }
+  }
+
+  // A folder from another app or the file manager keys, in the popup or,
+  // popped out, in the window brought to the front. With pick, the path is
+  // an item to land on in its folder.
+  function showPath(path, pick) {
+    if (detached) raiseWindow()
+    if (pick) {
+      pendingSelect = path
+      go(Model.parentPath(path))
+    } else {
+      go(path)
+    }
+    if (!detached) open()
+  }
+
   // ---- Keyboard ---------------------------------------------------------
 
   // The panel keys of the other widgets (j/k, h/l, Enter, Esc, g, the hint
@@ -1843,9 +1886,13 @@ Panel {
     function show(): void { root.open() }
     function hide(): void { root.close() }
     function toggle(): void { root.toggle() }
-    function go(path: string): void {
-      root.go(Model.expandPath(path, root.home, root.home))
-      if (!root.detached) root.open()
+    function go(path: string): void { root.showPath(Model.expandPath(path, root.home, root.home), false) }
+    function reveal(path: string): void { root.showPath(Model.expandPath(path, root.home, root.home), true) }
+    // The file manager keys: the popup opens or closes, the window comes
+    // to the front.
+    function summon(): void {
+      if (root.detached) root.raiseWindow()
+      else root.toggle()
     }
     function popOut(): void { root.popOut() }
     function dock(): void { root.dock() }
@@ -1855,9 +1902,15 @@ Panel {
   Component.onCompleted: {
     loadTabs()
     refreshPlaces()
+    // Applied again at every start, so the FileManager1 service runs from
+    // then and the setting wins over shell.json edited by hand; off with
+    // nothing set up changes nothing.
+    syncDefault()
   }
 
   onSettingsChanged: loadTabs()
+
+  onDefaultManagerChanged: syncDefault()
 
   onOpenedChanged: {
     if (opened) {
@@ -2099,6 +2152,21 @@ Panel {
   Process {
     id: actionProc
     stdout: StdioCollector { waitForEnd: true; onStreamFinished: root.applyAction(text) }
+  }
+
+  Process {
+    id: defaultProc
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        var errors = Model.parseResult(text).errors
+        if (errors.length === 0) return
+        root.lastError = errors[errors.length - 1]
+        root.showToast(root.lastError)
+      }
+    }
+    // The setting may have changed again while this ran.
+    onExited: root.syncDefault()
   }
 
   Process {

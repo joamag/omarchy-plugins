@@ -24,6 +24,7 @@
       "sortKey": "name",
       "sortDescending": false,
       "columnWidth": 190,
+      "defaultFileManager": false,
       "tabs": [],
       "activeTab": 0,
       "recentFolders": []
@@ -62,6 +63,12 @@
         "max": 480,
         "step": 10,
         "defaultValue": 190
+      },
+      {
+        "key": "defaultFileManager",
+        "type": "boolean",
+        "label": "Use as the default file manager",
+        "defaultValue": false
       }
     ]
   }
