@@ -17,6 +17,8 @@ The popup and the window share the tabs; they are saved on the widget's `shell.j
 
 - Left click on the bar: open the popup, or dock the window back into it. Middle click: pop out into a window or dock. Right click: open the folder on screen in Nautilus.
 - Click selects, Ctrl+click adds to the selection, Shift+click selects a range, double click opens. Right click on an item or on empty space opens a menu.
+- A middle click or Ctrl+double click on a folder (or an archive) opens it in a new tab. In the sidebar, the path bar, the Go to card and the columns' parent folders, Ctrl+click and middle click open a new tab.
+- Ctrl+P jumps to a folder: the other open tabs, the folders opened here (the last 50, remembered across restarts), the folders used lately in any app, the bookmarks, the standard folders and the mounted drives, narrowed as you type by letters in order the way an editor's quick open matches (`dl` finds Downloads). A typed `/` or `~` path is offered last. Enter or a click opens the folder in the tab (a folder open in another tab switches to it), Ctrl+Enter, Ctrl+click or a middle click opens it in a new tab.
 - The wheel scrolls in whole rows with no glide: the system's wheel step per notch (three rows by default), one row of tiles in the grid, one column sideways in the columns view; a touchpad's movement adds up to whole rows. Pressing and dragging never scrolls the list, it moves files.
 - Click a path segment to go there, or the empty end of the path bar to type a path (`~/Downloads`, `/etc`, `file:///…`, or a name relative to the folder on screen).
 - Type in the filter to narrow the folder on screen as you type; Enter searches every folder below it by name (hidden files too while they are shown), ↓ goes to the results, Esc clears.
@@ -61,6 +63,7 @@ The panel keys of the other widgets and the Nautilus shortcuts both work; `?` sh
 | `/`, Ctrl+F | Filter; Enter searches below |
 | `g` | Go to: `h` home, `k` desktop, `D` documents, `d` downloads, `m` music, `p` pictures, `v` videos, `r` recent, `t` trash, `/` system, digits for bookmarks and drives |
 | `e`, Ctrl+L | Type a path |
+| Ctrl+P | Jump to a recent folder (`↑` `↓` or Ctrl+N Ctrl+P choose, Ctrl+Enter opens in a new tab) |
 | `t` `q`, Ctrl+T Ctrl+W | New tab, close tab |
 | `[` `]`, Ctrl+Tab, Ctrl+PageUp PageDown | Previous, next tab |
 | `1`-`9` | Go to a tab |
@@ -86,6 +89,7 @@ Inline on the widget entry in `~/.config/omarchy/shell.json`; the widget writes 
 | `sortDescending` | `false` | Reverse the order |
 | `tabs` | `[]` | The open tabs as `{ "path": …, "view": "list" \| "grid" \| "columns" }`; empty opens home |
 | `activeTab` | `0` | The tab on screen |
+| `recentFolders` | `[]` | The folders opened here, newest first, for Ctrl+P |
 
 ## IPC
 

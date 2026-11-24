@@ -116,18 +116,19 @@ var HINTS = {
     { key: "y", label: "copy out" }, { key: "E", label: "extract all" }, { key: "g", label: "go to" }, { key: "?", label: "keys" }
   ],
   prompt: [{ key: "Enter", label: "go ahead" }, { key: "Esc", label: "cancel" }],
-  path: [{ key: "Enter", label: "go" }, { key: "Tab", label: "complete" }, { key: "Esc", label: "cancel" }]
+  path: [{ key: "Enter", label: "go" }, { key: "Esc", label: "cancel" }],
+  jump: [{ key: "type", label: "to find" }, { key: "↑↓", label: "choose" }, { key: "Enter", label: "open" }, { key: "Ctrl+Enter", label: "in a new tab" }, { key: "Esc", label: "close" }]
 }
 
 // Every key, for the `?` sheet: the panel keys of the other widgets and the
 // Nautilus shortcuts side by side.
 var KEYS = [
   ["j k  ↓ ↑", "Move"], ["J K  Shift+↓ ↑", "Extend the selection"], ["l  Enter", "Open"], ["h  Backspace  Alt+↑", "Up a folder"],
-  ["Alt+← Alt+→", "Back, forward"], ["Space  Ctrl+click", "Select"], ["Ctrl+A", "Select all"], ["y  Ctrl+C", "Copy"],
+  ["Alt+← Alt+→", "Back, forward"], ["Space  Ctrl+click", "Select"], ["Middle click  Ctrl+double click", "Folder in a new tab"], ["Ctrl+A", "Select all"], ["y  Ctrl+C", "Copy"],
   ["x  Ctrl+X", "Cut"], ["p  Ctrl+V", "Paste"], ["r  F2", "Rename"], ["a  Ctrl+Shift+N", "New folder"],
   ["n", "New file"], ["d  Delete", "Move to Trash"], ["Ctrl+Z", "Undo the move to Trash"], ["Shift+Delete", "Delete for good"],
   ["o", "Open with"], ["E", "Extract the archive here"], ["Z", "Compress to .zip"],
-  ["<  >", "Previous, next PDF page in the preview"], ["/  Ctrl+F", "Filter, Enter searches below"], ["g", "Go to a place"], ["e  Ctrl+L", "Type a path"], ["t  Ctrl+T", "New tab"],
+  ["<  >", "Previous, next PDF page in the preview"], ["/  Ctrl+F", "Filter, Enter searches below"], ["g", "Go to a place"], ["Ctrl+P", "Jump to a recent folder"], ["e  Ctrl+L", "Type a path"], ["t  Ctrl+T", "New tab"],
   ["q  Ctrl+W", "Close the tab"], ["[ ]  Ctrl+Tab", "Previous, next tab"], ["1-9", "Go to a tab"], ["v  Ctrl+1 2 3", "List, grid, columns"],
   [".  Ctrl+H", "Hidden files"], ["i", "Preview pane"], ["s", "Sort by the next column"], ["Ctrl+D", "Bookmark the folder"],
   ["w", "Pop out or dock"], ["N", "Open in Nautilus"], ["Esc", "Clear, then close"], ["Tab", "Next widget"]
@@ -561,6 +562,109 @@ function goTargets(places, bookmarks, drives) {
     digit++
   }
   return out
+}
+
+// ---------- Jump to a folder ----------
+
+var VISITED_MAX = 50
+
+// Folders opened in the widget, newest first, for Ctrl+P. Recent, the
+// Trash and folders inside archives are not kept.
+function addVisited(visited, path, max) {
+  var p = String(path || "")
+  var list = Array.isArray(visited) ? visited.filter(function(v) { return typeof v === "string" && v !== p }) : []
+  if (p === "" || isVirtual(p)) return list.slice(0, max || VISITED_MAX)
+  list.unshift(p)
+  return list.slice(0, max || VISITED_MAX)
+}
+
+// Everything Ctrl+P can jump to, each folder once, in the order shown before
+// anything is typed: the other open tabs, folders opened here (newest
+// first), folders used lately in any app, bookmarks, the standard folders
+// and mounted drives.
+function jumpCandidates(tabs, active, visited, recent, bookmarks, places, drives, home) {
+  var out = []
+  var seen = {}
+  function add(path, source, extra) {
+    if (!path || seen[path]) return
+    seen[path] = true
+    var item = { path: path, source: source, label: placeLabel(path, home, places, drives), icon: placeIcon(path, home, places, drives), tabIndex: -1 }
+    for (var k in extra) item[k] = extra[k]
+    out.push(item)
+  }
+  var i
+  for (i = 0; i < (tabs || []).length; i++) if (i !== active) add(tabs[i].path, "tab", { tabIndex: i })
+  for (i = 0; i < (visited || []).length; i++) add(visited[i], "visited")
+  for (i = 0; i < (recent || []).length; i++) {
+    var e = recent[i]
+    add(e.dir ? e.path : parentPath(e.path), "recent")
+  }
+  for (i = 0; i < (bookmarks || []).length; i++) add(bookmarks[i].path, "bookmark", { label: bookmarks[i].label, icon: GLYPHS.bookmark })
+  for (i = 0; i < (places || []).length; i++) add(places[i].path, "place")
+  for (i = 0; i < (drives || []).length; i++) if (drives[i].mount) add(drives[i].mount, "drive")
+  return out
+}
+
+// How well QUERY's letters, in order, fit TEXT, the way an editor's quick
+// open matches: a letter starting a word or following the last one counts
+// most, a long gap costs, spaces in QUERY are skipped. Every place the
+// first letter appears is tried and the best fit kept. -1 when the letters
+// do not all appear.
+function fuzzyScore(query, text) {
+  var q = String(query || "").toLowerCase().replace(/\s+/g, "")
+  var t = String(text || "").toLowerCase()
+  if (q === "") return 0
+  // The fit from the first letter at START, each next letter taken as soon
+  // as it shows up; -1 when one is missing.
+  function fit(start) {
+    var score = 0
+    var from = 0
+    var last = -2
+    for (var i = 0; i < q.length; i++) {
+      var at = i === 0 ? start : t.indexOf(q.charAt(i), from)
+      if (at < 0) return -1
+      score += 1
+      if (at === last + 1) score += 5
+      if (at === 0 || "/ -_.".indexOf(t.charAt(at - 1)) >= 0) score += 8
+      score -= Math.min(5, at - from) * 0.5
+      last = at
+      from = at + 1
+    }
+    return score
+  }
+  var best = -1
+  for (var start = t.indexOf(q.charAt(0)); start >= 0; start = t.indexOf(q.charAt(0), start + 1)) {
+    var score = fit(start)
+    // A later start cannot find letters an earlier one missed.
+    if (score < 0) break
+    if (score > best) best = score
+  }
+  return best
+}
+
+// The candidates QUERY fits, best first; a fit inside the folder's own name
+// beats one spread over the path, and ties keep the candidates' order.
+function jumpMatches(candidates, query, home, limit) {
+  var list = candidates || []
+  var max = limit || 50
+  if (String(query || "").trim() === "") return list.slice(0, max)
+  var scored = []
+  for (var i = 0; i < list.length; i++) {
+    var named = fuzzyScore(query, list[i].label)
+    var score = fuzzyScore(query, prettyPath(list[i].path, home))
+    if (score < 0) score = named
+    if (score < 0) continue
+    if (named >= 0) score += 20
+    scored.push({ item: list[i], score: score, index: i })
+  }
+  scored.sort(function(a, b) { return b.score - a.score || a.index - b.index })
+  return scored.slice(0, max).map(function(s) { return s.item })
+}
+
+// Typed text Ctrl+P offers to go to as it is: an absolute or home path.
+function looksLikePath(text) {
+  var t = String(text || "").trim()
+  return t.charAt(0) === "/" || t === "~" || t.indexOf("~/") === 0
 }
 
 // ---------- Tabs ----------

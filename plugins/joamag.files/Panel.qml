@@ -27,6 +27,12 @@ Panel {
   property var tabs: [Model.newTab(home, "list")]
   property int activeTab: 0
   property bool tabsDirty: false
+  // Folders opened here, newest first, saved with the tabs, for Ctrl+P.
+  property var visited: []
+  // The Ctrl+P jump list: open, what is typed, and the row picked.
+  property bool jumpOpen: false
+  property string jumpQuery: ""
+  property int jumpIndex: 0
 
   // Places, bookmarks, drives and the trash count from files.sh, and the
   // free space of the filesystem the folder on screen lives on.
@@ -154,6 +160,16 @@ Panel {
   readonly property var archiveListing: archiveAt ? archives[archiveAt.archive] || null : null
   readonly property string cacheHome: Quickshell.env("XDG_CACHE_HOME") || home + "/.cache"
   readonly property bool shown: opened || detached
+  // What Ctrl+P offers for what is typed, and a typed path as the last row.
+  readonly property var jumpList: {
+    if (!jumpOpen) return []
+    var list = Model.jumpMatches(Model.jumpCandidates(tabs, activeTab, visited, recentEntries, bookmarks, places, drives, home), jumpQuery, home, 50)
+    var typed = Model.looksLikePath(jumpQuery) ? Model.expandPath(jumpQuery, home, home) : ""
+    if (typed !== "" && !list.some(function(item) { return item.path === typed })) {
+      list = list.concat([{ path: typed, source: "typed", label: "Go to " + Model.prettyPath(typed, home), icon: Model.KIND_ICONS.dir, tabIndex: -1 }])
+    }
+    return list
+  }
   readonly property var places: placesData.places
   readonly property var bookmarks: placesData.bookmarks
   readonly property var drives: placesData.drives
@@ -185,6 +201,7 @@ Panel {
   readonly property var conflictJob: transferJob ? transferJob.jobs[Model.conflictIndex(transferJob.jobs)] || null : null
   readonly property string hintMode: {
     if (prompt) return "prompt"
+    if (jumpOpen) return "jump"
     if (renamePath !== "") return "rename"
     if (editingPath) return "path"
     if (filtering && filterFocused) return "filter"
@@ -245,6 +262,7 @@ Panel {
       return
     }
     updateTab(Model.navigateTab(tab, target))
+    visited = Model.addVisited(visited, target, Model.VISITED_MAX)
     resetFolderState()
     refreshLocation()
     focusRequested("view")
@@ -281,6 +299,7 @@ Panel {
       return
     }
     setTabs(result.tabs, result.active)
+    visited = Model.addVisited(visited, path || location, Model.VISITED_MAX)
     resetFolderState()
     refreshLocation()
   }
@@ -334,12 +353,13 @@ Panel {
 
   function saveTabs() {
     tabsDirty = false
-    persistSettings({ tabs: Model.serializeTabs(tabs), activeTab: activeTab })
+    persistSettings({ tabs: Model.serializeTabs(tabs), activeTab: activeTab, recentFolders: visited })
   }
 
   // The saved tabs come back on start, and when shell.json is edited by hand.
   function loadTabs() {
     if (tabsDirty) return
+    visited = Model.addVisited(setting("recentFolders", []), "", Model.VISITED_MAX)
     var saved = Model.parseTabs(setting("tabs", []), home)
     if (JSON.stringify(Model.serializeTabs(saved)) === JSON.stringify(Model.serializeTabs(tabs)) && Number(setting("activeTab", 0)) === activeTab) return
     tabs = saved
@@ -627,8 +647,21 @@ Panel {
     thumbRunning = ""
   }
 
+  // Goes to a folder in the tab on screen, or opens it in a new tab.
+  function openFolder(path, inNewTab) {
+    if (inNewTab) newTab(path)
+    else go(path)
+  }
+
+  // A middle click or a Ctrl+click on a folder asks for a new tab.
+  function newTabClick(mouse) {
+    return mouse.button === Qt.MiddleButton || (mouse.modifiers & Qt.ControlModifier) !== 0
+  }
+
   function openInNewTab(entry) {
-    if (entry && entry.dir) newTab(entry.path)
+    if (!entry) return
+    if (entry.dir) newTab(entry.path)
+    else if (Model.isArchive(entry) && !Model.isArchiveLocation(entry.path)) newTab(Model.archiveLocation(entry.path, ""))
   }
 
   function openWith(entry) {
@@ -1241,10 +1274,10 @@ Panel {
   }
 
   // A drive that is not mounted mounts first, then opens.
-  function openDrive(drive) {
+  function openDrive(drive, inNewTab) {
     if (!drive) return
-    if (drive.mount) go(drive.mount)
-    else act("mount", ["mount", drive.device], { drive: drive, open: true })
+    if (drive.mount) openFolder(drive.mount, inNewTab)
+    else act("mount", ["mount", drive.device], { drive: drive, open: true, inNewTab: inNewTab === true })
   }
 
   function ejectDrive(drive) {
@@ -1304,7 +1337,7 @@ Panel {
       if (!failed) showToast("Trash emptied")
       break
     case "mount":
-      if (r.mounted !== "" && ctx.open) go(r.mounted)
+      if (r.mounted !== "" && ctx.open) openFolder(r.mounted, ctx.inNewTab)
       break
     case "eject":
       if (!failed) {
@@ -1349,6 +1382,45 @@ Panel {
     focusRequested("view")
   }
 
+  // Ctrl+P: the folders opened here, used lately, bookmarked or open in
+  // other tabs, narrowed as you type.
+  function openJump() {
+    jumpQuery = ""
+    jumpIndex = 0
+    jumpOpen = true
+    menu = null
+    goMenuOpen = false
+    if (recentEntries.length === 0 && !recentProc.running) recentProc.running = true
+    focusRequested("jump")
+  }
+
+  function closeJump() {
+    jumpOpen = false
+    focusRequested("view")
+  }
+
+  function setJumpQuery(text) {
+    jumpQuery = text
+    jumpIndex = 0
+  }
+
+  function moveJump(delta) {
+    if (jumpList.length > 0) jumpIndex = Model.clampIndex(jumpIndex + delta, jumpList.length)
+  }
+
+  // Opens the pick here, or in a new tab with Ctrl; a folder open in another
+  // tab switches to that tab, and a typed path is checked first.
+  function pickJump(item, inNewTab) {
+    if (!item) return
+    closeJump()
+    if (item.source === "typed") {
+      checkFolder(item.path, inNewTab)
+      return
+    }
+    if (item.source === "tab" && !inNewTab) switchTab(item.tabIndex)
+    else openFolder(item.path, inNewTab)
+  }
+
   function startPathEdit() {
     editingPath = true
     focusRequested("path")
@@ -1363,7 +1435,18 @@ Panel {
       go(target)
       return
     }
+    checkFolder(target, false)
+  }
+
+  // Goes to a typed folder, or opens it in a new tab, once it is known to
+  // be there.
+  function checkFolder(target, inNewTab) {
+    if (Model.isVirtual(target)) {
+      openFolder(target, inNewTab)
+      return
+    }
     pathCheckProc.target = target
+    pathCheckProc.inNewTab = inNewTab === true
     pathCheckProc.command = ["test", "-d", target]
     pathCheckProc.running = true
   }
@@ -1517,6 +1600,7 @@ Panel {
       case Qt.Key_PageDown: switchTab(activeTab + 1); return true
       case Qt.Key_PageUp: switchTab(activeTab - 1); return true
       case Qt.Key_L: startPathEdit(); return true
+      case Qt.Key_P: openJump(); return true
       case Qt.Key_H: toggleHidden(); return true
       case Qt.Key_F: startFilter(); return true
       case Qt.Key_C: setClipboard("copy"); return true
@@ -1660,6 +1744,7 @@ Panel {
     } else {
       if (renamePath !== "") cancelRename()
       editingPath = false
+      jumpOpen = false
       menu = null
       confirm = null
       if (tabsDirty) saveTabs()
@@ -1865,8 +1950,9 @@ Panel {
   Process {
     id: pathCheckProc
     property string target: ""
+    property bool inNewTab: false
     onExited: function(exitCode) {
-      if (exitCode === 0) root.go(target)
+      if (exitCode === 0) root.openFolder(target, inNewTab)
       else root.showToast("No folder at " + Model.prettyPath(target, root.home))
     }
   }
@@ -1995,7 +2081,7 @@ Panel {
     required property color background
     required property bool active
 
-    readonly property bool typing: pathField.activeFocus || filterField.activeFocus || root.renamePath !== "" || root.prompt !== null
+    readonly property bool typing: pathField.activeFocus || filterField.activeFocus || root.renamePath !== "" || root.prompt !== null || root.jumpOpen
     readonly property real rowHeight: Style.space(26)
 
     focus: true
@@ -2023,6 +2109,7 @@ Panel {
           pathField.forceActiveFocus()
           pathField.selectAll()
         } else if (what === "prompt") promptCard.focusField()
+        else if (what === "jump") jumpCard.focusField()
         else if (what === "view") viewRoot.forceActiveFocus()
       }
 
@@ -2470,6 +2557,13 @@ Panel {
       background: viewRoot.background
     }
 
+    JumpCard {
+      id: jumpCard
+      anchors.fill: parent
+      foreground: viewRoot.foreground
+      background: viewRoot.background
+    }
+
     ConfirmDialog {
       id: confirmDialog
       anchors.fill: parent
@@ -2630,8 +2724,12 @@ Panel {
           id: crumbMouse
           anchors.fill: parent
           hoverEnabled: true
+          acceptedButtons: Qt.LeftButton | Qt.MiddleButton
           cursorShape: Qt.PointingHandCursor
-          onClicked: if (!crumb.last) root.go(crumb.modelData.path)
+          onClicked: function(mouse) {
+            if (root.newTabClick(mouse)) root.newTab(crumb.modelData.path)
+            else if (!crumb.last) root.go(crumb.modelData.path)
+          }
         }
 
         DropArea {
@@ -2911,11 +3009,16 @@ Panel {
 
     anchors.fill: parent
     hoverEnabled: true
-    acceptedButtons: Qt.LeftButton | Qt.RightButton
+    acceptedButtons: Qt.LeftButton | Qt.RightButton | Qt.MiddleButton
     drag.target: entry.trashName || root.renamePath === entry.path || Model.isArchiveLocation(entry.path) ? null : dragItem
     drag.threshold: Style.space(8)
 
     onClicked: function(mouse) {
+      // Middle click opens a folder in a new tab, as Ctrl+double click does.
+      if (mouse.button === Qt.MiddleButton) {
+        root.openInNewTab(entryMouse.entry)
+        return
+      }
       if (mouse.button === Qt.RightButton) {
         if (root.selected.indexOf(entryMouse.entry.path) < 0) root.clickEntry(entryMouse.entryIndex, 0)
         else root.cursorIndex = entryMouse.entryIndex
@@ -2926,7 +3029,9 @@ Panel {
       }
     }
     onDoubleClicked: function(mouse) {
-      if (mouse.button === Qt.LeftButton && root.renamePath === "") root.openEntry(entryMouse.entry)
+      if (mouse.button !== Qt.LeftButton || root.renamePath !== "") return
+      if ((mouse.modifiers & Qt.ControlModifier) && (entryMouse.entry.dir || Model.isArchive(entryMouse.entry))) root.openInNewTab(entryMouse.entry)
+      else root.openEntry(entryMouse.entry)
     }
     drag.onActiveChanged: {
       if (!drag.active) return
@@ -3669,9 +3774,10 @@ Panel {
           id: itemMouse
           anchors.fill: parent
           hoverEnabled: true
+          acceptedButtons: Qt.LeftButton | Qt.MiddleButton
           cursorShape: Qt.PointingHandCursor
-          onClicked: {
-            if (item.modelData.dir) root.go(item.modelData.path)
+          onClicked: function(mouse) {
+            if (item.modelData.dir) root.openFolder(item.modelData.path, root.newTabClick(mouse))
             else {
               root.pendingSelect = item.modelData.path
               root.go(column.folderPath)
@@ -4180,10 +4286,12 @@ Panel {
       anchors.fill: parent
       z: -1
       hoverEnabled: true
+      acceptedButtons: Qt.LeftButton | Qt.MiddleButton
       cursorShape: Qt.PointingHandCursor
-      onClicked: {
-        if (sideRow.drive) root.openDrive(sideRow.drive)
-        else root.go(sideRow.path)
+      // Ctrl+click or a middle click opens the place in a new tab.
+      onClicked: function(mouse) {
+        if (sideRow.drive) root.openDrive(sideRow.drive, root.newTabClick(mouse))
+        else root.openFolder(sideRow.path, root.newTabClick(mouse))
       }
     }
 
@@ -4386,10 +4494,11 @@ Panel {
 
           MouseArea {
             anchors.fill: parent
+            acceptedButtons: Qt.LeftButton | Qt.MiddleButton
             cursorShape: Qt.PointingHandCursor
-            onClicked: {
+            onClicked: function(mouse) {
               root.goMenuOpen = false
-              root.go(modelData.path)
+              root.openFolder(modelData.path, root.newTabClick(mouse))
             }
           }
         }
@@ -4670,6 +4779,193 @@ Panel {
             active: true
             onClicked: root.commitPrompt(promptField.text)
           }
+        }
+      }
+    }
+  }
+
+  // Ctrl+P: a field and the folders that fit it, the way an editor's quick
+  // open looks. Up and Down choose, Enter opens (in a new tab with Ctrl), Esc
+  // or a click outside closes.
+  component JumpCard: Item {
+    id: jumpLayer
+    required property color foreground
+    required property color background
+    visible: root.jumpOpen
+    z: 17
+
+    readonly property real rowHeight: Style.space(30)
+    // Where the pointer last was, so rows scrolling under a still pointer
+    // do not take the pick from the arrow keys.
+    property point pointer: Qt.point(-1, -1)
+
+    function focusField() {
+      jumpField.text = ""
+      jumpField.forceActiveFocus()
+    }
+
+    Rectangle {
+      anchors.fill: parent
+      color: Qt.rgba(jumpLayer.background.r, jumpLayer.background.g, jumpLayer.background.b, 0.7)
+      MouseArea { anchors.fill: parent; onClicked: root.closeJump() }
+    }
+
+    BorderSurface {
+      id: jumpBox
+      anchors.horizontalCenter: parent.horizontalCenter
+      y: Style.space(40)
+      width: Math.min(parent.width - Style.space(32), Style.space(520))
+      height: Math.min(parent.height - y - Style.space(16), jumpColumn.implicitHeight + jumpBox.contentTopInset + jumpBox.contentBottomInset)
+      color: jumpLayer.background
+      borderSpec: Border.flat(Color.accent, Style.normalBorderWidth)
+      padding: Style.space(10)
+
+      MouseArea { anchors.fill: parent }
+
+      Column {
+        id: jumpColumn
+        x: jumpBox.contentLeftInset
+        y: jumpBox.contentTopInset
+        width: jumpBox.width - jumpBox.contentLeftInset - jumpBox.contentRightInset
+        spacing: Style.space(8)
+
+        TextField {
+          id: jumpField
+          width: parent.width
+          placeholderText: "Jump to a folder: type part of its name or path"
+          foreground: jumpLayer.foreground
+          font.family: root.fontFamily
+          onTextChanged: root.setJumpQuery(text)
+          Keys.onPressed: function(event) {
+            var ctrl = (event.modifiers & Qt.ControlModifier) !== 0
+            if (event.key === Qt.Key_Escape) root.closeJump()
+            else if (event.key === Qt.Key_Down || (ctrl && event.key === Qt.Key_N)) root.moveJump(1)
+            else if (event.key === Qt.Key_Up || (ctrl && event.key === Qt.Key_P)) root.moveJump(-1)
+            else if (event.key === Qt.Key_PageDown) root.moveJump(8)
+            else if (event.key === Qt.Key_PageUp) root.moveJump(-8)
+            else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) root.pickJump(root.jumpList[root.jumpIndex], ctrl)
+            else return
+            event.accepted = true
+          }
+        }
+
+        Text {
+          visible: root.jumpList.length === 0
+          width: parent.width
+          textFormat: Text.PlainText
+          text: root.jumpQuery === "" ? "No folders yet: the ones you open, bookmark or use lately show here" : "No folder fits “" + root.jumpQuery + "”"
+          color: jumpLayer.foreground
+          opacity: 0.5
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.caption
+          wrapMode: Text.Wrap
+        }
+
+        Item {
+          visible: root.jumpList.length > 0
+          width: parent.width
+          height: Math.min(root.jumpList.length, 10) * jumpLayer.rowHeight
+
+          ListView {
+            id: jumpView
+            anchors.fill: parent
+            clip: true
+            interactive: false
+            boundsBehavior: Flickable.StopAtBounds
+            model: root.jumpList.length
+            currentIndex: root.jumpIndex
+            highlightFollowsCurrentItem: false
+            onCurrentIndexChanged: if (currentIndex >= 0) positionViewAtIndex(currentIndex, ListView.Contain)
+
+            delegate: CursorSurface {
+              id: jumpRow
+              required property int index
+              readonly property var item: root.jumpList[index] || null
+              width: jumpView.width
+              height: jumpLayer.rowHeight
+              foreground: jumpLayer.foreground
+              hasCursor: root.jumpIndex === index
+
+              Row {
+                anchors.fill: parent
+                anchors.leftMargin: Style.space(8)
+                anchors.rightMargin: Style.space(8)
+                spacing: Style.space(10)
+
+                Text {
+                  anchors.verticalCenter: parent.verticalCenter
+                  width: Style.space(18)
+                  horizontalAlignment: Text.AlignHCenter
+                  textFormat: Text.PlainText
+                  text: jumpRow.item ? jumpRow.item.icon : ""
+                  color: jumpRow.item && jumpRow.item.source === "tab" ? Color.accent : jumpLayer.foreground
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.body
+                }
+
+                Text {
+                  id: jumpLabel
+                  anchors.verticalCenter: parent.verticalCenter
+                  width: Math.min(implicitWidth, parent.width * 0.4)
+                  textFormat: Text.PlainText
+                  text: jumpRow.item ? jumpRow.item.label : ""
+                  color: jumpLayer.foreground
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.bodySmall
+                  font.bold: true
+                  elide: Text.ElideRight
+                }
+
+                Text {
+                  anchors.verticalCenter: parent.verticalCenter
+                  width: Math.max(0, parent.width - Style.space(18) - parent.spacing * 3 - jumpLabel.width - jumpSource.width)
+                  textFormat: Text.PlainText
+                  text: jumpRow.item && jumpRow.item.source !== "typed" ? Model.prettyPath(jumpRow.item.path, root.home) : ""
+                  color: jumpLayer.foreground
+                  opacity: 0.5
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                  elide: Text.ElideMiddle
+                }
+
+                Text {
+                  id: jumpSource
+                  anchors.verticalCenter: parent.verticalCenter
+                  textFormat: Text.PlainText
+                  text: {
+                    var it = jumpRow.item
+                    if (!it) return ""
+                    if (it.source === "tab") return "tab " + (it.tabIndex + 1)
+                    if (it.source === "visited") return "opened"
+                    if (it.source === "recent") return "recent"
+                    if (it.source === "bookmark") return "bookmark"
+                    return ""
+                  }
+                  color: jumpLayer.foreground
+                  opacity: 0.4
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                }
+              }
+
+              MouseArea {
+                id: jumpMouse
+                anchors.fill: parent
+                hoverEnabled: true
+                acceptedButtons: Qt.LeftButton | Qt.MiddleButton
+                cursorShape: Qt.PointingHandCursor
+                onPositionChanged: function(mouse) {
+                  var at = mapToItem(null, mouse.x, mouse.y)
+                  if (at.x === jumpLayer.pointer.x && at.y === jumpLayer.pointer.y) return
+                  jumpLayer.pointer = at
+                  root.jumpIndex = jumpRow.index
+                }
+                onClicked: function(mouse) { root.pickJump(jumpRow.item, root.newTabClick(mouse)) }
+              }
+            }
+          }
+
+          StepScroll { flick: jumpView; pitch: jumpLayer.rowHeight }
         }
       }
     }

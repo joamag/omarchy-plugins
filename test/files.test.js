@@ -502,6 +502,135 @@ describe("goTargets", () => {
   })
 })
 
+describe("addVisited", () => {
+  it("keeps folders newest first, each once, up to the cap", () => {
+    assert.deepEqual(Model.addVisited([], "/a", 3), ["/a"])
+    assert.deepEqual(Model.addVisited(["/a", "/b", "/c"], "/b", 3), ["/b", "/a", "/c"])
+    assert.deepEqual(Model.addVisited(["/a", "/b", "/c"], "/d", 3), ["/d", "/a", "/b"])
+    assert.equal(Model.addVisited(Array.from({ length: 60 }, (_, i) => `/f${i}`), "/new").length, Model.VISITED_MAX)
+  })
+
+  it("leaves out Recent, the Trash and folders inside archives", () => {
+    assert.deepEqual(Model.addVisited(["/a"], Model.RECENT, 3), ["/a"])
+    assert.deepEqual(Model.addVisited(["/a"], Model.TRASH, 3), ["/a"])
+    assert.deepEqual(Model.addVisited(["/a"], Model.archiveLocation(ZIP, "docs"), 3), ["/a"])
+  })
+
+  it("cleans up what settings hand back", () => {
+    assert.deepEqual(Model.addVisited(["/a", 7, null, "/b"], "", 5), ["/a", "/b"])
+    assert.deepEqual(Model.addVisited("nope", "", 5), [])
+    assert.deepEqual(Model.addVisited(undefined, "/a"), ["/a"])
+  })
+})
+
+describe("jumpCandidates", () => {
+  const tabs = [Model.newTab(HOME), Model.newTab(`${HOME}/Downloads`), Model.newTab("/etc")]
+  const recent = [
+    Model.makeEntry({ path: "/srv/www", dir: true }),
+    Model.makeEntry({ path: "/srv/notes/todo.txt" }),
+  ]
+
+  it("lists other tabs, opened, recent, bookmarks, places then drives, each once", () => {
+    const list = Model.jumpCandidates(tabs, 0, ["/opt/tools", "/etc"], recent, places.bookmarks, places.places, places.drives, HOME)
+    assert.deepEqual(list.map((c) => `${c.source}:${c.path}`), [
+      `tab:${HOME}/Downloads`, "tab:/etc",
+      "visited:/opt/tools",
+      "recent:/srv/www", "recent:/srv/notes",
+      `bookmark:${HOME}/repo.private`, `bookmark:${HOME}/Documents/Finance 2026`,
+      `place:${HOME}`, `place:${HOME}/Pictures`,
+      "drive:/", "drive:/run/media/joamag/T7", "drive:/mnt/data",
+    ])
+  })
+
+  it("names and marks each folder", () => {
+    const list = Model.jumpCandidates(tabs, 0, [], [], places.bookmarks, places.places, places.drives, HOME)
+    assert.deepEqual(list[0], { path: `${HOME}/Downloads`, source: "tab", label: "Downloads", icon: Model.PLACE_ICONS.downloads, tabIndex: 1 })
+    const bookmark = list.find((c) => c.source === "bookmark")
+    assert.equal(bookmark.label, "repo")
+    assert.equal(bookmark.icon, Model.GLYPHS.bookmark)
+    assert.equal(bookmark.tabIndex, -1)
+    assert.equal(list.find((c) => c.path === "/run/media/joamag/T7").label, "T7")
+  })
+
+  it("is empty with nothing to offer", () => {
+    assert.deepEqual(Model.jumpCandidates(null, 0, null, null, null, null, null, HOME), [])
+    // The only tab is the one on screen.
+    assert.deepEqual(Model.jumpCandidates([Model.newTab(HOME)], 0, [], [], [], [], [], HOME), [])
+  })
+})
+
+describe("fuzzyScore", () => {
+  it("is 0 for nothing typed and -1 when the letters do not all fit in order", () => {
+    assert.equal(Model.fuzzyScore("", "/etc"), 0)
+    assert.equal(Model.fuzzyScore("xyz", "~/Downloads"), -1)
+    assert.equal(Model.fuzzyScore("sd", "~/Downloads"), -1)
+    assert.equal(Model.fuzzyScore("a", ""), -1)
+  })
+
+  it("ranks word starts and runs above scattered letters", () => {
+    assert.ok(Model.fuzzyScore("dl", "~/Downloads") > 0)
+    assert.ok(Model.fuzzyScore("down", "~/Downloads") > Model.fuzzyScore("dwns", "~/Downloads"))
+    assert.ok(Model.fuzzyScore("rp", "~/repo.private") > Model.fuzzyScore("rp", "~/xrxxxxp"))
+    assert.ok(Model.fuzzyScore("pic", "~/Pictures") > Model.fuzzyScore("pic", "~/topics"))
+  })
+
+  it("takes the best place to start, not the first", () => {
+    // The D and o of Documents come first, but down-notes fits as a run.
+    assert.equal(Model.fuzzyScore("down", "~/Documents/down-notes"), Model.fuzzyScore("down", "~/xxxxxxxxx/down-notes"))
+    assert.ok(Model.fuzzyScore("down", "~/Documents/down-notes") > Model.fuzzyScore("down", "~/Documents/dxoxwxn"))
+  })
+
+  it("ignores case and skips spaces in what is typed", () => {
+    assert.equal(Model.fuzzyScore("DOWN", "~/Downloads"), Model.fuzzyScore("down", "~/Downloads"))
+    assert.equal(Model.fuzzyScore("fin 26", "~/Documents/Finance 2026"), Model.fuzzyScore("fin26", "~/Documents/Finance 2026"))
+    assert.equal(Model.fuzzyScore("   ", "/etc"), 0)
+  })
+})
+
+describe("jumpMatches", () => {
+  const candidates = Model.jumpCandidates([], 0, ["/srv/www", `${HOME}/Documents/down-notes`], [], places.bookmarks, places.places, places.drives, HOME)
+
+  it("keeps the order and the limit with nothing typed", () => {
+    assert.deepEqual(Model.jumpMatches(candidates, "", HOME, 2).map((c) => c.path), ["/srv/www", `${HOME}/Documents/down-notes`])
+    assert.equal(Model.jumpMatches(candidates, "  ", HOME).length, candidates.length)
+    assert.deepEqual(Model.jumpMatches(null, "a", HOME), [])
+  })
+
+  it("puts the best fit first and drops what does not fit", () => {
+    // Both fit as a run at a word start; the shorter way in wins.
+    assert.deepEqual(Model.jumpMatches(candidates, "down", HOME).map((c) => c.path), [`${HOME}/Downloads`, `${HOME}/Documents/down-notes`])
+    // A run in the folder's own name beats letters spread over the path.
+    const spread = [{ path: "/p/i/c/x", label: "x" }, { path: "/srv/pics", label: "pics" }]
+    assert.deepEqual(Model.jumpMatches(spread, "pic", HOME).map((c) => c.path), ["/srv/pics", "/p/i/c/x"])
+    assert.deepEqual(Model.jumpMatches(candidates, "qqq", HOME), [])
+    assert.equal(Model.jumpMatches(candidates, "t7", HOME)[0].path, "/run/media/joamag/T7")
+  })
+
+  it("finds a folder by its label when the path does not fit", () => {
+    const renamed = [{ path: "/srv/x1", label: "Projects", source: "bookmark" }, { path: "/srv/x2", label: "Other", source: "bookmark" }]
+    assert.deepEqual(Model.jumpMatches(renamed, "proj", HOME).map((c) => c.path), ["/srv/x1"])
+  })
+
+  it("keeps the candidates' order on a tie and stops at the limit", () => {
+    const twins = [{ path: "/a/same", label: "same" }, { path: "/b/same", label: "same" }, { path: "/c/same", label: "same" }]
+    assert.deepEqual(Model.jumpMatches(twins, "same", HOME).map((c) => c.path), ["/a/same", "/b/same", "/c/same"])
+    assert.equal(Model.jumpMatches(twins, "same", HOME, 2).length, 2)
+  })
+})
+
+describe("looksLikePath", () => {
+  it("accepts absolute and home paths only", () => {
+    assert.equal(Model.looksLikePath("/etc"), true)
+    assert.equal(Model.looksLikePath("  /etc "), true)
+    assert.equal(Model.looksLikePath("~"), true)
+    assert.equal(Model.looksLikePath("~/Music"), true)
+    assert.equal(Model.looksLikePath("~other"), false)
+    assert.equal(Model.looksLikePath("docs"), false)
+    assert.equal(Model.looksLikePath(""), false)
+    assert.equal(Model.looksLikePath(null), false)
+  })
+})
+
 describe("normalizeView", () => {
   it("accepts the three views", () => {
     assert.equal(Model.normalizeView("grid"), "grid")
@@ -1343,6 +1472,7 @@ describe("hints", () => {
     assert.equal(Model.hints("trash")[1].label, "restore")
     assert.equal(Model.hints("archive")[4].label, "copy out")
     assert.equal(Model.hints("prompt")[0].key, "Enter")
+    assert.equal(Model.hints("jump")[3].key, "Ctrl+Enter")
     assert.equal(Model.hints("whatever"), Model.HINTS.browse)
   })
 })
