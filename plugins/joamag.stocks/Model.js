@@ -19,10 +19,11 @@ var RANGES = [
 // range; intraday moves, a year of weekly or five of monthly closes does not.
 var SERIES_TTL_MS = { "1d": 60000, "5d": 300000, "1mo": 900000, "6mo": 1800000, "1y": 3600000, "5y": 3600000 }
 
-// Popup tabs: the chart and watchlist, and the headlines.
+// Popup tabs: the chart and watchlist, and the headlines, each with the
+// Material Design icon its button shows beside the label.
 var TABS = [
-  { key: "markets", label: "Markets" },
-  { key: "news", label: "News" }
+  { key: "markets", label: "Markets", icon: "󰄪" },
+  { key: "news", label: "News", icon: "󱀂" }
 ]
 
 // News tab: the feed name quotes.sh gives the top stories, how many

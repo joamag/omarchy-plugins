@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "joamag.stocks",
   "name": "Stocks",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "author": "João Magalhães",
   "license": "Apache-2.0",
   "description": "Market watchlist: one index or stock in the bar, popup with an intraday chart, range switching, sparklines for every symbol and a news tab.",

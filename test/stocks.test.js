@@ -18,6 +18,15 @@ const AMD = { symbol: "AMD", range: "1d", name: "Advanced Micro Devices, Inc.", 
 const DOWN = { symbol: "INTC", range: "1d", name: "Intel Corporation", currency: "USD", price: 90.05, prevClose: 90.52, time: 1, state: "CLOSED", points: [] }
 const BAD = { symbol: "BOGUS", range: "1d", error: "No data found, symbol may be delisted" }
 
+describe("TABS", () => {
+  it("gives Markets and News a key, a label and a Nerd Font icon each", () => {
+    assert.deepEqual(Model.TABS.map((t) => [t.key, t.label]), [["markets", "Markets"], ["news", "News"]])
+    // Line chart and newspapers, from the Material Design range of the font.
+    assert.deepEqual(Model.TABS.map((t) => t.icon.codePointAt(0)), [0xf012a, 0xf1002])
+    assert.ok(Model.TABS.every((t) => [...t.icon].length === 1))
+  })
+})
+
 describe("num", () => {
   it("parses finite numbers only", () => {
     assert.equal(Model.num("1.5"), 1.5)

@@ -542,7 +542,7 @@ Panel {
     function cycleSymbol(): void { root.cycleSymbol(1) }
     function addSymbol(symbol: string): string { return root.addSymbol(symbol) ? "ok" : "exists" }
     function removeSymbol(symbol: string): string { return root.removeSymbol(String(symbol || "").trim().toUpperCase()) ? "ok" : "unknown" }
-    function version(): string { return "0.7.0" }
+    function version(): string { return "0.8.0" }
   }
 
   onOpenedChanged: {
@@ -707,6 +707,8 @@ Panel {
               required property var modelData
               width: tabRow.cellWidth
               height: Style.spacing.controlHeight
+              iconText: modelData.icon
+              iconSize: Style.font.title
               text: modelData.label
               fontSize: Style.font.bodySmall
               foreground: root.foreground
