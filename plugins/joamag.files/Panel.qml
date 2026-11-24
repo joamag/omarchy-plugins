@@ -2010,6 +2010,16 @@ Panel {
         } else if (what === "prompt") promptCard.focusField()
         else if (what === "view") viewRoot.forceActiveFocus()
       }
+
+      // The go-to card hangs under the header, from the Go to button (from
+      // the files' left edge in the window, which has no such button).
+      function onGoMenuOpenChanged() {
+        if (!root.goMenuOpen || !viewRoot.active) return
+        var at = (goButton.visible ? goButton : main).mapToItem(viewRoot, 0, 0)
+        var below = header.mapToItem(viewRoot, 0, header.height + Style.space(6))
+        goMenu.x = Math.max(0, Math.min(viewRoot.width - goMenu.width, at.x))
+        goMenu.y = below.y
+      }
     }
 
     onActiveChanged: if (active) Qt.callLater(function() { viewRoot.forceActiveFocus() })
@@ -2050,6 +2060,7 @@ Panel {
           IconButton { glyph: "󰁔"; tip: "Forward (Alt+→)"; enabled: Model.canGoForward(root.tab); onClicked: root.forward() }
           IconButton { glyph: "󰁝"; tip: "Up (h)"; enabled: Model.parentPath(root.location) !== ""; onClicked: root.up() }
           IconButton {
+            id: goButton
             visible: !viewRoot.windowed
             glyph: "󰋜"
             tip: "Go to (g)"
@@ -2402,10 +2413,17 @@ Panel {
       background: viewRoot.background
     }
 
+    // A click outside the go-to card closes it.
+    MouseArea {
+      anchors.fill: parent
+      visible: root.goMenuOpen
+      z: 19
+      acceptedButtons: Qt.LeftButton | Qt.RightButton
+      onClicked: root.goMenuOpen = false
+    }
+
     GoMenu {
-      x: main.x + (main.width - width) / 2
-      anchors.bottom: parent.bottom
-      anchors.bottomMargin: footer.height + Style.space(14)
+      id: goMenu
       foreground: viewRoot.foreground
       background: viewRoot.background
     }
