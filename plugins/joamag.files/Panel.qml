@@ -2332,6 +2332,7 @@ Panel {
               anchors.fill: parent
               visible: root.columnsShown
               foreground: viewRoot.foreground
+              background: viewRoot.background
               rowHeight: viewRoot.rowHeight
               shown: visible && viewRoot.active
             }
@@ -3449,11 +3450,55 @@ Panel {
   component ColumnsPane: Item {
     id: columnsPane
     required property color foreground
+    required property color background
     required property real rowHeight
     required property bool shown
 
     readonly property var chain: Model.crumbs(root.location, root.home, root.drives)
     readonly property real columnWidth: Style.space(190)
+    // The column under the cursor's folder or file, faded in as it opens.
+    property real trailOpacity: 1
+
+    // As far right as the strip goes: the deepest columns in view. Worked
+    // out when asked, since a binding may not have caught up yet inside
+    // the strip's own change handler.
+    function lastX() {
+      return Math.max(0, columnsFlick.contentWidth - columnsFlick.width)
+    }
+
+    // A column or two opening or closing slides the strip there quickly,
+    // the next column fading in; a jump further off lands at once.
+    function slideTo(x) {
+      var target = Math.max(0, Math.min(lastX(), x))
+      slide.stop()
+      if (Math.abs(target - columnsFlick.contentX) > columnWidth * 2) {
+        columnsFlick.contentX = target
+        trailOpacity = 1
+        return
+      }
+      slideX.to = target
+      fadeIn.from = target > columnsFlick.contentX ? 0 : trailOpacity
+      slide.start()
+    }
+
+    // One column back (-1) or forward (1), from the column edge nearest.
+    function stepColumns(count) {
+      slideTo(Model.steppedScroll(columnsFlick.contentX, count, columnWidth, columnsFlick.contentWidth, columnsFlick.width))
+    }
+
+    ParallelAnimation {
+      id: slide
+      NumberAnimation { id: slideX; target: columnsFlick; property: "contentX"; duration: 120; easing.type: Easing.OutCubic }
+      NumberAnimation { id: fadeIn; target: columnsPane; property: "trailOpacity"; to: 1; duration: 120 }
+    }
+
+    // Moving the cursor brings the deepest columns back after a scroll back.
+    Connections {
+      target: root
+      function onCursorIndexChanged() {
+        if (columnsPane.shown && columnsFlick.contentX < columnsPane.lastX()) columnsPane.slideTo(columnsPane.lastX())
+      }
+    }
 
     Flickable {
       id: columnsFlick
@@ -3465,7 +3510,7 @@ Panel {
       contentWidth: columnsRow.width
       contentHeight: height
       // The deepest column, where the cursor is, stays in view.
-      onContentWidthChanged: contentX = Math.max(0, contentWidth - width)
+      onContentWidthChanged: columnsPane.slideTo(columnsPane.lastX())
 
 
       Row {
@@ -3634,6 +3679,7 @@ Panel {
         // What is under the cursor: a folder's contents, or a file's preview.
         FolderColumn {
           visible: root.previewEntry !== null && root.previewEntry.dir
+          opacity: columnsPane.trailOpacity
           width: visible ? Math.max(columnsPane.columnWidth, columnsPane.width - columnsRow.x - columnsPane.columnWidth * columnsPane.chain.length) : 0
           height: columnsRow.height
           folderPath: visible ? root.previewEntry.path : ""
@@ -3646,10 +3692,55 @@ Panel {
 
         PreviewPane {
           visible: root.previewEntry !== null && !root.previewEntry.dir && !root.showPreview
+          opacity: columnsPane.trailOpacity
           width: visible ? Math.max(Style.space(230), columnsPane.width - columnsPane.columnWidth * columnsPane.chain.length) : 0
           height: columnsRow.height
           foreground: columnsPane.foreground
           entry: visible ? root.previewEntry : null
+        }
+      }
+    }
+
+    // Columns scrolled off to one side: a ‹ or › fading in at that edge
+    // steps one column back into view.
+    Repeater {
+      model: columnsPane.shown ? [-1, 1] : []
+
+      Item {
+        id: edge
+        required property int modelData
+        readonly property bool back: modelData < 0
+        visible: back ? columnsFlick.contentX > 1 : columnsFlick.contentX < columnsPane.lastX() - 1
+        x: back ? 0 : columnsPane.width - width
+        width: Style.space(26)
+        height: columnsPane.height
+
+        Rectangle {
+          anchors.fill: parent
+          gradient: Gradient {
+            orientation: Gradient.Horizontal
+            GradientStop { position: 0; color: edge.back ? columnsPane.background : Qt.rgba(columnsPane.background.r, columnsPane.background.g, columnsPane.background.b, 0) }
+            GradientStop { position: 1; color: edge.back ? Qt.rgba(columnsPane.background.r, columnsPane.background.g, columnsPane.background.b, 0) : columnsPane.background }
+          }
+        }
+
+        Text {
+          anchors.centerIn: parent
+          textFormat: Text.PlainText
+          text: edge.back ? "‹" : "›"
+          color: edgeMouse.containsMouse ? Color.accent : columnsPane.foreground
+          opacity: edgeMouse.containsMouse ? 1 : 0.6
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.title
+          font.bold: true
+        }
+
+        MouseArea {
+          id: edgeMouse
+          anchors.fill: parent
+          hoverEnabled: true
+          cursorShape: Qt.PointingHandCursor
+          onClicked: columnsPane.stepColumns(edge.modelData)
         }
       }
     }
