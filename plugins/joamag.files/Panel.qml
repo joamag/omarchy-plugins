@@ -3601,13 +3601,6 @@ Panel {
           width: columnsPane.columnWidth
           height: columnsRow.height
 
-          HoverHandler { id: currentHover }
-
-          PanelToolTip {
-            visible: currentHover.hovered
-            text: Model.prettyPath(root.location, root.home)
-          }
-
           Text {
             anchors.centerIn: parent
             width: parent.width - Style.space(16)
@@ -3906,13 +3899,6 @@ Panel {
       function onShowHiddenChanged() { column.snapshot() }
       function onSortKeyChanged() { column.snapshot() }
       function onSortDescendingChanged() { column.snapshot() }
-    }
-
-    HoverHandler { id: columnHover }
-
-    PanelToolTip {
-      visible: columnHover.hovered && column.folderPath !== ""
-      text: Model.prettyPath(column.folderPath, root.home)
     }
 
     ListView {
