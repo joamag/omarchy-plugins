@@ -431,7 +431,11 @@ Panel {
   function openPicked() {
     var list = picked
     if (list.length === 0) return
-    if (list.length === 1 || list[0].dir || list[0].trashName) {
+    if (list[0].trashName) {
+      restore(list)
+      return
+    }
+    if (list.length === 1 || list[0].dir) {
       openEntry(list[0])
       return
     }
@@ -485,7 +489,11 @@ Panel {
       showToast("Open a folder to paste into")
       return
     }
-    if (busy || !paths || paths.length === 0) return
+    if (!paths || paths.length === 0) return
+    if (busy) {
+      showToast("Wait for the running copy or move to finish")
+      return
+    }
     var dirs = {}
     for (var i = 0; i < paths.length; i++) {
       var idx = Model.indexOfPath(entries, paths[i])
@@ -650,7 +658,7 @@ Panel {
 
   function trashPicked() {
     var list = picked.filter(function(e) { return !e.trashName })
-    if (list.length === 0 || inRecent && list.length === 0) return
+    if (list.length === 0) return
     act("trash", ["trash"].concat(list.map(function(e) { return e.path })), { entries: list })
   }
 
@@ -1245,7 +1253,6 @@ Panel {
     anchors.fill: parent
     bar: root.bar
     text: Model.ICON
-    active: root.detached
     fontSize: Style.font.body
     horizontalMargin: 6
     fixedWidth: Style.bar.iconSlot
@@ -2102,7 +2109,8 @@ Panel {
     property real leading: 0
 
     height: parent.height
-    readonly property bool on: root.sortKey === key
+    // Recent keeps its newest-first order, so no column claims the sort.
+    readonly property bool on: root.sortKey === key && !root.inRecent
 
     Text {
       anchors.left: sortHead.alignRight ? undefined : parent.left
