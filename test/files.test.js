@@ -519,6 +519,15 @@ describe("typeLabel", () => {
   })
 })
 
+describe("typeFor", () => {
+  it("names a type from its extension and kind", () => {
+    assert.equal(Model.typeFor("md", "text"), "Markdown")
+    assert.equal(Model.typeFor("webp", "image"), "WEBP image")
+    assert.equal(Model.typeFor("", "image"), "Image")
+    assert.equal(Model.typeFor("iso", "disc"), "Disk image")
+  })
+})
+
 describe("kindIcon", () => {
   it("falls back to the plain file glyph", () => {
     assert.equal(Model.kindIcon("dir"), Model.KIND_ICONS.dir)
@@ -548,32 +557,60 @@ describe("isTextual", () => {
 })
 
 describe("makeEntry", () => {
-  it("fills name, kind and hidden from the path", () => {
-    const e = Model.makeEntry({ path: "/x/.notes.md", size: "12", modified: 5 })
-    assert.deepEqual(e, { name: ".notes.md", path: "/x/.notes.md", dir: false, size: 12, modified: 5, hidden: true, kind: "text", origin: "", trashName: "" })
+  it("fills name, kind, type, hidden and the sort keys from the path", () => {
+    const e = Model.makeEntry({ path: "/x/.Notes 2.md", size: "12", modified: 5 })
+    assert.deepEqual(e, {
+      name: ".Notes 2.md", path: "/x/.Notes 2.md", dir: false, size: 12, modified: 5, hidden: true, kind: "text", type: "Markdown",
+      lower: ".notes 2.md", key: ".notes 0000000000000002.md", origin: "", trashName: "",
+    })
+    assert.equal(Model.makeEntry({ path: "/x/plain" }).key, "plain")
   })
 
   it("leaves folders without a size", () => {
-    const e = Model.makeEntry({ path: "/x/d", dir: true, size: 4096, origin: "/o", trashName: "d.2" })
+    const e = Model.makeEntry({ path: "/x/d.zip", dir: true, size: 4096, origin: "/o", trashName: "d.2" })
     assert.ok(Number.isNaN(e.size))
+    assert.equal(e.kind, "dir")
+    assert.equal(e.type, "Folder")
     assert.equal(e.origin, "/o")
     assert.equal(e.trashName, "d.2")
     assert.equal(Model.makeEntry({}).path, "")
   })
 })
 
+describe("parseTime", () => {
+  it("reads epoch seconds", () => {
+    assert.equal(Model.parseTime("1700000000.75"), 1700000000750)
+    assert.equal(Model.parseTime(12), 12000)
+  })
+
+  it("reads UTC dates with a Z and local dates without", () => {
+    assert.equal(Model.parseTime("2026-11-20T10:00:00.5Z"), Date.UTC(2026, 10, 20, 10, 0, 0, 500))
+    assert.equal(Model.parseTime("2026-11-20T10:00:00.802543Z"), Date.UTC(2026, 10, 20, 10, 0, 0, 802))
+    assert.equal(Model.parseTime(" 2026-11-24T10:00:00 "), new Date(2026, 10, 24, 10).getTime())
+  })
+
+  it("is NaN for anything else", () => {
+    assert.ok(Number.isNaN(Model.parseTime("nope")))
+    assert.ok(Number.isNaN(Model.parseTime("2026-11-24")))
+    assert.ok(Number.isNaN(Model.parseTime("")))
+    assert.ok(Number.isNaN(Model.parseTime(null)))
+    assert.ok(Number.isNaN(Model.parseTime(undefined)))
+  })
+})
+
 describe("parseEntries", () => {
-  it("reads entry lines, seconds into milliseconds", () => {
+  it("reads entry lines with either kind of time", () => {
     const raw = [
       "entry\tf\t120\t1700000000\t/home/joamag/a.txt\t\t",
       "entry\td\t\t1700000001.75\t/home/joamag/dir",
       "entry\tf\t9\tnope\t/home/joamag/Trash/files/b.2.txt\t/home/joamag/Documents/b.txt\tb.2.txt",
+      "entry\tf\t3\t2026-11-22T10:00:00Z\t/home/joamag/c.txt",
       "entry\tf\t1\t1\t",
       "junk",
       "",
     ].join("\n")
     const list = Model.parseEntries(raw)
-    assert.equal(list.length, 3)
+    assert.equal(list.length, 4)
     assert.equal(list[0].modified, 1700000000000)
     assert.equal(list[0].size, 120)
     assert.equal(list[1].dir, true)
@@ -582,19 +619,27 @@ describe("parseEntries", () => {
     assert.equal(list[2].trashName, "b.2.txt")
     assert.equal(list[2].origin, "/home/joamag/Documents/b.txt")
     assert.ok(Number.isNaN(list[2].modified))
+    assert.equal(list[3].modified, Date.UTC(2026, 10, 22, 10))
     assert.deepEqual(Model.parseEntries(""), [])
   })
 })
 
-describe("compareText", () => {
-  it("orders numbers by value and ignores case", () => {
-    assert.equal(Model.compareText("file2", "file10"), -1)
-    assert.equal(Model.compareText("B", "a"), 1)
-    assert.equal(Model.compareText("a1", "a01"), 1)
-    assert.equal(Model.compareText("a", "a"), 0)
-    assert.equal(Model.compareText("ab", "a"), 1)
-    assert.equal(Model.compareText("x9", "x9y"), -1)
-    assert.equal(Model.compareText(null, ""), 0)
+describe("padNumber", () => {
+  it("pads to a fixed width so string order is numeric order", () => {
+    assert.equal(Model.padNumber(12), "0000000000000012")
+    assert.equal(Model.padNumber(2.9), "0000000000000002")
+    assert.equal(Model.padNumber(-3), "0000000000000000")
+    assert.ok(Model.padNumber(9) < Model.padNumber(10))
+    assert.equal(Model.padNumber(1e17), "100000000000000000")
+  })
+})
+
+describe("naturalKey", () => {
+  it("lower-cases and pads every run of digits", () => {
+    assert.equal(Model.naturalKey("File2.TXT"), "file0000000000000002.txt")
+    assert.ok(Model.naturalKey("file2") < Model.naturalKey("file10"))
+    assert.equal(Model.naturalKey("a007"), Model.naturalKey("a7"))
+    assert.equal(Model.naturalKey(null), "")
   })
 })
 
@@ -629,33 +674,39 @@ describe("cycleSortKey", () => {
   })
 })
 
-describe("compareEntries", () => {
-  it("keeps folders first whatever the order", () => {
-    const dir = entry("z", { dir: true })
-    const file = entry("a.txt", { size: 1 })
-    assert.equal(Model.compareEntries(dir, file, "name", true), -1)
-    assert.equal(Model.compareEntries(file, dir, "size", false), 1)
+describe("sortString", () => {
+  it("leads with the column, then the natural and the raw name", () => {
+    const e = entry("File2.txt", { size: 41, modified: 7 })
+    assert.equal(Model.sortString(e, "name"), "\u0001file0000000000000002.txt\u0001File2.txt")
+    assert.equal(Model.sortString(e, "modified"), "0000000000000007\u0001file0000000000000002.txt\u0001File2.txt")
+    assert.equal(Model.sortString(e, "size"), "0000000000000042\u0001file0000000000000002.txt\u0001File2.txt")
+    assert.equal(Model.sortString(e, "type"), "plain text\u0001file0000000000000002.txt\u0001File2.txt")
   })
 
-  it("falls back to the name on ties", () => {
-    const a = entry("a.txt", { size: 5, modified: 1 })
-    const b = entry("b.txt", { size: 5, modified: 1 })
-    assert.equal(Model.compareEntries(a, b, "size", true), -1)
-    assert.equal(Model.compareEntries(a, b, "modified", false), -1)
+  it("puts unknown sizes and dates first", () => {
+    const dir = entry("d", { dir: true })
+    assert.ok(Model.sortString(dir, "size") < Model.sortString(entry("e", { size: 0 }), "size"))
+    assert.ok(Model.sortString(dir, "modified").startsWith("0000000000000000"))
   })
 })
 
 describe("sortEntries", () => {
-  it("sorts by name, naturally", () => {
+  it("sorts by name, naturally, folders first either way", () => {
     assert.deepEqual(Model.sortEntries(LISTING, "name", false).map((e) => e.name), ["alpha", "Zeta", ".hidden", "file2.txt", "file10.txt", "photo.PNG"])
     assert.deepEqual(Model.sortEntries(LISTING, "name", true).map((e) => e.name), ["Zeta", "alpha", "photo.PNG", "file10.txt", "file2.txt", ".hidden"])
   })
 
-  it("sorts by date, size and type", () => {
+  it("sorts by date, size and type, ties by name", () => {
+    assert.deepEqual(Model.sortEntries(LISTING, "modified", false).map((e) => e.name), ["alpha", "Zeta", "file2.txt", "file10.txt", ".hidden", "photo.PNG"])
     assert.deepEqual(Model.sortEntries(LISTING, "modified", true).map((e) => e.name), ["Zeta", "alpha", "photo.PNG", ".hidden", "file10.txt", "file2.txt"])
-    assert.deepEqual(Model.sortEntries(LISTING, "size", true).map((e) => e.name), ["alpha", "Zeta", "file2.txt", "photo.PNG", "file10.txt", ".hidden"])
+    assert.deepEqual(Model.sortEntries(LISTING, "size", true).map((e) => e.name), ["Zeta", "alpha", "file2.txt", "photo.PNG", "file10.txt", ".hidden"])
     // File, Plain text, PNG image.
     assert.deepEqual(Model.sortEntries(LISTING, "type", false).map((e) => e.name), ["alpha", "Zeta", ".hidden", "file2.txt", "file10.txt", "photo.PNG"])
+  })
+
+  it("keeps names that differ only in case or zeros in a fixed order", () => {
+    const list = [entry("b"), entry("a01"), entry("B"), entry("a1")]
+    assert.deepEqual(Model.sortEntries(list, "name", false).map((e) => e.name), ["a01", "a1", "B", "b"])
   })
 
   it("leaves the input alone and accepts nothing", () => {
@@ -1122,11 +1173,14 @@ esac`)
       `  <bookmark href="file://${s.home}/gone.txt" added="2026-11-23T10:00:00Z" modified="2026-11-23T10:00:00Z" visited="x">`,
       `  <bookmark href="file://${s.home}/R&amp;D.md" added="2026-11-22T10:00:00Z" modified="2026-11-22T10:00:00Z" visited="x">`,
       `  <bookmark href="file://${s.home}/proj" added="2026-11-21T10:00:00Z" modified="2026-11-21T10:00:00Z" visited="x">`,
+      `  <bookmark href="file://${s.home}/a%20b.txt" added="2026-11-01T10:00:00Z" modified="2026-11-01T10:00:00Z" visited="x">`,
       '  <bookmark href="https://example.com" added="2026-11-24T10:00:00Z" modified="2026-11-24T10:00:00Z" visited="x">',
       "</xbel>",
     ].join("\n"))
     const list = Model.parseEntries(s.run(["recent"]).stdout)
+    // a b.txt is listed twice; its newest use counts.
     assert.deepEqual(list.map((e) => [e.name, e.dir]), [["R&D.md", false], ["proj", true], ["a b.txt", false]])
+    assert.equal(list[2].modified, Date.UTC(2026, 10, 20, 10, 0, 0, 500))
     assert.equal(list[0].size, 2)
     assert.equal(list[0].modified, Date.UTC(2026, 10, 22, 10))
   })
@@ -1151,7 +1205,7 @@ esac`)
     fs.mkdirSync(path.join(trash, "files", "old"), { recursive: true })
     write(path.join(trash, "info", "old.trashinfo"), `[Trash Info]\nPath=${s.home}/old\nDeletionDate=2026-11-20T08:30:00\n`)
     write(path.join(trash, "info", "orphan.trashinfo"), "[Trash Info]\nPath=/x\n")
-    const list = Model.parseEntries(s.run(["trashed"]).stdout)
+    const list = Model.sortEntries(Model.parseEntries(s.run(["trashed"]).stdout), "name", false)
     assert.deepEqual(list.map((e) => [e.name, e.trashName, e.origin, e.dir]), [
       ["old", "old", `${s.home}/old`, true],
       ["report final.pdf", "report.pdf", `${s.home}/Documents/report final.pdf`, false],

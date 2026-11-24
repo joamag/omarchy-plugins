@@ -35,6 +35,15 @@ Panel {
 
   // The folder model's rows, and the lists that are not folders on disk.
   property var folderEntries: []
+  // Entries by path from the last listing, reused while a file's size and
+  // date stay the same, and the folder that listing is of.
+  property var entryCache: ({})
+  property string listedFolder: ""
+  // The folder changed while nothing showed it; read it again on show.
+  property bool folderDirty: false
+  // Search results stream in and are added a batch at a time.
+  property var searchBuffer: []
+  property bool searchRestart: false
   property var recentEntries: []
   property var trashEntries: []
   property var searchEntries: []
@@ -50,6 +59,11 @@ Panel {
   property int cursorIndex: 0
   property int anchorIndex: 0
   property var selected: []
+  // What the preview pane and the columns' last column show: the cursor
+  // entry, at once for a single step, after a pause while a key is held.
+  property var previewEntry: null
+  // The window's content is built on the first pop out and kept after.
+  property bool windowBuilt: false
   // A path to put the cursor on (and to rename) as soon as it is listed:
   // the folder we came up from, a renamed or a new file.
   property string pendingSelect: ""
@@ -101,23 +115,30 @@ Panel {
   readonly property bool inTrash: location === Model.TRASH
   readonly property bool inRecent: location === Model.RECENT
   readonly property bool inFolder: !Model.isVirtual(location)
+  readonly property bool shown: opened || detached
   readonly property var places: placesData.places
   readonly property var bookmarks: placesData.bookmarks
   readonly property var drives: placesData.drives
   readonly property string locationLabel: Model.placeLabel(location, home, places, drives)
   readonly property bool bookmarked: isBookmarked(location)
 
-  readonly property var entries: {
+  // The listing on screen, sorted once; the filter then only narrows it,
+  // so typing into it never sorts a big folder again.
+  readonly property var sortedEntries: {
     var base = folderEntries
     if (inRecent) base = recentEntries
     else if (inTrash) base = trashEntries
     else if (deep) base = searchEntries
-    var shown = Model.filterEntries(base, deep ? "" : query, showHidden || deep)
     // Recent keeps its newest-first order.
-    return inRecent ? shown : Model.sortEntries(shown, sortKey, sortDescending)
+    return inRecent ? base : Model.sortEntries(base, sortKey, sortDescending)
   }
+  readonly property var entries: Model.filterEntries(sortedEntries, deep ? "" : query, showHidden || deep)
+  // The views are handed how many entries there are and read each visible
+  // row from the list: handing them the list itself converts all of it on
+  // every change, which a big folder pays for on every keystroke. A row
+  // whose index runs past a shorter list for a moment shows this instead.
+  readonly property var blankEntry: Model.makeEntry({ path: "" })
   readonly property var cursorEntry: cursorIndex >= 0 && cursorIndex < entries.length ? entries[cursorIndex] : null
-  readonly property var picked: Model.pickedEntries(entries, selected, cursorIndex)
   readonly property bool busy: actionProc.running || transferProc.running || namesProc.running
   readonly property var conflictJob: transferJob ? transferJob.jobs[Model.conflictIndex(transferJob.jobs)] || null : null
   readonly property string hintMode: {
@@ -133,6 +154,9 @@ Panel {
 
   // A view asks for focus on one of its fields, or on itself.
   signal focusRequested(string what)
+  // Around a refresh of the folder on screen, so views keep their scroll.
+  signal listingWillChange()
+  signal listingChanged()
 
   // ---- Tabs and navigation ----------------------------------------------
 
@@ -158,6 +182,7 @@ Panel {
     query = ""
     filtering = false
     deep = false
+    stopSearch()
     searchEntries = []
     renamePath = ""
     renameError = ""
@@ -300,8 +325,7 @@ Panel {
     } else if (inTrash) {
       if (!trashProc.running) trashProc.running = true
     } else {
-      freeProc.command = [root.scriptPath, "free", location]
-      if (!freeProc.running) freeProc.running = true
+      freeTimer.restart()
     }
   }
 
@@ -311,20 +335,58 @@ Panel {
 
   // Qt's folder model lists the folder and follows changes on disk; its
   // rows are copied into plain entries so every view, Recent and the Trash
-  // share one shape.
+  // share one shape. An entry whose size and date did not change is reused,
+  // so a change in a big folder costs a read of the rows and no more; a
+  // refresh that changes nothing changes nothing on screen. While nothing
+  // shows the folder it is only marked to be read on show.
   function snapshotFolder() {
-    var out = []
-    for (var i = 0; i < folderModel.count; i++) {
-      var modified = folderModel.get(i, "fileModified")
-      out.push(Model.makeEntry({
-        path: folderModel.get(i, "filePath"),
-        name: folderModel.get(i, "fileName"),
-        dir: folderModel.get(i, "fileIsDir") === true,
-        size: folderModel.get(i, "fileSize"),
-        modified: modified ? modified.getTime() : NaN
-      }))
+    if (!shown) {
+      folderDirty = true
+      return
     }
-    folderEntries = out
+    folderDirty = false
+    var cache = entryCache
+    var next = {}
+    var out = []
+    var old = listedFolder === location ? folderEntries : []
+    var same = folderModel.count === old.length
+    for (var i = 0; i < folderModel.count; i++) {
+      var path = folderModel.get(i, "filePath")
+      var size = folderModel.get(i, "fileSize")
+      var modified = folderModel.get(i, "fileModified")
+      var time = modified ? modified.getTime() : NaN
+      var entry = cache[path]
+      if (!entry || entry.modified !== time || (!entry.dir && entry.size !== size)) {
+        entry = Model.makeEntry({ path: path, dir: folderModel.get(i, "fileIsDir") === true, size: size, modified: time })
+        same = false
+      } else if (same && old[i] !== entry) {
+        same = false
+      }
+      next[path] = entry
+      out.push(entry)
+    }
+    entryCache = next
+    if (same && listedFolder === location) return
+    var refresh = listedFolder === location
+    listedFolder = location
+    if (refresh) keepPlace(function() { root.folderEntries = out })
+    else folderEntries = out
+  }
+
+  // A refresh of the folder on screen keeps the cursor on its file and the
+  // views scrolled where they were.
+  function keepPlace(apply) {
+    var path = cursorEntry ? cursorEntry.path : ""
+    listingWillChange()
+    apply()
+    if (path !== "" && pendingSelect === "") {
+      var idx = Model.indexOfPath(entries, path)
+      if (idx >= 0) {
+        if (anchorIndex === cursorIndex) anchorIndex = idx
+        cursorIndex = idx
+      }
+    }
+    listingChanged()
   }
 
   function search() {
@@ -332,8 +394,29 @@ Panel {
     deep = true
     cursorIndex = 0
     selected = []
+    searchEntries = []
+    searchBuffer = []
     searchProc.command = [root.scriptPath, "search", location, query, showHidden ? "all" : ""]
-    searchProc.running = true
+    // A search still walking stops first; the new one starts as it exits.
+    if (searchProc.running) {
+      searchRestart = true
+      searchProc.running = false
+    } else {
+      searchProc.running = true
+    }
+  }
+
+  function stopSearch() {
+    searchRestart = false
+    if (searchProc.running) searchProc.running = false
+  }
+
+  // Matches gathered since the last flush join the list in one go.
+  function flushSearch() {
+    if (searchBuffer.length === 0) return
+    var lines = searchBuffer
+    searchBuffer = []
+    if (deep) searchEntries = searchEntries.concat(Model.parseEntries(lines.join("\n")))
   }
 
   // A fresh listing keeps the cursor on the same entry, or lands it on the
@@ -429,7 +512,7 @@ Panel {
   // Enter on a selection: a folder opens in place, several files each open
   // in their own app.
   function openPicked() {
-    var list = picked
+    var list = picked()
     if (list.length === 0) return
     if (list[0].trashName) {
       restore(list)
@@ -468,7 +551,7 @@ Panel {
   // ---- Clipboard, copy and move -----------------------------------------
 
   function setClipboard(mode) {
-    var list = picked.filter(function(e) { return !e.trashName })
+    var list = picked().filter(function(e) { return !e.trashName })
     if (list.length === 0) return
     clipboard = { mode: mode, paths: list.map(function(e) { return e.path }) }
     showToast((mode === "copy" ? "Copied " : "Cut ") + Model.itemsLabel(list.length, list[0].name) + " · paste with p or Ctrl+V")
@@ -657,19 +740,19 @@ Panel {
   }
 
   function trashPicked() {
-    var list = picked.filter(function(e) { return !e.trashName })
+    var list = picked().filter(function(e) { return !e.trashName })
     if (list.length === 0) return
     act("trash", ["trash"].concat(list.map(function(e) { return e.path })), { entries: list })
   }
 
   function restore(list) {
-    var items = (list || picked).filter(function(e) { return e.trashName })
+    var items = (list || picked()).filter(function(e) { return e.trashName })
     if (items.length === 0) return
     act("restore", ["restore"].concat(items.map(function(e) { return e.trashName })), { entries: items })
   }
 
   function askPurge() {
-    var list = picked
+    var list = picked()
     if (list.length === 0) return
     confirm = {
       kind: "purge",
@@ -817,6 +900,7 @@ Panel {
   function setQuery(text) {
     query = text
     deep = false
+    stopSearch()
     searchEntries = []
     cursorIndex = 0
     selected = []
@@ -873,7 +957,7 @@ Panel {
   }
 
   function itemMenuFor(entry) {
-    return Model.itemMenu(entry, picked.length, !!clipboard, entry && entry.dir && isBookmarked(entry.path))
+    return Model.itemMenu(entry, picked().length, !!clipboard, entry && entry.dir && isBookmarked(entry.path))
   }
 
   function folderMenu() {
@@ -922,6 +1006,7 @@ Panel {
   // Out of the bar into a window Hyprland can move, resize and tile, with
   // the same tabs; and back.
   function popOut() {
+    windowBuilt = true
     detached = true
     window.visible = true
     if (root.opened) root.close()
@@ -932,6 +1017,7 @@ Panel {
     detached = false
     window.visible = false
     root.open()
+    if (tabsDirty) saveTabs()
   }
 
   function toggleDetached() {
@@ -1120,10 +1206,18 @@ Panel {
       editingPath = false
       menu = null
       confirm = null
+      if (tabsDirty) saveTabs()
     }
   }
 
   onShowHiddenChanged: if (deep) search()
+
+  onCursorEntryChanged: {
+    if (!previewTimer.running) previewEntry = cursorEntry
+    previewTimer.restart()
+  }
+
+  onShownChanged: if (shown && folderDirty) snapshotFolder()
 
   implicitWidth: button.implicitWidth
   implicitHeight: button.implicitHeight
@@ -1136,12 +1230,14 @@ Panel {
     showHidden: true
     showOnlyReadable: false
     caseSensitive: false
-    onStatusChanged: snapshotTimer.restart()
-    onCountChanged: snapshotTimer.restart()
+    // A folder just opened shows as soon as it is read.
+    onStatusChanged: if (status === FolderListModel.Ready) Qt.callLater(root.snapshotFolder)
   }
 
-  // The folder model also reports renames and in-place changes, which keep
-  // the count.
+  // Changes on disk come in bursts (a download, a build); they are read a
+  // moment after the burst settles, longer for a big folder, so a folder
+  // that never stops changing never keeps the shell busy. Renames and
+  // in-place changes keep the count, so the row signals are followed too.
   Connections {
     target: folderModel
     function onDataChanged() { snapshotTimer.restart() }
@@ -1152,14 +1248,43 @@ Panel {
 
   Timer {
     id: snapshotTimer
-    interval: 40
+    interval: Math.min(1500, 150 + Math.floor(root.folderEntries.length / 10))
     onTriggered: root.snapshotFolder()
   }
 
+  // Tabs only need to survive a restart: they are written when the popup
+  // closes or the window docks, or after a quiet spell, rather than on every
+  // step, since each write goes through the shell's whole config.
   Timer {
     id: saveTabsTimer
-    interval: 1200
+    interval: 6000
     onTriggered: root.saveTabs()
+  }
+
+  Timer {
+    id: freeTimer
+    interval: 400
+    onTriggered: {
+      if (!root.inFolder) return
+      freeProc.command = [root.scriptPath, "free", root.location]
+      if (!freeProc.running) freeProc.running = true
+    }
+  }
+
+  // Leading and trailing: a single step shows at once, a held key shows
+  // where it stops.
+  Timer {
+    id: previewTimer
+    interval: 120
+    onTriggered: root.previewEntry = root.cursorEntry
+  }
+
+  Timer {
+    id: searchFlush
+    interval: 120
+    repeat: true
+    running: searchProc.running
+    onTriggered: root.flushSearch()
   }
 
   Timer {
@@ -1207,7 +1332,14 @@ Panel {
 
   Process {
     id: searchProc
-    stdout: StdioCollector { waitForEnd: true; onStreamFinished: if (root.deep) root.searchEntries = Model.parseEntries(text) }
+    stdout: SplitParser { onRead: function(line) { root.searchBuffer.push(line) } }
+    onExited: {
+      root.flushSearch()
+      if (root.searchRestart) {
+        root.searchRestart = false
+        running = true
+      }
+    }
   }
 
   Process {
@@ -1272,26 +1404,31 @@ Panel {
     owner: root
     bar: root.bar
     open: root.opened
-    focusTarget: popupView
+    focusTarget: panel.loadedContent ? panel.loadedContent.view : null
     contentWidth: panel.fittedContentWidth(Style.space(720))
     contentHeight: panel.fittedContentHeight(Style.space(560))
 
-    PanelKeyCatcher {
-      id: keyCatcher
-      anchors.fill: parent
-      // The view takes every key it knows first; what reaches the catcher
-      // is Tab, to the neighbouring panel, unless a field is being typed in.
-      blocked: popupView.typing
-      onCloseRequested: root.close()
-      onTabRequested: function(direction) { root.switchPanel(direction) }
-
-      FilesView {
-        id: popupView
+    // Built the first time the popup opens rather than at shell start, on
+    // every monitor's bar, and kept after that so reopening is instant.
+    content: Component {
+      PanelKeyCatcher {
+        id: keyCatcher
+        readonly property Item view: popupView
         anchors.fill: parent
-        windowed: false
-        foreground: root.foreground
-        background: Color.popups.background
-        active: root.opened
+        // The view takes every key it knows first; what reaches the catcher
+        // is Tab, to the neighbouring panel, unless a field is being typed in.
+        blocked: popupView.typing
+        onCloseRequested: root.close()
+        onTabRequested: function(direction) { root.switchPanel(direction) }
+
+        FilesView {
+          id: popupView
+          anchors.fill: parent
+          windowed: false
+          foreground: root.foreground
+          background: Color.popups.background
+          active: root.opened
+        }
       }
     }
   }
@@ -1306,17 +1443,28 @@ Panel {
     minimumSize: Qt.size(640, 420)
 
     // Closed from Hyprland rather than docked: the tabs stay for next time.
-    onVisibleChanged: if (!visible) root.detached = false
+    onVisibleChanged: {
+      if (visible) return
+      root.detached = false
+      if (root.tabsDirty) root.saveTabs()
+    }
 
-    FilesView {
-      id: windowView
+    // Built on the first pop out, then kept for the next one.
+    Loader {
       anchors.fill: parent
       anchors.margins: Style.space(10)
-      windowed: true
-      foreground: Color.foreground
-      background: Color.background
-      active: root.detached
+      active: root.windowBuilt
       focus: true
+
+      sourceComponent: Component {
+        FilesView {
+          windowed: true
+          foreground: Color.foreground
+          background: Color.background
+          active: root.detached
+          focus: true
+        }
+      }
     }
   }
 
@@ -1498,15 +1646,16 @@ Panel {
           readonly property real addWidth: Style.spacing.controlHeight
           readonly property real tabWidth: Math.min(Style.space(200), (width - addWidth - spacing * root.tabs.length) / Math.max(1, root.tabs.length))
 
+          // Counted rather than handed the list, so stepping through
+          // folders updates the chips instead of building them again.
           Repeater {
-            model: root.tabs
+            model: root.tabs.length
 
             TabChip {
-              required property var modelData
               required property int index
               width: tabStrip.tabWidth
               height: tabStrip.height
-              tabData: modelData
+              tabData: root.tabs[index] || root.tab
               tabIndex: index
               foreground: viewRoot.foreground
             }
@@ -1592,7 +1741,7 @@ Panel {
             anchors.margins: 1
             width: viewRoot.windowed ? Style.space(290) : Style.space(240)
             foreground: viewRoot.foreground
-            entry: root.cursorEntry
+            entry: root.showPreview ? root.previewEntry : null
           }
         }
 
@@ -2059,18 +2208,25 @@ Panel {
       anchors.bottom: parent.bottom
       clip: true
       boundsBehavior: Flickable.StopAtBounds
-      model: listPane.shown ? root.entries : []
+      model: listPane.shown ? root.entries.length : 0
+      reuseItems: true
       currentIndex: root.cursorIndex
       highlightFollowsCurrentItem: false
+
+      property real keptY: 0
+      Connections {
+        target: root
+        function onListingWillChange() { list.keptY = list.contentY }
+        function onListingChanged() { list.contentY = list.keptY }
+      }
       onCurrentIndexChanged: if (currentIndex >= 0) positionViewAtIndex(currentIndex, ListView.Contain)
       onCountChanged: if (currentIndex >= 0) positionViewAtIndex(currentIndex, ListView.Contain)
 
       delegate: EntryRow {
-        required property var modelData
         required property int index
         width: list.width
         height: listPane.rowHeight
-        entry: modelData
+        entry: root.entries[index] || root.blankEntry
         entryIndex: index
         foreground: listPane.foreground
         nameWidth: listPane.nameWidth
@@ -2164,7 +2320,7 @@ Panel {
     drag.onActiveChanged: {
       if (!drag.active) return
       if (root.selected.indexOf(entryMouse.entry.path) < 0) root.clickEntry(entryMouse.entryIndex, 0)
-      root.dragPaths = root.picked.map(function(e) { return e.path })
+      root.dragPaths = root.picked().map(function(e) { return e.path })
     }
   }
 
@@ -2247,14 +2403,20 @@ Panel {
           elide: Text.ElideMiddle
         }
 
-        RenameField {
-          visible: row.renaming
+        // A text field is the heaviest thing a row could carry; only the
+        // row being renamed gets one.
+        Loader {
           active: row.renaming
           anchors.fill: parent
           anchors.topMargin: 1
           anchors.bottomMargin: 1
-          entry: row.entry
-          foreground: row.foreground
+          sourceComponent: Component {
+            RenameField {
+              active: true
+              entry: row.entry
+              foreground: row.foreground
+            }
+          }
         }
       }
 
@@ -2276,7 +2438,7 @@ Panel {
         width: row.typeWidth
         anchors.verticalCenter: parent.verticalCenter
         textFormat: Text.PlainText
-        text: Model.typeLabel(row.entry)
+        text: row.entry.type
         color: row.foreground
         opacity: 0.55
         font.family: root.fontFamily
@@ -2403,24 +2565,32 @@ Panel {
       boundsBehavior: Flickable.StopAtBounds
       cellWidth: Math.floor(width / Math.max(1, Math.floor(width / Style.space(124))))
       cellHeight: Style.space(124)
-      model: gridPane.shown ? root.entries : []
+      model: gridPane.shown ? root.entries.length : 0
+      reuseItems: true
       currentIndex: root.cursorIndex
       highlightFollowsCurrentItem: false
+
+      property real keptY: 0
+      Connections {
+        target: root
+        function onListingWillChange() { grid.keptY = grid.contentY }
+        function onListingChanged() { grid.contentY = grid.keptY }
+      }
       onCurrentIndexChanged: if (currentIndex >= 0) positionViewAtIndex(currentIndex, GridView.Contain)
       onWidthChanged: if (gridPane.shown) root.gridColumns = Math.max(1, Math.floor(width / cellWidth))
       onVisibleChanged: if (visible) root.gridColumns = Math.max(1, Math.floor(width / cellWidth))
 
       delegate: Item {
         id: tile
-        required property var modelData
         required property int index
+        readonly property var entry: root.entries[index] || root.blankEntry
         width: grid.cellWidth
         height: grid.cellHeight
 
-        readonly property bool isSelected: root.selected.indexOf(modelData.path) >= 0
+        readonly property bool isSelected: root.selected.indexOf(entry.path) >= 0
         readonly property bool isCursor: root.cursorIndex === index
-        readonly property bool isCut: root.clipboard !== null && root.clipboard.mode === "cut" && root.clipboard.paths.indexOf(modelData.path) >= 0
-        readonly property bool renaming: root.renamePath === modelData.path
+        readonly property bool isCut: root.clipboard !== null && root.clipboard.mode === "cut" && root.clipboard.paths.indexOf(entry.path) >= 0
+        readonly property bool renaming: root.renamePath === entry.path
 
         CursorSurface {
           anchors.fill: parent
@@ -2435,7 +2605,7 @@ Panel {
           anchors.fill: parent
           anchors.margins: Style.space(8)
           spacing: Style.space(4)
-          opacity: tile.isCut ? 0.45 : (tile.modelData.hidden ? 0.7 : 1)
+          opacity: tile.isCut ? 0.45 : (tile.entry.hidden ? 0.7 : 1)
 
           Item {
             width: parent.width
@@ -2444,8 +2614,8 @@ Panel {
             Image {
               id: thumb
               anchors.fill: parent
-              visible: Model.isImage(tile.modelData) && status === Image.Ready
-              source: Model.isImage(tile.modelData) ? Model.fileUrl(tile.modelData.path) : ""
+              visible: Model.isImage(tile.entry) && status === Image.Ready
+              source: Model.isImage(tile.entry) ? Model.fileUrl(tile.entry.path) : ""
               sourceSize.width: Style.space(220)
               sourceSize.height: Style.space(160)
               fillMode: Image.PreserveAspectCrop
@@ -2457,8 +2627,8 @@ Panel {
               anchors.centerIn: parent
               visible: !thumb.visible
               textFormat: Text.PlainText
-              text: Model.kindIcon(tile.modelData.kind)
-              color: tile.modelData.dir ? Color.accent : gridPane.foreground
+              text: Model.kindIcon(tile.entry.kind)
+              color: tile.entry.dir ? Color.accent : gridPane.foreground
               font.family: root.fontFamily
               font.pixelSize: Style.font.display
             }
@@ -2475,19 +2645,23 @@ Panel {
               horizontalAlignment: Text.AlignHCenter
               verticalAlignment: Text.AlignVCenter
               textFormat: Text.PlainText
-              text: tile.modelData.name
+              text: tile.entry.name
               color: gridPane.foreground
               font.family: root.fontFamily
               font.pixelSize: Style.font.caption
               elide: Text.ElideMiddle
             }
 
-            RenameField {
-              visible: tile.renaming
+            Loader {
               active: tile.renaming
               anchors.fill: parent
-              entry: tile.modelData
-              foreground: gridPane.foreground
+              sourceComponent: Component {
+                RenameField {
+                  active: true
+                  entry: tile.entry
+                  foreground: gridPane.foreground
+                }
+              }
             }
           }
 
@@ -2496,7 +2670,7 @@ Panel {
             width: parent.width
             horizontalAlignment: Text.AlignHCenter
             textFormat: Text.PlainText
-            text: tile.modelData.dir ? "Folder" : Model.formatSize(tile.modelData.size)
+            text: tile.entry.dir ? "Folder" : Model.formatSize(tile.entry.size)
             color: gridPane.foreground
             opacity: 0.5
             font.family: root.fontFamily
@@ -2506,7 +2680,7 @@ Panel {
 
         EntryMouse {
           id: tileMouse
-          entry: tile.modelData
+          entry: tile.entry
           entryIndex: tile.index
           dragItem: tileCarrier
           enabled: !tile.renaming
@@ -2521,9 +2695,9 @@ Panel {
           id: tileDrop
           anchors.fill: parent
           keys: ["text/uri-list"]
-          enabled: tile.modelData.dir && !tile.modelData.trashName && root.dragPaths.indexOf(tile.modelData.path) < 0
+          enabled: tile.entry.dir && !tile.entry.trashName && root.dragPaths.indexOf(tile.entry.path) < 0
           onDropped: function(event) {
-            if (root.dropUrls(event.urls, tile.modelData.path, event.proposedAction === Qt.CopyAction)) event.accept()
+            if (root.dropUrls(event.urls, tile.entry.path, event.proposedAction === Qt.CopyAction)) event.accept()
           }
         }
       }
@@ -2597,24 +2771,25 @@ Panel {
             anchors.fill: parent
             clip: true
             boundsBehavior: Flickable.StopAtBounds
-            model: columnsPane.shown ? root.entries : []
+            model: columnsPane.shown ? root.entries.length : 0
+            reuseItems: true
             currentIndex: root.cursorIndex
             highlightFollowsCurrentItem: false
             onCurrentIndexChanged: if (currentIndex >= 0) positionViewAtIndex(currentIndex, ListView.Contain)
 
             delegate: Item {
               id: cell
-              required property var modelData
               required property int index
+              readonly property var entry: root.entries[index] || root.blankEntry
               width: currentColumn.width
               height: columnsPane.rowHeight
 
-              readonly property bool renaming: root.renamePath === modelData.path
+              readonly property bool renaming: root.renamePath === entry.path
 
               CursorSurface {
                 anchors.fill: parent
                 foreground: columnsPane.foreground
-                current: root.selected.indexOf(cell.modelData.path) >= 0
+                current: root.selected.indexOf(cell.entry.path) >= 0
                 hasCursor: root.cursorIndex === cell.index || cellMouse.containsMouse || cellDrop.containsDrag
                 outline: root.cursorIndex === cell.index
               }
@@ -2624,13 +2799,13 @@ Panel {
                 anchors.leftMargin: Style.space(6)
                 anchors.rightMargin: Style.space(6)
                 spacing: Style.space(6)
-                opacity: cell.modelData.hidden ? 0.7 : 1
+                opacity: cell.entry.hidden ? 0.7 : 1
 
                 Text {
                   anchors.verticalCenter: parent.verticalCenter
                   textFormat: Text.PlainText
-                  text: Model.kindIcon(cell.modelData.kind)
-                  color: cell.modelData.dir ? Color.accent : columnsPane.foreground
+                  text: Model.kindIcon(cell.entry.kind)
+                  color: cell.entry.dir ? Color.accent : columnsPane.foreground
                   font.family: root.fontFamily
                   font.pixelSize: Style.font.bodySmall
                 }
@@ -2645,24 +2820,28 @@ Panel {
                     anchors.right: parent.right
                     anchors.verticalCenter: parent.verticalCenter
                     textFormat: Text.PlainText
-                    text: cell.modelData.name
+                    text: cell.entry.name
                     color: columnsPane.foreground
                     font.family: root.fontFamily
                     font.pixelSize: Style.font.bodySmall
                     elide: Text.ElideMiddle
                   }
 
-                  RenameField {
-                    visible: cell.renaming
+                  Loader {
                     active: cell.renaming
                     anchors.fill: parent
-                    entry: cell.modelData
-                    foreground: columnsPane.foreground
+                    sourceComponent: Component {
+                      RenameField {
+                        active: true
+                        entry: cell.entry
+                        foreground: columnsPane.foreground
+                      }
+                    }
                   }
                 }
 
                 Text {
-                  visible: cell.modelData.dir
+                  visible: cell.entry.dir
                   anchors.verticalCenter: parent.verticalCenter
                   textFormat: Text.PlainText
                   text: "›"
@@ -2675,7 +2854,7 @@ Panel {
 
               EntryMouse {
                 id: cellMouse
-                entry: cell.modelData
+                entry: cell.entry
                 entryIndex: cell.index
                 dragItem: cellCarrier
                 enabled: !cell.renaming
@@ -2690,9 +2869,9 @@ Panel {
                 id: cellDrop
                 anchors.fill: parent
                 keys: ["text/uri-list"]
-                enabled: cell.modelData.dir && root.dragPaths.indexOf(cell.modelData.path) < 0
+                enabled: cell.entry.dir && root.dragPaths.indexOf(cell.entry.path) < 0
                 onDropped: function(event) {
-                  if (root.dropUrls(event.urls, cell.modelData.path, event.proposedAction === Qt.CopyAction)) event.accept()
+                  if (root.dropUrls(event.urls, cell.entry.path, event.proposedAction === Qt.CopyAction)) event.accept()
                 }
               }
             }
@@ -2708,10 +2887,10 @@ Panel {
 
         // What is under the cursor: a folder's contents, or a file's preview.
         FolderColumn {
-          visible: root.cursorEntry !== null && root.cursorEntry.dir
+          visible: root.previewEntry !== null && root.previewEntry.dir
           width: visible ? Math.max(columnsPane.columnWidth, columnsPane.width - columnsRow.x - columnsPane.columnWidth * columnsPane.chain.length) : 0
           height: columnsRow.height
-          folderPath: visible ? root.cursorEntry.path : ""
+          folderPath: visible ? root.previewEntry.path : ""
           openPath: ""
           foreground: columnsPane.foreground
           rowHeight: columnsPane.rowHeight
@@ -2719,11 +2898,11 @@ Panel {
         }
 
         PreviewPane {
-          visible: root.cursorEntry !== null && !root.cursorEntry.dir && !root.showPreview
+          visible: root.previewEntry !== null && !root.previewEntry.dir && !root.showPreview
           width: visible ? Math.max(Style.space(230), columnsPane.width - columnsPane.columnWidth * columnsPane.chain.length) : 0
           height: columnsRow.height
           foreground: columnsPane.foreground
-          entry: visible ? root.cursorEntry : null
+          entry: visible ? root.previewEntry : null
         }
       }
     }
@@ -3012,7 +3191,7 @@ Panel {
             model: {
               var e = previewRoot.entry
               if (!e) return []
-              var rows = [["Kind", Model.typeLabel(e)]]
+              var rows = [["Kind", e.type]]
               if (e.dir) rows.push(["Contains", Model.plural(previewFolder.count, "item")])
               else rows.push(["Size", Model.formatSize(e.size)])
               if (isFinite(e.modified)) rows.push([e.trashName ? "Deleted" : "Modified", Model.formatFullDate(e.modified)])

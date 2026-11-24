@@ -56,10 +56,12 @@ last_error() {
   tr '\n' ' ' <"$ERR_FILE" 2>/dev/null | sed 's/ *$//'
 }
 
-# file:// URIs and trashinfo paths are percent-encoded byte by byte.
+# file:// URIs and trashinfo paths are percent-encoded byte by byte. The
+# decoded text goes into the variable named first: a command substitution
+# per item would fork once per file, which is what made long lists slow.
 urldecode() {
-  local s="${1//+/%2B}"
-  printf '%b' "${s//%/\\x}"
+  local _ud="${2//+/%2B}"
+  printf -v "$1" '%b' "${_ud//%/\\x}"
 }
 
 urlencode() {
@@ -75,13 +77,13 @@ urlencode() {
 }
 
 xml_unescape() {
-  local s="$1"
-  s=${s//&lt;/<}
-  s=${s//&gt;/>}
-  s=${s//&quot;/\"}
-  s=${s//&apos;/\'}
+  local _xu="$2"
+  _xu=${_xu//&lt;/<}
+  _xu=${_xu//&gt;/>}
+  _xu=${_xu//&quot;/\"}
+  _xu=${_xu//&apos;/\'}
   # A bare & in the replacement would stand for the match (patsub_replacement).
-  printf '%s' "${s//&amp;/\&}"
+  printf -v "$1" '%s' "${_xu//&amp;/\&}"
 }
 
 # First free "name (copy).ext", "name (copy 2).ext" ... in DIR, the way the
@@ -110,10 +112,6 @@ entry_line() {
   printf 'entry\t%s\t%s\t%s\t%s\t%s\t%s\n' "$1" "$2" "$3" "$4" "${5:-}" "${6:-}"
 }
 
-file_type() {
-  if [[ -d $1 ]]; then printf 'd'; else printf 'f'; fi
-}
-
 places() {
   printf 'place\thome\t%s\n' "$HOME"
   # xdg-user-dir answers $HOME for a folder that is not set up; the English
@@ -134,7 +132,7 @@ places() {
   if [[ -f $BOOKMARKS_FILE ]]; then
     while read -r uri label; do
       [[ $uri == file://* ]] || continue
-      path=$(urldecode "${uri#file://}")
+      urldecode path "${uri#file://}"
       printf 'bookmark\t%s\t%s\n' "$path" "$label"
     done <"$BOOKMARKS_FILE"
   fi
@@ -188,45 +186,75 @@ places() {
   printf 'trash\t%s\n' "$count"
 }
 
+# The newest recently used files that still exist. Dates stay the ISO
+# strings the file stores; the widget reads them. One sed and one find
+# however long the history is.
 recent() {
   [[ -f $RECENT_FILE ]] || return 0
-  local modified href path n=0
+  local modified href path type bytes
+  local -A used
+  local -a paths=()
   while IFS=$'\t' read -r modified href; do
-    path=$(urldecode "$(xml_unescape "${href#file://}")")
-    [[ -e $path ]] || continue
-    entry_line "$(file_type "$path")" "$(stat -L -c %s -- "$path" 2>/dev/null)" "$(date -d "$modified" +%s 2>/dev/null)" "$path"
-    n=$((n + 1))
-    (( n >= RECENT_LIMIT )) && break
+    xml_unescape href "${href#file://}"
+    urldecode path "$href"
+    [[ -e $path && -z ${used[$path]:-} ]] || continue
+    used[$path]=$modified
+    paths+=("$path")
+    (( ${#paths[@]} >= RECENT_LIMIT )) && break
   done < <(sed -n 's/.*<bookmark href="\(file:[^"]*\)".* modified="\([^"]*\)".*/\2\t\1/p' "$RECENT_FILE" | sort -r)
+  (( ${#paths[@]} > 0 )) || return 0
+  while IFS=$'\t' read -r type bytes path; do
+    [[ -n ${used[$path]:-} ]] || continue
+    if [[ $type == d ]]; then bytes=""; else type=f; fi
+    entry_line "$type" "$bytes" "${used[$path]}" "$path"
+  done < <(find -L "${paths[@]}" -maxdepth 0 -printf '%y\t%s\t%p\n' 2>/dev/null)
 }
 
+# Everything in the home trash: one awk over the info files and one find
+# over the files, so a trash with thousands of items lists in a blink.
 trashed() {
   [[ -d $TRASH_DIR/info ]] || return 0
-  local info name path deleted file size
-  for info in "$TRASH_DIR"/info/*.trashinfo; do
-    [[ -f $info ]] || continue
-    name=$(basename "$info" .trashinfo)
-    file="$TRASH_DIR/files/$name"
-    [[ -e $file || -L $file ]] || continue
-    path=$(sed -n 's/^Path=//p' "$info" | head -n 1)
-    deleted=$(sed -n 's/^DeletionDate=//p' "$info" | head -n 1)
-    size=""
-    [[ -d $file ]] || size=$(stat -c %s -- "$file" 2>/dev/null)
-    entry_line "$(file_type "$file")" "$size" "$(date -d "$deleted" +%s 2>/dev/null)" "$file" "$(urldecode "$path")" "$name"
-  done
+  local name type bytes path deleted origin
+  local -A kinds sizes
+  while IFS=$'\t' read -r name type bytes; do
+    kinds[$name]=$type
+    sizes[$name]=$bytes
+  done < <(find "$TRASH_DIR/files" -mindepth 1 -maxdepth 1 -printf '%f\t%y\t%s\n' 2>/dev/null)
+  while IFS=$'\t' read -r name path deleted; do
+    [[ -n ${kinds[$name]:-} ]] || continue
+    urldecode origin "$path"
+    if [[ ${kinds[$name]} == d ]]; then
+      entry_line d "" "$deleted" "$TRASH_DIR/files/$name" "$origin" "$name"
+    else
+      entry_line f "${sizes[$name]}" "$deleted" "$TRASH_DIR/files/$name" "$origin" "$name"
+    fi
+  done < <(find "$TRASH_DIR/info" -maxdepth 1 -name '*.trashinfo' -exec awk '
+    function flush(  n) {
+      n = file
+      sub(/^.*\//, "", n)
+      sub(/\.trashinfo$/, "", n)
+      printf "%s\t%s\t%s\n", n, path, date
+    }
+    FNR == 1 { if (file != "") flush(); file = FILENAME; path = ""; date = "" }
+    /^Path=/ { path = substr($0, 6) }
+    /^DeletionDate=/ { date = substr($0, 14) }
+    END { if (file != "") flush() }' {} + 2>/dev/null)
 }
 
 # Case-insensitive name match below DIR, hidden files and folders left out
-# unless "all" is given, capped so a search from / stays quick.
+# unless "all" is given, capped so a search from / stays quick. find writes
+# a line at a time, so the widget shows matches while the walk goes on.
 search() {
   local dir="${1:?folder required}" query="${2:-}" all="${3:-}" pattern
+  local -a line_buffered=()
   [[ -d $dir ]] || fail "no folder at $dir"
   [[ -n $query ]] || return 0
+  command -v stdbuf >/dev/null && line_buffered=(stdbuf -oL)
   pattern=$(printf '%s' "$query" | sed 's/[][*?\\]/\\&/g')
   if [[ $all == all ]]; then
-    timeout 15 find "$dir" -mindepth 1 -iname "*$pattern*" -printf '%Y\t%s\t%T@\t%p\n' 2>/dev/null
+    timeout 15 "${line_buffered[@]}" find "$dir" -mindepth 1 -iname "*$pattern*" -printf '%Y\t%s\t%T@\t%p\n' 2>/dev/null
   else
-    timeout 15 find "$dir" -mindepth 1 -name '.*' -prune -o -iname "*$pattern*" -printf '%Y\t%s\t%T@\t%p\n' 2>/dev/null
+    timeout 15 "${line_buffered[@]}" find "$dir" -mindepth 1 -name '.*' -prune -o -iname "*$pattern*" -printf '%Y\t%s\t%T@\t%p\n' 2>/dev/null
   fi | head -n "$SEARCH_LIMIT" | while IFS=$'\t' read -r type size mtime path; do
     [[ $type == d ]] || type=f
     [[ $type == d ]] && size=""
@@ -395,9 +423,11 @@ create() {
 trash_name_of() {
   local path="$1" base info best="" newest=""
   base=$(basename "$path")
+  local decoded
   for info in "$TRASH_DIR"/info/"$base"*.trashinfo; do
     [[ -f $info ]] || continue
-    [[ $(urldecode "$(sed -n 's/^Path=//p' "$info" | head -n 1)") == "$path" ]] || continue
+    urldecode decoded "$(sed -n 's/^Path=//p' "$info" | head -n 1)"
+    [[ $decoded == "$path" ]] || continue
     if [[ -z $newest || $info -nt $newest ]]; then
       newest=$info
       best=$(basename "$info" .trashinfo)
@@ -426,7 +456,7 @@ restore() {
   for name in "$@"; do
     info="$TRASH_DIR/info/$name.trashinfo"
     [[ -f $info ]] || { report "$name is not in the trash"; continue; }
-    orig=$(urldecode "$(sed -n 's/^Path=//p' "$info" | head -n 1)")
+    urldecode orig "$(sed -n 's/^Path=//p' "$info" | head -n 1)"
     if [[ ! -e $orig && ! -L $orig ]]; then
       if gio trash --restore "trash:///$(urlencode "$name")" 2>"$ERR_FILE"; then
         printf 'restored\t%s\t%s\n' "$name" "$orig"
@@ -477,10 +507,13 @@ bookmark() {
 
 # The bookmarks file without the lines that point at PATH.
 unbookmarked_lines() {
-  local path="$1" line uri
+  local path="$1" line uri decoded
   while IFS= read -r line || [[ -n $line ]]; do
     uri=${line%% *}
-    [[ $uri == file://* && $(urldecode "${uri#file://}") == "$path" ]] && continue
+    if [[ $uri == file://* ]]; then
+      urldecode decoded "${uri#file://}"
+      [[ $decoded == "$path" ]] && continue
+    fi
     printf '%s\n' "$line"
   done <"$BOOKMARKS_FILE"
 }

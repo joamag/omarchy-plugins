@@ -484,8 +484,11 @@ function typeLabel(entry) {
   if (!entry) return ""
   if (entry.dir) return "Folder"
   var ext = extensionOf(entry.name)
+  return typeFor(ext, EXTENSIONS[ext] || "file")
+}
+
+function typeFor(ext, kind) {
   if (TYPE_LABELS[ext]) return TYPE_LABELS[ext]
-  var kind = kindOf(entry.name, false)
   if (kind === "image" && ext !== "") return ext.toUpperCase() + " image"
   return KIND_LABELS[kind]
 }
@@ -506,11 +509,16 @@ function isTextual(entry) {
 }
 
 // One row of a listing, from the folder model or a files.sh entry line.
-// modified is in milliseconds; size is NaN for folders.
+// modified is in milliseconds; size is NaN for folders. The lower-cased
+// name, its natural sort key and the type label are worked out once here,
+// so sorting and filtering a big folder never redo them per comparison.
 function makeEntry(fields) {
   var path = String(fields.path || "")
   var name = fields.name !== undefined ? String(fields.name) : baseName(path)
   var dir = fields.dir === true
+  var lower = name.toLowerCase()
+  var ext = dir ? "" : extensionOf(name)
+  var kind = dir ? "dir" : (EXTENSIONS[ext] || "file")
   return {
     name: name,
     path: path,
@@ -518,27 +526,44 @@ function makeEntry(fields) {
     size: dir ? NaN : num(fields.size),
     modified: num(fields.modified),
     hidden: name.charAt(0) === ".",
-    kind: kindOf(name, dir),
+    kind: kind,
+    type: dir ? "Folder" : typeFor(ext, kind),
+    lower: lower,
+    key: /\d/.test(lower) ? naturalKey(lower) : lower,
     origin: fields.origin ? String(fields.origin) : "",
     trashName: fields.trashName ? String(fields.trashName) : ""
   }
 }
 
-// files.sh recent / trashed / search: entry type size mtime path origin
-// trashname, mtime in seconds. A trashed item shows under its old name.
+// files.sh hands times over as seconds since the epoch (search), or as the
+// ISO dates the trash and the recent list store: local time, or UTC with a
+// trailing Z. Milliseconds, or NaN when it is neither.
+function parseTime(value) {
+  var text = value === null || value === undefined ? "" : String(value).trim()
+  if (text === "") return NaN
+  var seconds = Number(text)
+  if (isFinite(seconds)) return seconds * 1000
+  var m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(\.\d+)?(Z?)$/.exec(text)
+  if (!m) return NaN
+  var ms = m[7] ? Math.floor(Number(m[7]) * 1000) : 0
+  if (m[8] === "Z") return Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]), Number(m[4]), Number(m[5]), Number(m[6]), ms)
+  return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), Number(m[4]), Number(m[5]), Number(m[6]), ms).getTime()
+}
+
+// files.sh recent / trashed / search: entry type size time path origin
+// trashname. A trashed item shows under its old name.
 function parseEntries(raw) {
   var out = []
   var lines = String(raw || "").split("\n")
   for (var i = 0; i < lines.length; i++) {
     var parts = lines[i].split("\t")
     if (parts[0] !== "entry" || parts.length < 5 || parts[4] === "") continue
-    var seconds = num(parts[3])
     out.push(makeEntry({
       path: parts[4],
       name: parts[5] ? baseName(parts[5]) : undefined,
       dir: parts[1] === "d",
       size: parts[2],
-      modified: isFinite(seconds) ? seconds * 1000 : NaN,
+      modified: parseTime(parts[3]),
       origin: parts[5] || "",
       trashName: parts[6] || ""
     }))
@@ -546,28 +571,20 @@ function parseEntries(raw) {
   return out
 }
 
-// Natural, case-insensitive order: "file2" before "file10".
-function compareText(a, b) {
-  var x = String(a || "").toLowerCase()
-  var y = String(b || "").toLowerCase()
-  var re = /(\d+)|(\D+)/g
-  var xs = x.match(re) || []
-  var ys = y.match(re) || []
-  for (var i = 0; i < Math.min(xs.length, ys.length); i++) {
-    var p = xs[i]
-    var q = ys[i]
-    if (p === q) continue
-    var pn = /^\d/.test(p)
-    var qn = /^\d/.test(q)
-    if (pn && qn) {
-      var diff = Number(p) - Number(q)
-      if (diff !== 0) return diff < 0 ? -1 : 1
-      continue
-    }
-    return p < q ? -1 : 1
-  }
-  if (xs.length !== ys.length) return xs.length < ys.length ? -1 : 1
-  return a < b ? -1 : (a > b ? 1 : 0)
+var ZEROS = "0000000000000000"
+
+// A number as a fixed-width string, so plain string order is numeric order.
+function padNumber(n) {
+  var s = String(Math.max(0, Math.floor(n)))
+  return s.length >= ZEROS.length ? s : ZEROS.slice(s.length) + s
+}
+
+// Natural, case-insensitive order as a plain string: every run of digits
+// is padded to one width, so "file2" sorts before "file10".
+function naturalKey(text) {
+  return String(text || "").toLowerCase().replace(/\d+/g, function(digits) {
+    return padNumber(Number(digits))
+  })
 }
 
 function normalizeSortKey(key) {
@@ -593,21 +610,39 @@ function cycleSortKey(key) {
   return "name"
 }
 
-// Folders always first; ties fall back to the name.
-function compareEntries(a, b, key, descending) {
-  if (a.dir !== b.dir) return a.dir ? -1 : 1
-  var result = 0
-  if (key === "modified") result = (a.modified || 0) - (b.modified || 0)
-  else if (key === "size") result = (isFinite(a.size) ? a.size : -1) - (isFinite(b.size) ? b.size : -1)
-  else if (key === "type") result = compareText(typeLabel(a), typeLabel(b))
-  if (result !== 0) return (result < 0 ? -1 : 1) * (descending ? -1 : 1)
-  result = compareText(a.name, b.name)
-  return key === "name" && descending ? -result : result
+// The string an entry sorts by for KEY: the column, then the natural name,
+// then the raw name so the order is the same every time.
+function sortString(entry, key) {
+  var primary = ""
+  if (key === "modified") primary = padNumber(isFinite(entry.modified) ? entry.modified : 0)
+  else if (key === "size") primary = padNumber(isFinite(entry.size) ? entry.size + 1 : 0)
+  else if (key === "type") primary = entry.type.toLowerCase()
+  return primary + "\u0001" + entry.key + "\u0001" + entry.name
 }
 
+// Folders always first, each group in the column's order or its reverse.
+// Each entry becomes one string carrying its index, and the engine's own
+// sort orders those: a comparator called from JavaScript for every pair is
+// what makes a big folder slow to open in the shell.
 function sortEntries(list, key, descending) {
   var k = normalizeSortKey(key)
-  return (list || []).slice().sort(function(a, b) { return compareEntries(a, b, k, descending) })
+  var items = list || []
+  var tagged = []
+  for (var i = 0; i < items.length; i++) tagged.push((items[i].dir ? "0" : "1") + sortString(items[i], k) + "\u0001" + i)
+  tagged.sort()
+  var dirs = []
+  var files = []
+  for (var j = 0; j < tagged.length; j++) {
+    var t = tagged[j]
+    var entry = items[Number(t.slice(t.lastIndexOf("\u0001") + 1))]
+    if (entry.dir) dirs.push(entry)
+    else files.push(entry)
+  }
+  if (descending) {
+    dirs.reverse()
+    files.reverse()
+  }
+  return dirs.concat(files)
 }
 
 // The filter typed into the header: a case-insensitive part of the name.
@@ -618,7 +653,7 @@ function filterEntries(list, query, showHidden) {
   for (var i = 0; i < (list || []).length; i++) {
     var e = list[i]
     if (e.hidden && !showHidden) continue
-    if (needle !== "" && e.name.toLowerCase().indexOf(needle) < 0) continue
+    if (needle !== "" && e.lower.indexOf(needle) < 0) continue
     out.push(e)
   }
   return out
@@ -841,7 +876,9 @@ function parseApps(raw) {
   }
   out.sort(function(a, b) {
     if (a.isDefault !== b.isDefault) return a.isDefault ? -1 : 1
-    return compareText(a.name, b.name)
+    var x = naturalKey(a.name)
+    var y = naturalKey(b.name)
+    return x < y ? -1 : (x > y ? 1 : 0)
   })
   return out
 }
