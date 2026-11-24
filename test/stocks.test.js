@@ -302,6 +302,7 @@ describe("dragShift", () => {
 describe("rangeIndex", () => {
   it("finds a range or defaults to the first", () => {
     assert.equal(Model.rangeIndex("6mo"), 3)
+    assert.equal(Model.rangeIndex("5y"), 5)
     assert.equal(Model.rangeIndex("bogus"), 0)
   })
 })
@@ -309,6 +310,7 @@ describe("rangeIndex", () => {
 describe("normalizeRange", () => {
   it("returns a known key", () => {
     assert.equal(Model.normalizeRange("1y"), "1y")
+    assert.equal(Model.normalizeRange("5y"), "5y")
     assert.equal(Model.normalizeRange("2y"), "1d")
   })
 })
@@ -316,6 +318,7 @@ describe("normalizeRange", () => {
 describe("rangeLabel", () => {
   it("gives the short label", () => {
     assert.equal(Model.rangeLabel("1mo"), "1M")
+    assert.equal(Model.rangeLabel("5y"), "5Y")
   })
 })
 
@@ -330,6 +333,8 @@ describe("seriesFresh", () => {
     assert.equal(Model.seriesFresh({ fetchedAt: Date.now() }, "1d"), true)
     assert.equal(Model.seriesFresh({ fetchedAt: Date.now() - 120000 }, "1d"), false)
     assert.equal(Model.seriesFresh({ fetchedAt: Date.now() - 120000 }, "1y"), true)
+    assert.equal(Model.seriesFresh({ fetchedAt: Date.now() - 1800000 }, "5y"), true)
+    assert.equal(Model.seriesFresh({ fetchedAt: Date.now() - 7200000 }, "5y"), false)
     assert.equal(Model.seriesFresh({ fetchedAt: Date.now() - 1000 }, "unknown"), true)
     assert.equal(Model.seriesFresh(null, "1d"), false)
   })
@@ -363,6 +368,7 @@ describe("formatAxis", () => {
     assert.equal(Model.formatAxis(t, "1mo"), "3 Sep")
     assert.equal(Model.formatAxis(t, "6mo"), "Sep")
     assert.equal(Model.formatAxis(t, "1y"), "Sep 26")
+    assert.equal(Model.formatAxis(t, "5y"), "Sep 26")
   })
 })
 
@@ -398,6 +404,7 @@ describe("formatPointTime", () => {
     assert.equal(Model.formatPointTime(t, "1d"), "14:30")
     assert.equal(Model.formatPointTime(t, "5d"), "Thu 14:30")
     assert.equal(Model.formatPointTime(t, "1y"), "3 Sep 2026")
+    assert.equal(Model.formatPointTime(t, "5y"), "3 Sep 2026")
   })
 })
 

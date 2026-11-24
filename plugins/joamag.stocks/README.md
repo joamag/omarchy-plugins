@@ -1,6 +1,6 @@
 # joamag.stocks
 
-Market watchlist for the Omarchy bar. One index or stock sits in the bar with its daily change; the popup shows a chart for the selected symbol with 1D / 5D / 1M / 6M / 1Y ranges, and a watchlist where every row carries a sparkline, the price and the daily move. Defaults: S&P 500, NASDAQ Composite, Dow Jones, AMD, Intel, NVIDIA, Apple and Microsoft.
+Market watchlist for the Omarchy bar. One index or stock sits in the bar with its daily change; the popup shows a chart for the selected symbol with 1D / 5D / 1M / 6M / 1Y / 5Y ranges, and a watchlist where every row carries a sparkline, the price and the daily move. Defaults: S&P 500, NASDAQ Composite, Dow Jones, AMD, Intel, NVIDIA, Apple and Microsoft.
 
 Data comes from Yahoo Finance's public chart endpoint through `curl` and `jq`. No API key, no account, nothing stored. Yahoo is unofficial and occasionally rate limits; the widget keeps the last good values when a refresh fails.
 
@@ -29,7 +29,7 @@ Inline on the widget entry in `~/.config/omarchy/shell.json`:
 | `barSymbol` | `"^GSPC"` | Symbol shown in the bar; right click on the bar cycles and persists it |
 | `showPrice` | `false` | Show the last price in the bar |
 | `showChange` | `true` | Show the daily change in the bar |
-| `range` | `"1d"` | Default chart range: `1d`, `5d`, `1mo`, `6mo`, `1y` |
+| `range` | `"1d"` | Default chart range: `1d`, `5d`, `1mo`, `6mo`, `1y`, `5y` |
 | `refreshIntervalSec` | `60` | Refresh cadence for quotes |
 
 Multiple instances are allowed, so two widgets can pin two different symbols.

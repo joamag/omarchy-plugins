@@ -11,12 +11,13 @@ var RANGES = [
   { key: "5d", label: "5D" },
   { key: "1mo", label: "1M" },
   { key: "6mo", label: "6M" },
-  { key: "1y", label: "1Y" }
+  { key: "1y", label: "1Y" },
+  { key: "5y", label: "5Y" }
 ]
 
 // How long a fetched series stays fresh before the popup refetches it, per
-// range; intraday moves, a year of weekly closes does not.
-var SERIES_TTL_MS = { "1d": 60000, "5d": 300000, "1mo": 900000, "6mo": 1800000, "1y": 3600000 }
+// range; intraday moves, a year of weekly or five of monthly closes does not.
+var SERIES_TTL_MS = { "1d": 60000, "5d": 300000, "1mo": 900000, "6mo": 1800000, "1y": 3600000, "5y": 3600000 }
 
 // Friendly labels for the common indices, which Yahoo only knows by caret
 // symbols nobody wants to read in a bar.

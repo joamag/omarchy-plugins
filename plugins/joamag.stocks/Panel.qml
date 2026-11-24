@@ -411,7 +411,7 @@ Panel {
     function cycleSymbol(): void { root.cycleSymbol(1) }
     function addSymbol(symbol: string): string { return root.addSymbol(symbol) ? "ok" : "exists" }
     function removeSymbol(symbol: string): string { return root.removeSymbol(String(symbol || "").trim().toUpperCase()) ? "ok" : "unknown" }
-    function version(): string { return "0.3.0" }
+    function version(): string { return "0.4.0" }
   }
 
   onOpenedChanged: {
