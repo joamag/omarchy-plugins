@@ -2596,10 +2596,325 @@ exit \${FAKE_PY_STATUS:-0}`)
     assert.equal(fs.readFileSync(file, "utf8"), "")
   })
 
+  // Stand-ins for what the default file manager touches: the shell's IPC
+  // (FAKE_SHELL_STATUS makes it unreachable); xdg-mime, which reads the
+  // folder default from the user's mimeapps.list, else the system's (the
+  // FAKE_MIME file), and writes it to the user's; Hyprland, the D-Bus
+  // reload, and starting, finding (FAKE_RUNNING) and stopping the
+  // FileManager1 service. All of them log.
+  function manager(s) {
+    const mime = path.join(s.dir, "mime")
+    fakeCommand(s.bin, "omarchy-shell", 'printf "shell %s\\n" "$*" >> "$FAKE_LOG"; exit ${FAKE_SHELL_STATUS:-0}')
+    fakeCommand(s.bin, "omarchy-cmd-terminal-cwd", 'echo "$FAKE_CWD"')
+    fakeCommand(s.bin, "xdg-mime", `
+list="$XDG_CONFIG_HOME/mimeapps.list"
+case "$1" in
+  query)
+    line=$(grep -m 1 '^inode/directory=' "$list" 2>/dev/null)
+    if [[ -n $line ]]; then echo "\${line#*=}"; else cat "$FAKE_MIME" 2>/dev/null; fi ;;
+  default)
+    [[ -n \${FAKE_MIME_FAIL:-} ]] && { echo "xdg-mime: cannot write" >&2; exit 1; }
+    if [[ -f $list ]]; then kept=$(grep -v '^inode/directory=' "$list"); else kept="[Default Applications]"; fi
+    printf '%s\\ninode/directory=%s\\n' "$kept" "$2" > "$list"
+    printf 'xdg-mime %s\\n' "$*" >> "$FAKE_LOG" ;;
+esac`)
+    for (const name of ["hyprctl", "gdbus", "setsid", "pkill"]) fakeCommand(s.bin, name, `printf '${name} %s\\n' "$*" >> "$FAKE_LOG"`)
+    fakeCommand(s.bin, "pgrep", 'printf "pgrep %s\\n" "$*" >> "$FAKE_LOG"; [[ -n ${FAKE_RUNNING:-} ]]')
+    const apps = path.join(s.data, "applications")
+    const installed = (id) => fs.writeFileSync(path.join(apps, id), `[Desktop Entry]\nName=${id}\nMimeType=inode/directory;\n`)
+    const files = {
+      app: path.join(apps, "joamag-files.desktop"),
+      dbus: path.join(s.data, "dbus-1", "services", "org.freedesktop.FileManager1.service"),
+      bindings: path.join(s.config, "hypr", "bindings.lua"),
+      previous: path.join(s.home, ".local", "state", "joamag-files", "previous-file-manager"),
+      mimeapps: path.join(s.config, "mimeapps.list"),
+    }
+    // The service's whole command line, as files.sh looks for it.
+    const service = `(.*/)?python3 ${pluginDir("joamag.files").replace(/[\][\\.*^$+?(){}|]/g, "\\$&")}/filemanager1\\.py`
+    return { mime, files, installed, service, env: { FAKE_MIME: mime, FAKE_CWD: path.join(s.home, "Music"), XDG_STATE_HOME: path.join(s.home, ".local", "state") } }
+  }
+
+  it("shows folders, files and file URIs from other apps in the widget", (t) => {
+    const s = setup(t)
+    const m = manager(s)
+    const report = path.join(s.home, "Downloads", "Q4 report.pdf")
+    write(report, "%PDF")
+    for (const args of [["open", path.join(s.home, "Downloads")], ["open", `file://${s.home}/Down%20loads/R%26D`], ["open", `file://localhost${s.home}/Music`], ["open", report], ["open", "Music"], ["reveal", path.join(s.home, "Music")], ["open"], ["open-cwd"]]) {
+      assert.equal(s.run(args, m.env).stdout, "")
+    }
+    assert.deepEqual(s.log(), [
+      `shell joamag.files go ${s.home}/Downloads`,
+      `shell joamag.files go ${s.home}/Down loads/R&D`,
+      `shell joamag.files go ${s.home}/Music`,
+      // A file shows in its folder, picked.
+      `shell joamag.files reveal ${report}`,
+      // A relative path is taken from where it was asked.
+      `shell joamag.files go ${process.cwd()}/Music`,
+      `shell joamag.files reveal ${s.home}/Music`,
+      "shell joamag.files summon",
+      `shell joamag.files go ${s.home}/Music`,
+    ])
+  })
+
+  it("hands folders to the previous file manager without the widget, and remote ones always", (t) => {
+    const s = setup(t)
+    const m = manager(s)
+    const apps = path.join(s.data, "applications")
+    const gone = { ...m.env, FAKE_SHELL_STATUS: "1" }
+    assert.equal(s.run(["open", "/srv"], gone).stdout, "error\tno other file manager to open /srv\n")
+    m.installed("org.gnome.Nautilus.desktop")
+    s.run(["open", "/srv"], gone)
+    m.installed("folio.desktop")
+    s.run(["reveal", "/srv/notes.md"], gone)
+    s.run(["open"], gone)
+    // The one that was the default before goes first.
+    write(m.files.previous, "nvim.desktop\n")
+    s.run(["open", "sftp://server/srv"], m.env)
+    assert.deepEqual(s.log(), [
+      "shell joamag.files go /srv",
+      "shell joamag.files go /srv",
+      `launch ${apps}/org.gnome.Nautilus.desktop /srv`,
+      "shell joamag.files reveal /srv/notes.md",
+      `launch ${apps}/folio.desktop /srv/notes.md`,
+      "shell joamag.files summon",
+      `launch ${apps}/folio.desktop`,
+      `launch ${apps}/nvim.desktop sftp://server/srv`,
+    ])
+  })
+
+  it("makes the widget the default file manager, and hands everything back", (t) => {
+    const s = setup(t)
+    const m = manager(s)
+    const here = pluginDir("joamag.files")
+    m.installed("org.gnome.Nautilus.desktop")
+    // Nautilus is the system's default; the user's list holds other types.
+    fs.writeFileSync(m.mime, "org.gnome.Nautilus.desktop")
+    const types = "[Default Applications]\ntext/html=chrome.desktop\n"
+    write(m.files.mimeapps, types)
+    const mine = "-- My keys\no.bind(\"SUPER + W\", \"Close\", \"close-window\")\n"
+    write(m.files.bindings, mine)
+    assert.equal(s.run(["default", "on"], m.env).stdout, "")
+    assert.equal(fs.readFileSync(m.files.mimeapps, "utf8"), types + "inode/directory=joamag-files.desktop\n")
+    assert.equal(fs.readFileSync(m.files.previous, "utf8"), "org.gnome.Nautilus.desktop\n")
+    const app = fs.readFileSync(m.files.app, "utf8")
+    assert.match(app, /^\[Desktop Entry\]\n/)
+    assert.ok(app.includes(`Exec=${here}/files.sh open %U\n`))
+    assert.ok(app.includes("MimeType=inode/directory;\nNoDisplay=true\n"))
+    assert.equal(fs.readFileSync(m.files.dbus, "utf8"), `[D-BUS Service]\nName=org.freedesktop.FileManager1\nExec=${here}/filemanager1.py\n`)
+    assert.equal(fs.readFileSync(m.files.bindings, "utf8"), mine + [
+      "",
+      "-- joamag.files: the file manager keys open the Files widget (its Default file manager setting adds and removes these lines)",
+      `o.rebind("SUPER + SHIFT + F", "File manager", "${here}/files.sh open")`,
+      `o.rebind("SUPER + ALT + SHIFT + F", "File manager (cwd)", "${here}/files.sh open-cwd")`,
+      "-- joamag.files: end",
+      "",
+    ].join("\n"))
+    assert.deepEqual(s.log(), [
+      "xdg-mime default joamag-files.desktop inode/directory",
+      "gdbus call --session --dest org.freedesktop.DBus --object-path /org/freedesktop/DBus --method org.freedesktop.DBus.ReloadConfig",
+      "hyprctl reload",
+      `pgrep -f -x -- ${m.service}`,
+      `setsid -f ${here}/filemanager1.py`,
+    ])
+
+    // Again, at the next start: nothing to change, the service running.
+    fs.writeFileSync(s.env.FAKE_LOG, "")
+    s.run(["default", "on"], { ...m.env, FAKE_RUNNING: "1" })
+    assert.deepEqual(s.log(), [`pgrep -f -x -- ${m.service}`])
+    assert.equal(fs.readFileSync(m.files.previous, "utf8"), "org.gnome.Nautilus.desktop\n")
+
+    // Off: every file as it was, the system's default showing through.
+    fs.writeFileSync(s.env.FAKE_LOG, "")
+    assert.equal(s.run(["default", "off"], m.env).stdout, "")
+    assert.equal(fs.readFileSync(m.files.mimeapps, "utf8"), types)
+    assert.equal(fs.readFileSync(m.files.bindings, "utf8"), mine)
+    for (const file of [m.files.app, m.files.dbus, m.files.previous]) assert.ok(!fs.existsSync(file), file)
+    assert.deepEqual(s.log(), [
+      "gdbus call --session --dest org.freedesktop.DBus --object-path /org/freedesktop/DBus --method org.freedesktop.DBus.ReloadConfig",
+      "hyprctl reload",
+      `pkill -f -x -- ${m.service}`,
+    ])
+
+    // Off again changes nothing.
+    fs.writeFileSync(s.env.FAKE_LOG, "")
+    s.run(["default", "off"], m.env)
+    assert.deepEqual(s.log(), [`pkill -f -x -- ${m.service}`])
+  })
+
+  it("sets back the user's own pick, or one still installed, and never touches a default it did not set", (t) => {
+    const s = setup(t)
+    const m = manager(s)
+    const here = pluginDir("joamag.files")
+    for (const id of ["org.gnome.Nautilus.desktop", "thunar.desktop"]) m.installed(id)
+    fs.writeFileSync(m.mime, "org.gnome.Nautilus.desktop")
+    // Off at every start, for someone who never turned it on: their pick stays.
+    write(m.files.mimeapps, "[Default Applications]\ninode/directory=thunar.desktop\n")
+    s.run(["default", "off"], m.env)
+    assert.equal(fs.readFileSync(m.files.mimeapps, "utf8"), "[Default Applications]\ninode/directory=thunar.desktop\n")
+    assert.ok(!s.log().some((l) => l.startsWith("xdg-mime")))
+    // Their own pick comes back when the widget lets go.
+    s.run(["default", "on"], m.env)
+    s.run(["default", "off"], m.env)
+    assert.equal(fs.readFileSync(m.files.mimeapps, "utf8"), "[Default Applications]\ninode/directory=thunar.desktop\n")
+    // Thunar went away meanwhile, Omarchy's Files is the system's default
+    // now: that one shows through, nothing is written.
+    s.run(["default", "on"], m.env)
+    fs.rmSync(path.join(s.data, "applications", "thunar.desktop"))
+    m.installed("folio.desktop")
+    fs.writeFileSync(m.mime, "folio.desktop")
+    fs.writeFileSync(s.env.FAKE_LOG, "")
+    s.run(["default", "off"], m.env)
+    assert.equal(fs.readFileSync(m.files.mimeapps, "utf8"), "[Default Applications]\n")
+    assert.deepEqual(s.log(), ["gdbus call --session --dest org.freedesktop.DBus --object-path /org/freedesktop/DBus --method org.freedesktop.DBus.ReloadConfig", "hyprctl reload", `pkill -f -x -- ${m.service}`])
+  })
+
+  it("keeps another file manager's D-Bus service, minds missing bindings, and reports xdg-mime", (t) => {
+    const s = setup(t)
+    const m = manager(s)
+    const here = pluginDir("joamag.files")
+    m.installed("org.gnome.Nautilus.desktop")
+    // No bindings yet, and the folder default already the widget's.
+    write(m.files.mimeapps, "[Default Applications]\ninode/directory=joamag-files.desktop\n")
+    s.run(["default", "on"], m.env)
+    assert.ok(!fs.existsSync(m.files.previous))
+    assert.equal(fs.readFileSync(m.files.bindings, "utf8").split("\n")[0], "-- joamag.files: the file manager keys open the Files widget (its Default file manager setting adds and removes these lines)")
+    assert.ok(!s.log().some((l) => l.startsWith("xdg-mime")))
+    // Another file manager took the D-Bus service meanwhile.
+    write(m.files.dbus, "[D-BUS Service]\nName=org.freedesktop.FileManager1\nExec=/usr/bin/flea --dbus\n")
+    fs.writeFileSync(s.env.FAKE_LOG, "")
+    s.run(["default", "off"], m.env)
+    assert.ok(fs.existsSync(m.files.dbus))
+    assert.equal(fs.readFileSync(m.files.bindings, "utf8"), "\n")
+    // Nothing was the default before, not even the system's: Nautilus, installed, is.
+    assert.equal(fs.readFileSync(m.files.mimeapps, "utf8"), "[Default Applications]\ninode/directory=org.gnome.Nautilus.desktop\n")
+    assert.deepEqual(s.log(), ["xdg-mime default org.gnome.Nautilus.desktop inode/directory", "hyprctl reload", `pkill -f -x -- ${m.service}`])
+    // Without bindings, off leaves them alone.
+    fs.rmSync(m.files.bindings)
+    s.run(["default", "off"], m.env)
+    assert.ok(!fs.existsSync(m.files.bindings))
+    assert.equal(s.run(["default", "on"], { ...m.env, FAKE_MIME_FAIL: "1" }).stdout, "error\txdg-mime: cannot write\n")
+  })
+
+  it("finds and stops the FileManager1 service, never an editor on its script", async (t) => {
+    const s = setup(t)
+    const m = manager(s)
+    // The real pgrep and pkill, on a copy of the plugin whose service sleeps.
+    for (const name of ["pgrep", "pkill"]) fs.rmSync(path.join(s.bin, name))
+    const here = path.join(s.dir, "plugin")
+    fs.mkdirSync(here)
+    fs.copyFileSync(path.join(pluginDir("joamag.files"), "files.sh"), path.join(here, "files.sh"))
+    fs.chmodSync(path.join(here, "files.sh"), 0o755)
+    const script = path.join(here, "filemanager1.py")
+    fs.writeFileSync(script, "import time\ntime.sleep(30)\n")
+    const run = (mode) => require("node:child_process").spawnSync(path.join(here, "files.sh"), ["default", mode], { env: { ...s.env, ...m.env, PATH: `${s.bin}:/usr/bin:/bin`, LANG: "C" } })
+    const ended = (child) => new Promise((resolve) => child.on("exit", (code, signal) => resolve(signal)))
+    const editor = spawn("tail", ["-f", script])
+    t.after(() => editor.kill())
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    // Only the editor names the script: the service is not running yet.
+    run("on")
+    assert.deepEqual(s.log().filter((l) => l.startsWith("setsid")), [`setsid -f ${script}`])
+    const service = spawn("python3", [script])
+    t.after(() => service.kill())
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    fs.writeFileSync(s.env.FAKE_LOG, "")
+    run("on")
+    assert.deepEqual(s.log().filter((l) => l.startsWith("setsid")), [])
+    const stopped = ended(service)
+    run("off")
+    assert.equal(await stopped, "SIGTERM")
+    assert.equal(editor.exitCode, null)
+    assert.equal(editor.signalCode, null)
+  })
+
+  it("quotes a plugin folder with a space for the desktop file and Hyprland", (t) => {
+    const s = setup(t)
+    const m = manager(s)
+    const here = path.join(s.dir, "my plugins", "joamag.files")
+    fs.mkdirSync(here, { recursive: true })
+    fs.copyFileSync(path.join(pluginDir("joamag.files"), "files.sh"), path.join(here, "files.sh"))
+    fs.chmodSync(path.join(here, "files.sh"), 0o755)
+    const result = require("node:child_process").spawnSync(path.join(here, "files.sh"), ["default", "on"], { env: { ...s.env, ...m.env, PATH: `${s.bin}:/usr/bin:/bin`, LANG: "C" } })
+    assert.equal(String(result.stdout), "")
+    assert.ok(fs.readFileSync(m.files.app, "utf8").includes(`Exec="${here}/files.sh" open %U\n`))
+    // Escaped for the shell Hyprland runs it in, then again for Lua.
+    const shell = here.replace(/ /g, "\\\\ ")
+    assert.ok(fs.readFileSync(m.files.bindings, "utf8").includes(`o.rebind("SUPER + SHIFT + F", "File manager", "${shell}/files.sh open")\n`))
+  })
+
   it("rejects bad invocations", (t) => {
     const s = setup(t)
     assert.equal(s.run(["bogus"]).status, 1)
     assert.equal(s.run([]).status, 1)
     assert.equal(s.run(["free"]).status, 1)
+    assert.equal(s.run(["reveal"]).status, 1)
+    assert.equal(s.run(["default"]).stdout, "error\tdefault takes on or off\n")
+  })
+})
+
+// filemanager1.py on a bus of its own that starts no services, so only what
+// the test runs owns names: another file manager holding the name first,
+// then the widget's service waiting in line behind it.
+describe("filemanager1.py", () => {
+  const { spawnSync } = require("node:child_process")
+  const ready = spawnSync("sh", ["-c", "command -v dbus-run-session && command -v gdbus && python3 -c 'from gi.repository import Gio'"]).status === 0
+
+  const CONFIG = `<!DOCTYPE busconfig PUBLIC "-//freedesktop//DTD D-Bus Bus Configuration 1.0//EN" "http://www.freedesktop.org/standards/dbus/1.0/busconfig.dtd">
+<busconfig>
+  <type>session</type>
+  <listen>unix:tmpdir=/tmp</listen>
+  <auth>EXTERNAL</auth>
+  <policy context="default">
+    <allow send_destination="*" eavesdrop="true"/>
+    <allow eavesdrop="true"/>
+    <allow own="*"/>
+  </policy>
+</busconfig>
+`
+
+  // Holds the name, then lets go; the widget's service must wait, then take
+  // the calls. Each call is one files.sh run, logged by a stand-in.
+  const DRIVER = String.raw`
+set -u
+dir=$1
+trap 'kill $(jobs -p) 2>/dev/null' EXIT
+bus() { gdbus call --session --dest org.freedesktop.DBus --object-path /org/freedesktop/DBus --method "org.freedesktop.DBus.$1" org.freedesktop.FileManager1 2>/dev/null; }
+show() { gdbus call --session --dest org.freedesktop.FileManager1 --object-path /org/freedesktop/FileManager1 --method "org.freedesktop.FileManager1.$1" "$2" "" >/dev/null 2>&1; }
+until_true() { for _ in $(seq 200); do "$@" && return 0; sleep 0.025; done; return 1; }
+python3 -c 'from gi.repository import Gio, GLib; Gio.bus_own_name(Gio.BusType.SESSION, "org.freedesktop.FileManager1", Gio.BusNameOwnerFlags.NONE, None, None, None); GLib.MainLoop().run()' &
+holder=$!
+until_true eval '[[ $(bus NameHasOwner) == "(true,)" ]]' || exit 1
+first=$(bus GetNameOwner)
+"$dir/filemanager1.py" &
+service=$!
+sleep 0.3
+show ShowFolders "['file:///held']"
+kill "$holder"
+until_true eval 'owner=$(bus GetNameOwner); [[ -n $owner && $owner != "$first" ]]' || exit 1
+show ShowItems "['file:///home/u/a%20b.txt', 'file:///home/u/c']"
+show ShowFolders "['file:///home/u']"
+show ShowItemProperties "[]"
+until_true eval '[[ $(wc -l < "$dir/log" 2>/dev/null) == 2 ]]' || exit 1
+`
+
+  it("waits for the name, then hands folders and items to files.sh", (t) => {
+    if (!ready) {
+      t.skip("needs dbus-run-session, gdbus and PyGObject")
+      return
+    }
+    const dir = tmpdir(t)
+    fs.copyFileSync(path.join(pluginDir("joamag.files"), "filemanager1.py"), path.join(dir, "filemanager1.py"))
+    fs.chmodSync(path.join(dir, "filemanager1.py"), 0o755)
+    fakeCommand(dir, "files.sh", `printf '%s\\n' "$*" >> "${dir}/log"`)
+    fs.writeFileSync(path.join(dir, "bus.conf"), CONFIG)
+    fs.writeFileSync(path.join(dir, "driver.sh"), DRIVER)
+    const result = spawnSync("dbus-run-session", [`--config-file=${path.join(dir, "bus.conf")}`, "--", "bash", path.join(dir, "driver.sh"), dir], { timeout: 20000 })
+    assert.equal(result.status, 0, String(result.stderr))
+    // Nothing while the other one held the name; the first of each call
+    // after; nothing for an empty list.
+    assert.deepEqual(fs.readFileSync(path.join(dir, "log"), "utf8").trim().split("\n"), [
+      "reveal file:///home/u/a%20b.txt",
+      "open file:///home/u",
+    ])
   })
 })

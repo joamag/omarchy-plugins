@@ -75,12 +75,13 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: ${{ matrix.node-version }}
-      # the files widget's tests build and read real archives, and the
-      # runner image does not ship bsdtar
-      - name: Install bsdtar
+      # the files widget's tests build and read real archives, and run its
+      # FileManager1 service on a private D-Bus; the runner image ships
+      # neither bsdtar nor PyGObject
+      - name: Install bsdtar and D-Bus
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends libarchive-tools
+          sudo apt-get install -y --no-install-recommends libarchive-tools dbus libglib2.0-bin python3-gi
       # the runner writes the human report to the log and a junit file
       # for the artifact; the coverage table is the last thing it prints
       - name: Run test

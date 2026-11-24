@@ -37,6 +37,11 @@
 #   files.sh mount DEVICE           mounted  MOUNTPOINT
 #   files.sh eject MOUNTPOINT       unmount and eject the drive
 #   files.sh bookmark PATH | unbookmark PATH
+#   files.sh open [FOLDER]          show a folder (a path or a file:// URI) in the widget; none toggles it
+#   files.sh open-cwd               show the focused terminal's folder in the widget
+#   files.sh reveal PATH            show the folder holding PATH, with PATH picked
+#   files.sh default on|off         make the widget the default file manager, or hand back to the
+#                                   previous one
 #
 # Actions print "error<TAB>message" when one item fails and carry on with the
 # rest; the popup reports the last one. Replacing a file sends the old one to
@@ -49,6 +54,17 @@ RECENT_FILE=${XDG_DATA_HOME:-$HOME/.local/share}/recently-used.xbel
 BOOKMARKS_FILE=${XDG_CONFIG_HOME:-$HOME/.config}/gtk-3.0/bookmarks
 THUMB_DIR=${XDG_CACHE_HOME:-$HOME/.cache}/joamag-files/thumbnails
 ARCHIVE_CACHE=${XDG_CACHE_HOME:-$HOME/.cache}/joamag-files/archives
+# What makes the widget the default file manager: the app that opens
+# folders, the D-Bus service apps call to show a file in its folder, and
+# the block of file manager keys in the user's Hyprland bindings.
+APP_ID=joamag-files.desktop
+APP_FILE=${XDG_DATA_HOME:-$HOME/.local/share}/applications/$APP_ID
+DBUS_FILE=${XDG_DATA_HOME:-$HOME/.local/share}/dbus-1/services/org.freedesktop.FileManager1.service
+BINDINGS_FILE=${XDG_CONFIG_HOME:-$HOME/.config}/hypr/bindings.lua
+MIMEAPPS_FILE=${XDG_CONFIG_HOME:-$HOME/.config}/mimeapps.list
+PREVIOUS_FILE=${XDG_STATE_HOME:-$HOME/.local/state}/joamag-files/previous-file-manager
+KEYS_BEGIN="-- joamag.files: the file manager keys open the Files widget (its Default file manager setting adds and removes these lines)"
+KEYS_END="-- joamag.files: end"
 # Where apps and thumbnailers are registered, the spec's default when unset.
 DATA_DIRS=${XDG_DATA_DIRS:-/usr/local/share:/usr/share}
 SEARCH_LIMIT=200
@@ -800,6 +816,173 @@ unbookmark() {
   if [[ -n $kept ]]; then printf '%s\n' "$kept" >"$BOOKMARKS_FILE"; else : >"$BOOKMARKS_FILE"; fi
 }
 
+# A folder or file another app names, as a local path: a file:// URI is
+# decoded and a relative path taken from here. Other URIs (sftp://, smb://)
+# come back empty, for the previous file manager to open.
+local_path() {
+  local _lp="$2"
+  case $_lp in
+    file://*)
+      _lp=${_lp#file://}
+      _lp=${_lp#localhost}
+      urldecode _lp "$_lp"
+      ;;
+    *://*) _lp="" ;;
+    /*) ;;
+    *) _lp="$PWD/$_lp" ;;
+  esac
+  printf -v "$1" '%s' "$_lp"
+}
+
+# The file manager the widget hands over to: the default one before it,
+# else Omarchy's Files or Nautilus, whichever is installed.
+previous_manager() {
+  local id
+  for id in "$(cat "$PREVIOUS_FILE" 2>/dev/null)" folio.desktop org.gnome.Nautilus.desktop; do
+    [[ -n $id && $id != "$APP_ID" ]] && desktop_file "$id" >/dev/null && { printf '%s' "$id"; return 0; }
+  done
+  return 1
+}
+
+# A folder from another app, Show in folder or the file manager keys goes to
+# the widget (go, or reveal for an item to pick in its folder), which shows
+# it in the popup or its window; nothing toggles the widget. Without the
+# widget (not in the bar, or the shell is down), and for a location it
+# cannot browse, the previous file manager opens it.
+show() {
+  local how="$1" target="${2:-}" path="" id
+  if [[ -z $target ]]; then
+    omarchy-shell joamag.files summon >/dev/null 2>&1 && return 0
+  else
+    local_path path "$target"
+    [[ $how == go && -e $path && ! -d $path ]] && how=reveal
+    [[ -n $path ]] && omarchy-shell joamag.files "$how" "$path" >/dev/null 2>&1 && return 0
+  fi
+  id=$(previous_manager) || fail "no other file manager to open ${target:-}"
+  if [[ -n $target ]]; then launch "$id" "$target"; else launch "$id"; fi
+}
+
+# Writes FILE only when it would change; true when it did.
+write_changed() {
+  [[ -f $1 && $(cat "$1") == "$2" ]] && return 1
+  mkdir -p "$(dirname "$1")"
+  printf '%s\n' "$2" >"$1"
+}
+
+# The app that opens folders, hidden from the launcher. Exec is quoted only
+# for a plugin folder that needs it: xdg-mime checks the app is there by the
+# first word of Exec, quotes and all, and passes over it otherwise.
+desktop_entry() {
+  local exec="$HERE/files.sh"
+  [[ $exec == *[^A-Za-z0-9/._+-]* ]] && exec="\"$exec\""
+  printf '%s\n' "[Desktop Entry]" "Type=Application" "Name=Files widget" \
+    "Comment=Open folders in the Files widget of the bar" "Icon=system-file-manager" \
+    "Exec=$exec open %U" "MimeType=inode/directory;" "NoDisplay=true" "StartupNotify=false"
+}
+
+dbus_service() {
+  printf '%s\n' "[D-BUS Service]" "Name=org.freedesktop.FileManager1" "Exec=$HERE/filemanager1.py"
+}
+
+# dbus-broker reads new service files only when told to.
+dbus_reload() {
+  gdbus call --session --dest org.freedesktop.DBus --object-path /org/freedesktop/DBus \
+    --method org.freedesktop.DBus.ReloadConfig >/dev/null 2>&1 || true
+}
+
+# The lines of the user's Hyprland bindings that point the file manager keys
+# at the widget, between two markers so they can be taken out again.
+keys_block() {
+  local cmd
+  printf -v cmd '%q' "$HERE/files.sh"
+  cmd=${cmd//\\/\\\\}
+  cmd=${cmd//\"/\\\"}
+  printf '%s\n' "$KEYS_BEGIN" \
+    "o.rebind(\"SUPER + SHIFT + F\", \"File manager\", \"$cmd open\")" \
+    "o.rebind(\"SUPER + ALT + SHIFT + F\", \"File manager (cwd)\", \"$cmd open-cwd\")" \
+    "$KEYS_END"
+}
+
+# The user's bindings without that block, nor the blank lines it leaves at
+# the end.
+bindings_without_keys() {
+  awk -v begin="$KEYS_BEGIN" -v end="$KEYS_END" '
+    $0 == begin { skip = 1; next }
+    skip { if ($0 == end) skip = 0; next }
+    /^$/ { blank++; next }
+    { while (blank > 0) { print ""; blank-- } print }
+  ' "$BINDINGS_FILE"
+}
+
+# The FileManager1 service's whole command line, for pgrep and pkill: an
+# editor or a pager on the script names it too, and is not it.
+service_pattern() {
+  local here
+  here=$(printf '%s' "$HERE" | sed 's/[][\.*^$+?(){}|]/\\&/g')
+  printf '(.*/)?python3 %s/filemanager1\\.py' "$here"
+}
+
+# Adds the block (on) or takes it out (off), and has Hyprland read the
+# bindings again when that changed them.
+set_keys() {
+  local kept="" next
+  if [[ -f $BINDINGS_FILE ]]; then
+    kept=$(bindings_without_keys)
+  elif [[ $1 == off ]]; then
+    return 0
+  fi
+  next=$kept
+  [[ $1 == on ]] && next="${kept:+$kept$'\n\n'}$(keys_block)"
+  write_changed "$BINDINGS_FILE" "$next" || return 0
+  hyprctl reload >/dev/null 2>&1 || true
+}
+
+# Folders from other apps, Show in folder and the file manager keys come to
+# the widget. The FileManager1 service starts once; while another file
+# manager holds the name (Nautilus does while a window of it is open) it
+# waits in line for it.
+default_on() {
+  local current
+  current=$(xdg-mime query default inode/directory 2>/dev/null)
+  if [[ -n $current && $current != "$APP_ID" ]]; then
+    mkdir -p "$(dirname "$PREVIOUS_FILE")"
+    printf '%s\n' "$current" >"$PREVIOUS_FILE"
+  fi
+  write_changed "$APP_FILE" "$(desktop_entry)"
+  if [[ $current != "$APP_ID" ]]; then
+    xdg-mime default "$APP_ID" inode/directory 2>"$ERR_FILE" || fail "$(last_error)"
+  fi
+  write_changed "$DBUS_FILE" "$(dbus_service)" && dbus_reload
+  set_keys on
+  pgrep -f -x -- "$(service_pattern)" >/dev/null && return 0
+  setsid -f "$HERE/filemanager1.py" >/dev/null 2>&1 </dev/null
+}
+
+# All of it back to the previous file manager. The widget's line leaves the
+# user's mimeapps.list, so a default that came from the system (Omarchy's)
+# shows through again and follows its updates; one the user had picked is
+# set back. A D-Bus service file that is not the widget's stays.
+default_off() {
+  local id kept was=""
+  if [[ -f $MIMEAPPS_FILE ]] && grep -qxF "inode/directory=$APP_ID" "$MIMEAPPS_FILE"; then
+    kept=$(grep -vxF "inode/directory=$APP_ID" "$MIMEAPPS_FILE")
+    printf '%s\n' "$kept" >"$MIMEAPPS_FILE"
+    was=1
+  fi
+  [[ $(xdg-mime query default inode/directory 2>/dev/null) == "$APP_ID" ]] && was=1
+  if [[ -n $was ]] && id=$(previous_manager) && [[ $(xdg-mime query default inode/directory 2>/dev/null) != "$id" ]]; then
+    xdg-mime default "$id" inode/directory 2>"$ERR_FILE" || fail "$(last_error)"
+  fi
+  rm -f "$APP_FILE" "$PREVIOUS_FILE"
+  rmdir "$(dirname "$PREVIOUS_FILE")" 2>/dev/null
+  if [[ -f $DBUS_FILE ]] && grep -qF "$HERE/filemanager1.py" "$DBUS_FILE"; then
+    rm -f "$DBUS_FILE"
+    dbus_reload
+  fi
+  set_keys off
+  pkill -f -x -- "$(service_pattern)" >/dev/null 2>&1 || true
+}
+
 case "${1:-}" in
   places)
     places
@@ -903,8 +1086,24 @@ case "${1:-}" in
   unbookmark)
     unbookmark "${2:-}"
     ;;
+  open)
+    show go "${2:-}"
+    ;;
+  open-cwd)
+    show go "$(omarchy-cmd-terminal-cwd 2>/dev/null)"
+    ;;
+  reveal)
+    show reveal "${2:?path required}"
+    ;;
+  default)
+    case "${2:-}" in
+      on) default_on ;;
+      off) default_off ;;
+      *) fail "default takes on or off" ;;
+    esac
+    ;;
   *)
-    echo "Usage: files.sh places | free DIR | recent | trashed | search DIR QUERY [all] | names DIR | apps PATH | launch ID PATH... | clipboard-set copy|cut PATH... | clipboard-get | clipboard-clear | thumbnail PATH SIZE | archive-list ARCHIVE | archive-file ARCHIVE MEMBER | extract ARCHIVE DEST STRIP [MEMBER...] | compress DEST PATH... | transfer copy|move SRC TARGET POLICY... | rename PATH NAME | mkdir|touch DIR NAME | trash PATH... | restore NAME... | purge NAME... | delete PATH... | empty-trash | mount DEVICE | eject MOUNTPOINT | bookmark|unbookmark PATH" >&2
+    echo "Usage: files.sh places | free DIR | recent | trashed | search DIR QUERY [all] | names DIR | apps PATH | launch ID PATH... | clipboard-set copy|cut PATH... | clipboard-get | clipboard-clear | thumbnail PATH SIZE | archive-list ARCHIVE | archive-file ARCHIVE MEMBER | extract ARCHIVE DEST STRIP [MEMBER...] | compress DEST PATH... | transfer copy|move SRC TARGET POLICY... | rename PATH NAME | mkdir|touch DIR NAME | trash PATH... | restore NAME... | purge NAME... | delete PATH... | empty-trash | mount DEVICE | eject MOUNTPOINT | bookmark|unbookmark PATH | open [FOLDER] | open-cwd | reveal PATH | default on|off" >&2
     exit 1
     ;;
 esac
