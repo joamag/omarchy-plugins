@@ -1803,18 +1803,17 @@ exit \${FAKE_PY_STATUS:-0}`)
     assert.deepEqual(fs.readdirSync(s.dir).filter((n) => n.startsWith("files-clipboard.")), [])
   })
 
-  it("offers a single picture as the picture too", (t) => {
+  it("offers a picture as a file, never as its pixels", (t) => {
     const s = setup(t)
     const c = clipboard(s)
     helper(s)
     const png = path.join(s.home, "shot.png")
     write(png, "PNGDATA")
     s.run(["clipboard-set", "copy", png], c.env)
-    assert.equal(s.log().at(-1), `image/png\tPNGDATA`)
-    // Not for several files, nor for a folder.
-    fs.rmSync(s.env.FAKE_LOG)
-    s.run(["clipboard-set", "copy", png, png], c.env)
+    // Nautilus pastes a clipboard picture as a new "Pasted image" before it
+    // looks for files, so the name would be lost.
     assert.ok(!s.log().some((l) => l.startsWith("image/")))
+    assert.equal(s.log()[0], `x-special/gnome-copied-files\tcopy/file://${png}`)
   })
 
   it("falls back to wl-copy without the helper, and reports its failures", (t) => {

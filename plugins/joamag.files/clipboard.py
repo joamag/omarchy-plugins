@@ -3,9 +3,8 @@
 # Own the Wayland clipboard with several formats at once, the way a file
 # manager does, so files copied in the widget paste everywhere: Nautilus
 # reads x-special/gnome-copied-files (which also says copy or cut), browsers
-# and most apps read text/uri-list, text fields and terminals read plain
-# text, and a picture can be pasted as the picture itself. wl-copy offers a
-# single format, hence this.
+# and most apps read text/uri-list, and text fields and terminals read plain
+# text. wl-copy offers a single format, hence this.
 #
 # It speaks the data-control protocol (ext-data-control-v1, or the wlr one
 # it grew from), which sets the clipboard without a focused window, straight

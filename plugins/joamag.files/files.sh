@@ -325,8 +325,9 @@ launch() {
 # Files on the clipboard in every form apps look for: the one file managers
 # share (x-special/gnome-copied-files: copy or cut, then a file:// URI a
 # line; Nautilus, Thunar and Dolphin), the text/uri-list browsers and most
-# apps read, the paths as plain text, and a single picture as the picture
-# itself. clipboard.py offers them all at once; without Python or the
+# apps read, and the paths as plain text. A picture's own bytes are not
+# offered: Nautilus pastes those as a new "Pasted image" before it looks for
+# files. clipboard.py offers them all at once; without Python or the
 # data-control protocol, wl-copy offers the file managers' form alone.
 clipboard_set() {
   local mode="${1:-}" path uri gnome uris="" plain="" dir mime status=2
@@ -346,10 +347,6 @@ clipboard_set() {
   printf '%s' "$plain" >"$dir/plain"
   local -a offers=("x-special/gnome-copied-files=$dir/gnome" "text/uri-list=$dir/uris")
   for mime in "text/plain;charset=utf-8" text/plain UTF8_STRING STRING TEXT; do offers+=("$mime=$dir/plain"); done
-  if (( $# == 1 )) && [[ -f $1 ]] && (( $(stat -c %s -- "$1") <= 33554432 )); then
-    mime=$(gio info -a standard::content-type -- "$1" 2>/dev/null | sed -n 's/^ *standard::content-type: //p')
-    [[ $mime == image/* ]] && offers+=("$mime=$1")
-  fi
   if command -v python3 >/dev/null; then
     python3 "$HERE/clipboard.py" "${offers[@]}" 2>"$ERR_FILE"
     status=$?
