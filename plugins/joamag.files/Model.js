@@ -47,17 +47,18 @@ var EXTENSIONS = {
   iso: "disc", img: "disc",
   xlsx: "sheet", xls: "sheet", ods: "sheet",
   docx: "document", doc: "document", odt: "document", rtf: "document",
-  pptx: "slides", ppt: "slides", odp: "slides"
+  pptx: "slides", ppt: "slides", odp: "slides",
+  ttf: "font", otf: "font", woff: "font", woff2: "font"
 }
 
 var KIND_ICONS = {
   dir: "󰉋", image: "󰈟", video: "󰈫", audio: "󰈣", pdf: "󰈦", text: "󰈙", code: "󰈮",
-  archive: "󰗄", disc: "󰆜", sheet: "󰈛", document: "󰈬", slides: "󰈧", file: "󰈔"
+  archive: "󰗄", disc: "󰆜", sheet: "󰈛", document: "󰈬", slides: "󰈧", font: "󰊔", file: "󰈔"
 }
 
 var KIND_LABELS = {
   image: "Image", video: "Video", audio: "Audio", pdf: "PDF document", text: "Text", code: "Source code", archive: "Archive",
-  disc: "Disk image", sheet: "Spreadsheet", document: "Document", slides: "Presentation", file: "File"
+  disc: "Disk image", sheet: "Spreadsheet", document: "Document", slides: "Presentation", font: "Font", file: "File"
 }
 
 // A finer type name for the text and code files people open most.
@@ -69,6 +70,11 @@ var TYPE_LABELS = {
 // Formats Qt's image reader decodes, so the grid and the preview can show
 // the picture itself.
 var THUMBNAIL_EXTENSIONS = ["png", "jpg", "jpeg", "gif", "webp", "bmp", "svg"]
+
+// Kinds a system thumbnailer can draw (the ones Nautilus uses): a video
+// frame, an album cover, a document's first page, a font sample, and
+// pictures Qt cannot read itself, such as HEIC.
+var THUMBNAILED_KINDS = ["video", "audio", "document", "sheet", "slides", "font", "image"]
 
 // `g` then one of these jumps there; bookmarks and drives take the digits.
 var GO_KEYS = [
@@ -108,7 +114,7 @@ var KEYS = [
   ["x  Ctrl+X", "Cut"], ["p  Ctrl+V", "Paste"], ["r  F2", "Rename"], ["a  Ctrl+Shift+N", "New folder"],
   ["n", "New file"], ["d  Delete", "Move to Trash"], ["Ctrl+Z", "Undo the move to Trash"], ["Shift+Delete", "Delete for good"],
   ["o", "Open with"],
-  ["/  Ctrl+F", "Filter, Enter searches below"], ["g", "Go to a place"], ["e  Ctrl+L", "Type a path"], ["t  Ctrl+T", "New tab"],
+  ["<  >", "Previous, next PDF page in the preview"], ["/  Ctrl+F", "Filter, Enter searches below"], ["g", "Go to a place"], ["e  Ctrl+L", "Type a path"], ["t  Ctrl+T", "New tab"],
   ["q  Ctrl+W", "Close the tab"], ["[ ]  Ctrl+Tab", "Previous, next tab"], ["1-9", "Go to a tab"], ["v  Ctrl+1 2 3", "List, grid, columns"],
   [".  Ctrl+H", "Hidden files"], ["i", "Preview pane"], ["s", "Sort by the next column"], ["Ctrl+D", "Bookmark the folder"],
   ["w", "Pop out or dock"], ["N", "Open in Nautilus"], ["Esc", "Clear, then close"], ["Tab", "Next widget"]
@@ -510,6 +516,32 @@ function isTextual(entry) {
   return (kind === "text" || kind === "code" || (kind === "file" && extensionOf(entry.name) === "")) && !(entry.size > 262144)
 }
 
+// What the preview can show for an entry: the picture itself, a PDF page
+// (Qt draws those), the first lines of a text file, a picture a system
+// thumbnailer makes, or nothing beyond the glyph and the details.
+function previewKind(entry) {
+  if (!entry || !entry.path) return "none"
+  if (entry.dir) return "dir"
+  if (isImage(entry)) return "image"
+  if (extensionOf(entry.name) === "pdf") return "pdf"
+  if (isTextual(entry)) return "text"
+  if (THUMBNAILED_KINDS.indexOf(entry.kind) >= 0) return "thumbnail"
+  return "none"
+}
+
+// One thumbnail per file version and size.
+function thumbnailKey(entry, size) {
+  return entry ? entry.path + "|" + entry.modified + "|" + size : ""
+}
+
+// The first lines of a text file for the preview, or null when it turns
+// out to be binary: a file without an extension is often a program.
+function previewText(text, lines) {
+  var head = String(text || "").slice(0, 8192)
+  if (/[\u0000-\u0008\u000E-\u001A\u001C-\u001F\uFFFD]/.test(head)) return null
+  return head.split("\n").slice(0, lines).join("\n")
+}
+
 // One row of a listing, from the folder model or a files.sh entry line.
 // modified is in milliseconds; size is NaN for folders. The lower-cased
 // name, its natural sort key and the type label are worked out once here,
@@ -907,6 +939,16 @@ function parseApps(raw) {
     return x < y ? -1 : (x > y ? 1 : 0)
   })
   return out
+}
+
+// files.sh thumbnail: the PNG made for a file, or "" when none could be.
+function parseThumbnail(raw) {
+  var lines = String(raw || "").split("\n")
+  for (var i = 0; i < lines.length; i++) {
+    var parts = lines[i].split("\t")
+    if (parts[0] === "thumbnail" && parts.length > 1 && parts[1] !== "") return parts.slice(1).join("\t")
+  }
+  return ""
 }
 
 function parseFree(raw) {

@@ -6,8 +6,8 @@ A file navigator in the Omarchy bar, in the spirit of GNOME Files: a popup under
 
 - **Header**: back, forward, up, a Go to button (in the popup), the path bar, the filter, the List / Grid / Columns switch, the hidden files toggle (the eye: dot files and folders shown or not, remembered across restarts), the preview pane, pop out or dock, and a ⋮ menu (new folder or file, paste, select all, hidden files, sort, bookmark, Nautilus).
 - **Tabs** under the header, each with its place glyph, its name and its number for the `1`-`9` keys; `+` opens a new one at the same folder.
-- **The folder** as a list (name, type, size, date, sortable by clicking a column), a grid with the pictures themselves for images, or columns from the root of the path down to the folder on screen, followed by the folder under the cursor or the file's preview. Recent, Trash and search results also say where each item lives.
-- **Preview pane** (`i`): the picture or the first lines of a text file, its kind, size, date and folder, and Open / Open with, Open / In new tab, or Restore / Delete.
+- **The folder** as a list (name, type, size, date, sortable by clicking a column), a grid with the pictures themselves for images, the first page of PDFs and thumbnails for videos, audio, documents and fonts, or columns from the root of the path down to the folder on screen, followed by the folder under the cursor or the file's preview. Recent, Trash and search results also say where each item lives.
+- **Preview pane** (`i`): the selected file up close, as large as the pane allows: pictures; PDF pages, with ‹ › (or `<` `>`) to turn them and the page count; a frame of a video, an album cover, the first page of an office document or a font sample from the thumbnailers the system registers (the ones Nautilus uses); or the first lines of a text file (a binary file says so instead of showing noise). Under it the kind, size, date and folder, and Open / Open with, Open / In new tab, or Restore / Delete.
 - **Footer**: a progress line with Cancel while a long copy or move runs, the item count and the selection on the left, the clipboard, hidden files and free space on the right, the action buttons, and a line of key hints.
 - **Window**: the same view in a regular window that Hyprland moves, resizes and tiles, with a places sidebar: the standard folders, the bookmarks shared with Nautilus, drives with their free space and eject or mount, Recent and the Trash.
 
@@ -44,6 +44,7 @@ The panel keys of the other widgets and the Nautilus shortcuts both work; `?` sh
 | Ctrl+Z | Undo the last move to the Trash |
 | Shift+Delete | Delete for good |
 | `o` | Open with |
+| `<` `>` | Previous, next page of the PDF in the preview |
 | `/`, Ctrl+F | Filter; Enter searches below |
 | `g` | Go to: `h` home, `k` desktop, `D` documents, `d` downloads, `m` music, `p` pictures, `v` videos, `r` recent, `t` trash, `/` system, digits for bookmarks and drives |
 | `e`, Ctrl+L | Type a path |
@@ -85,6 +86,6 @@ omarchy-shell joamag.files version
 
 ## Data source
 
-Qt's folder model (`Qt.labs.folderlistmodel`) lists the folder on screen and follows changes on disk. Everything else goes through `files.sh`: the standard folders (`xdg-user-dir`), the GTK bookmarks file Nautilus uses, drives from `lsblk` and `df`, Recent from `recently-used.xbel`, the Trash from `~/.local/share/Trash` (items trashed on other drives stay in that drive's own trash), search with `find`, and "Open with" from `gio mime`. Copies run `cp -a` and moves `mv`, with the progress measured as the copy lands; Cancel stops the item in flight, and a cancelled copy removes what it wrote. The Trash, restore, mount and eject go through `gio`. Nothing needs root.
+Qt's folder model (`Qt.labs.folderlistmodel`) lists the folder on screen and follows changes on disk. Everything else goes through `files.sh`: the standard folders (`xdg-user-dir`), the GTK bookmarks file Nautilus uses, drives from `lsblk` and `df`, Recent from `recently-used.xbel`, the Trash from `~/.local/share/Trash` (items trashed on other drives stay in that drive's own trash), search with `find`, "Open with" from `gio mime`, and thumbnails from the `.thumbnailer` files the system registers, made once per version of a file and kept in `~/.cache/joamag-files/thumbnails` (pictures unused for three months are dropped). PDF pages are drawn by Qt's PDF reader when it is installed (`qt6-webengine` ships it), and by the PDF thumbnailer otherwise. Copies run `cp -a` and moves `mv`, with the progress measured as the copy lands; Cancel stops the item in flight, and a cancelled copy removes what it wrote. The Trash, restore, mount and eject go through `gio`. Nothing needs root.
 
 Network shares, browsing inside archives and file properties stay with Nautilus.

@@ -16,6 +16,7 @@
 #   files.sh names DIR              name  NAME   for every entry of DIR
 #   files.sh apps PATH              app   id name default   the apps that open PATH
 #   files.sh launch ID PATH...      open the files with the app ID
+#   files.sh thumbnail PATH SIZE    thumbnail  PNG   a preview picture for PATH
 #   files.sh transfer copy|move SRC TARGET POLICY [...]
 #     total BYTES, progress BYTES, done SRC TARGET; POLICY is new or replace
 #   files.sh rename PATH NAME       done  PATH TARGET
@@ -38,6 +39,9 @@ set -o pipefail
 TRASH_DIR=${XDG_DATA_HOME:-$HOME/.local/share}/Trash
 RECENT_FILE=${XDG_DATA_HOME:-$HOME/.local/share}/recently-used.xbel
 BOOKMARKS_FILE=${XDG_CONFIG_HOME:-$HOME/.config}/gtk-3.0/bookmarks
+THUMB_DIR=${XDG_CACHE_HOME:-$HOME/.cache}/joamag-files/thumbnails
+# Where apps and thumbnailers are registered, the spec's default when unset.
+DATA_DIRS=${XDG_DATA_DIRS:-/usr/local/share:/usr/share}
 SEARCH_LIMIT=200
 RECENT_LIMIT=40
 ERR_FILE="${TMPDIR:-/tmp}/files-widget.$$.err"
@@ -270,7 +274,7 @@ names() {
 
 desktop_file() {
   local id="$1" base
-  for base in "${XDG_DATA_HOME:-$HOME/.local/share}" ${XDG_DATA_DIRS//:/ }; do
+  for base in "${XDG_DATA_HOME:-$HOME/.local/share}" ${DATA_DIRS//:/ }; do
     [[ -f $base/applications/$id ]] && { printf '%s' "$base/applications/$id"; return 0; }
   done
   return 1
@@ -307,6 +311,65 @@ launch() {
   shift
   file=$(desktop_file "$id") || fail "no app named $id"
   gio launch "$file" "$@" >/dev/null 2>"$ERR_FILE" || fail "$(last_error)"
+}
+
+# The .thumbnailer file registered for a MIME type, user ones first.
+thumbnailer_for() {
+  local mime="$1" base file types
+  for base in "${XDG_DATA_HOME:-$HOME/.local/share}" ${DATA_DIRS//:/ }; do
+    for file in "${base%/}"/thumbnailers/*.thumbnailer; do
+      [[ -f $file ]] || continue
+      types=$(sed -n 's/^MimeType=//p' "$file" | head -n 1)
+      [[ ";$types" == *";$mime;"* ]] && { printf '%s' "$file"; return 0; }
+    done
+  done
+  return 1
+}
+
+# A preview picture of PATH about SIZE pixels wide, made by the thumbnailer
+# the system registers for its type (the ones Nautilus uses: a video frame,
+# an album cover, a document's first page, a font sample) and kept in this
+# widget's own cache under the file's path and date, so each version of a
+# file is drawn once. An older version's picture is dropped as the new one
+# lands, and pictures nobody needed for three months go.
+thumbnail() {
+  local path="${1:?path required}" size="${2:-256}" key mtime out mime file exec tmp word
+  local -a words=() argv=()
+  [[ -f $path ]] || fail "no file at $path"
+  [[ $size =~ ^[0-9]+$ ]] || fail "bad size $size"
+  key=$(printf '%s' "$path" | md5sum | cut -d' ' -f1)
+  mtime=$(stat -c %Y -- "$path")
+  out="$THUMB_DIR/$key-$mtime-$size.png"
+  if [[ -s $out ]]; then
+    printf 'thumbnail\t%s\n' "$out"
+    return 0
+  fi
+  mime=$(gio info -a standard::content-type -- "$path" 2>/dev/null | sed -n 's/^ *standard::content-type: //p')
+  [[ -n $mime ]] || fail "could not tell the type of $(basename "$path")"
+  file=$(thumbnailer_for "$mime") || fail "no preview for $mime"
+  exec=$(sed -n 's/^Exec=//p' "$file" | head -n 1)
+  mkdir -p "$THUMB_DIR"
+  tmp="$THUMB_DIR/.$key.$$.png"
+  # Paths and URIs stand alone as arguments; quoting the replacement keeps
+  # an & in a name from standing for the match (patsub_replacement).
+  read -ra words <<<"$exec"
+  for word in "${words[@]}"; do
+    case $word in
+      %i) argv+=("$path") ;;
+      %u) argv+=("file://$(urlencode "$path")") ;;
+      %o) argv+=("$tmp") ;;
+      *) word=${word//%s/"$size"}; argv+=("${word//%%/%}") ;;
+    esac
+  done
+  if timeout 20 "${argv[@]}" >/dev/null 2>"$ERR_FILE" && [[ -s $tmp ]]; then
+    rm -f -- "$THUMB_DIR/$key"-*.png
+    mv -f -- "$tmp" "$out"
+    find "$THUMB_DIR" -name '*.png' -mtime +90 -delete 2>/dev/null
+    printf 'thumbnail\t%s\n' "$out"
+  else
+    rm -f -- "$tmp"
+    fail "no preview: $(last_error)"
+  fi
 }
 
 # Bytes under a list of paths, for the progress line.
@@ -552,6 +615,9 @@ case "${1:-}" in
     shift
     launch "$@"
     ;;
+  thumbnail)
+    thumbnail "${2:-}" "${3:-}"
+    ;;
   transfer)
     shift
     transfer "$@"
@@ -597,7 +663,7 @@ case "${1:-}" in
     unbookmark "${2:-}"
     ;;
   *)
-    echo "Usage: files.sh places | free DIR | recent | trashed | search DIR QUERY [all] | names DIR | apps PATH | launch ID PATH... | transfer copy|move SRC TARGET POLICY... | rename PATH NAME | mkdir|touch DIR NAME | trash PATH... | restore NAME... | purge NAME... | delete PATH... | empty-trash | mount DEVICE | eject MOUNTPOINT | bookmark|unbookmark PATH" >&2
+    echo "Usage: files.sh places | free DIR | recent | trashed | search DIR QUERY [all] | names DIR | apps PATH | launch ID PATH... | thumbnail PATH SIZE | transfer copy|move SRC TARGET POLICY... | rename PATH NAME | mkdir|touch DIR NAME | trash PATH... | restore NAME... | purge NAME... | delete PATH... | empty-trash | mount DEVICE | eject MOUNTPOINT | bookmark|unbookmark PATH" >&2
     exit 1
     ;;
 esac

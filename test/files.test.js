@@ -504,6 +504,7 @@ describe("kindOf", () => {
     assert.equal(Model.kindOf("a.jpg", false), "image")
     assert.equal(Model.kindOf("a.mkv", false), "video")
     assert.equal(Model.kindOf("a.qml", false), "code")
+    assert.equal(Model.kindOf("a.woff2", false), "font")
     assert.equal(Model.kindOf("a.weird", false), "file")
   })
 })
@@ -553,6 +554,46 @@ describe("isTextual", () => {
     assert.equal(Model.isTextual(entry("a.bin")), false)
     assert.equal(Model.isTextual(entry("docs", { dir: true })), false)
     assert.equal(Model.isTextual(null), false)
+  })
+})
+
+describe("previewKind", () => {
+  it("shows pictures and PDF pages itself", () => {
+    assert.equal(Model.previewKind(entry("a.png")), "image")
+    assert.equal(Model.previewKind(entry("a.PDF")), "pdf")
+  })
+
+  it("shows text, asks a thumbnailer for media and documents, and nothing else", () => {
+    assert.equal(Model.previewKind(entry("a.md", { size: 10 })), "text")
+    for (const name of ["a.mp4", "a.flac", "a.docx", "a.ods", "a.pptx", "a.ttf", "a.heic"]) assert.equal(Model.previewKind(entry(name)), "thumbnail", name)
+    assert.equal(Model.previewKind(entry("a.zip")), "none")
+    assert.equal(Model.previewKind(entry("d", { dir: true })), "dir")
+    assert.equal(Model.previewKind(Model.makeEntry({ path: "" })), "none")
+    assert.equal(Model.previewKind(null), "none")
+  })
+})
+
+describe("thumbnailKey", () => {
+  it("changes with the file's date and the size asked for", () => {
+    const a = entry("a.mp4", { modified: 5 })
+    assert.equal(Model.thumbnailKey(a, 256), `${HOME}/Downloads/a.mp4|5|256`)
+    assert.notEqual(Model.thumbnailKey(a, 512), Model.thumbnailKey(a, 256))
+    assert.equal(Model.thumbnailKey(null, 256), "")
+  })
+})
+
+describe("previewText", () => {
+  it("keeps the first lines of text", () => {
+    assert.equal(Model.previewText("a\nb\tc\nd\n", 2), "a\nb\tc")
+    assert.equal(Model.previewText("", 3), "")
+    assert.equal(Model.previewText(null, 3), "")
+  })
+
+  it("gives up on binary content", () => {
+    assert.equal(Model.previewText("\u007fELF\u0002\u0001\u0000", 5), null)
+    assert.equal(Model.previewText("caf\uFFFD", 5), null)
+    // ANSI colours in a log are still text.
+    assert.equal(Model.previewText("\u001b[31mred\u001b[0m", 5), "\u001b[31mred\u001b[0m")
   })
 })
 
@@ -1007,6 +1048,15 @@ describe("parseApps", () => {
   })
 })
 
+describe("parseThumbnail", () => {
+  it("reads the picture path, tabs included", () => {
+    assert.equal(Model.parseThumbnail("thumbnail\t/c/a\tb.png\n"), "/c/a\tb.png")
+    assert.equal(Model.parseThumbnail("error\tno preview for video/mp4\n"), "")
+    assert.equal(Model.parseThumbnail("thumbnail\t\n"), "")
+    assert.equal(Model.parseThumbnail(null), "")
+  })
+})
+
 describe("parseFree", () => {
   it("reads free and total bytes", () => {
     assert.deepEqual(Model.parseFree("free\t100\t400\n"), { avail: 100, size: 400 })
@@ -1316,6 +1366,54 @@ esac`)
     assert.equal(s.run(["launch", "ghost.desktop", "/a"]).stdout, "error\tno app named ghost.desktop\n")
     assert.equal(s.run(["launch", "nvim.desktop", "/a"], { FAKE_GIO_FAIL: "1" }).stdout, "error\tgio: refused\n")
     assert.equal(s.run(["launch"]).status, 1)
+  })
+
+  it("makes a thumbnail with the registered thumbnailer and keeps it", (t) => {
+    const s = setup(t)
+    const thumbs = path.join(s.data, "thumbnailers")
+    fs.mkdirSync(thumbs)
+    fs.writeFileSync(path.join(thumbs, "other.thumbnailer"), "[Thumbnailer Entry]\nExec=never %i %o\nMimeType=image/x-other;\n")
+    fs.writeFileSync(path.join(thumbs, "fake.thumbnailer"), "[Thumbnailer Entry]\nExec=fakethumb --size=%s -s %s %u %i %o 100%%\nMimeType=text/plain;text/markdown;\n")
+    fakeCommand(s.bin, "fakethumb", 'printf "%s\\n" "$*" >> "$FAKE_LOG"; printf PNG > "${@: -2:1}"')
+    const file = path.join(s.home, "R&D notes.md")
+    write(file, "x")
+    const cache = path.join(s.dir, "cache")
+    const first = s.run(["thumbnail", file, "256"], { XDG_CACHE_HOME: cache })
+    const made = Model.parseThumbnail(first.stdout)
+    assert.match(made, new RegExp(`^${cache}/joamag-files/thumbnails/[0-9a-f]{32}-\\d+-256\\.png$`))
+    assert.equal(fs.readFileSync(made, "utf8"), "PNG")
+    // Each placeholder is one argument, the & and the space in the name kept.
+    const call = s.log().find((l) => l.startsWith("--size"))
+    const tmp = `${path.dirname(made)}/.${path.basename(made).split("-")[0]}.`
+    assert.ok(call.startsWith(`--size=256 -s 256 file://${s.home}/R%26D%20notes.md ${file} ${tmp}`), call)
+    assert.ok(call.endsWith(".png 100%"), call)
+    // Asked again, the cached picture comes back without running anything.
+    const before = s.log().length
+    assert.equal(Model.parseThumbnail(s.run(["thumbnail", file, "256"], { XDG_CACHE_HOME: cache }).stdout), made)
+    assert.equal(s.log().length, before)
+    // A new version of the file replaces the old picture.
+    fs.utimesSync(file, new Date(2030, 0, 1), new Date(2030, 0, 1))
+    const newer = Model.parseThumbnail(s.run(["thumbnail", file, "256"], { XDG_CACHE_HOME: cache }).stdout)
+    assert.notEqual(newer, made)
+    assert.ok(!fs.existsSync(made))
+  })
+
+  it("says when there is no thumbnail to make", (t) => {
+    const s = setup(t)
+    const thumbs = path.join(s.data, "thumbnailers")
+    fs.mkdirSync(thumbs)
+    fs.writeFileSync(path.join(thumbs, "broken.thumbnailer"), "[Thumbnailer Entry]\nExec=brokenthumb %i %o\nMimeType=text/markdown;\n")
+    fakeCommand(s.bin, "brokenthumb", 'echo "brokenthumb: cannot decode" >&2; exit 1')
+    const file = path.join(s.home, "a.md")
+    write(file, "x")
+    const env = { XDG_CACHE_HOME: path.join(s.dir, "cache") }
+    assert.equal(s.run(["thumbnail", file, "256"], env).stdout, "error\tno preview: brokenthumb: cannot decode\n")
+    fs.rmSync(path.join(thumbs, "broken.thumbnailer"))
+    assert.equal(s.run(["thumbnail", file, "256"], env).stdout, "error\tno preview for text/markdown\n")
+    assert.equal(s.run(["thumbnail", file, "256"], { ...env, FAKE_GIO_FAIL: "1" }).stdout, "error\tcould not tell the type of a.md\n")
+    assert.equal(s.run(["thumbnail", file, "big"], env).stdout, "error\tbad size big\n")
+    assert.equal(s.run(["thumbnail", path.join(s.home, "none"), "256"], env).stdout, `error\tno file at ${s.home}/none\n`)
+    assert.equal(s.run(["thumbnail"], env).status, 1)
   })
 
   it("copies files and folders with the total and progress", (t) => {

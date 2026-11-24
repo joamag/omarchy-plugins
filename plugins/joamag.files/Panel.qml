@@ -62,6 +62,15 @@ Panel {
   // What the preview pane and the columns' last column show: the cursor
   // entry, at once for a single step, after a pause while a key is held.
   property var previewEntry: null
+  // The PDF page the preview shows, and how many the document has.
+  property int previewPage: 0
+  property int previewPages: 0
+  // Pictures the system thumbnailers made, by path, date and size: the PNG,
+  // or "" once one could not be made. They are made one at a time, what is
+  // on screen now first.
+  property var thumbnails: ({})
+  property var thumbQueue: []
+  property string thumbRunning: ""
   // The window's content is built on the first pop out and kept after.
   property bool windowBuilt: false
   // A path to put the cursor on (and to rename) as soon as it is listed:
@@ -531,6 +540,36 @@ Panel {
     }
     for (var i = 0; i < list.length && i < 12; i++) if (!list[i].dir) Util.execArgv(["xdg-open", list[i].path])
     if (!detached) root.close()
+  }
+
+  function stepPage(delta) {
+    if (previewPages > 0) previewPage = Math.max(0, Math.min(previewPages - 1, previewPage + delta))
+  }
+
+  function requestThumbnail(entry, size) {
+    var key = Model.thumbnailKey(entry, size)
+    if (key === "" || key in thumbnails || key === thumbRunning) return
+    var queue = thumbQueue.filter(function(job) { return job.key !== key })
+    queue.unshift({ key: key, path: entry.path, size: size })
+    // A folder of videos scrolled past should not leave a long backlog.
+    thumbQueue = queue.slice(0, 40)
+    nextThumbnail()
+  }
+
+  function nextThumbnail() {
+    if (thumbProc.running || thumbQueue.length === 0) return
+    var job = thumbQueue[0]
+    thumbQueue = thumbQueue.slice(1)
+    thumbRunning = job.key
+    thumbProc.command = [root.scriptPath, "thumbnail", job.path, String(job.size)]
+    thumbProc.running = true
+  }
+
+  function applyThumbnail(raw) {
+    var made = Object.keys(thumbnails).length < 400 ? Object.assign({}, thumbnails) : {}
+    made[thumbRunning] = Model.parseThumbnail(raw)
+    thumbnails = made
+    thumbRunning = ""
   }
 
   function openInNewTab(entry) {
@@ -1163,6 +1202,8 @@ Panel {
     case "[": switchTab(activeTab - 1); return true
     case "N": openNautilus(); return true
     case "?": keysOpen = true; return true
+    case "<": stepPage(-1); return true
+    case ">": stepPage(1); return true
     }
     if (text.length === 1 && text >= "1" && text <= "9") {
       var n = Number(text) - 1
@@ -1222,6 +1263,11 @@ Panel {
   onCursorEntryChanged: {
     if (!previewTimer.running) previewEntry = cursorEntry
     previewTimer.restart()
+  }
+
+  onPreviewEntryChanged: {
+    previewPage = 0
+    previewPages = 0
   }
 
   onShownChanged: if (shown && folderDirty) snapshotFolder()
@@ -1365,6 +1411,12 @@ Panel {
         else root.openMenu(items, -1, -1, null)
       }
     }
+  }
+
+  Process {
+    id: thumbProc
+    stdout: StdioCollector { waitForEnd: true; onStreamFinished: root.applyThumbnail(text) }
+    onExited: Qt.callLater(root.nextThumbnail)
   }
 
   Process {
@@ -2639,6 +2691,15 @@ Panel {
         readonly property bool isCursor: root.cursorIndex === index
         readonly property bool isCut: root.clipboard !== null && root.clipboard.mode === "cut" && root.clipboard.paths.indexOf(entry.path) >= 0
         readonly property bool renaming: root.renamePath === entry.path
+        // Pictures and a PDF's first page come from the file; video, audio,
+        // documents and fonts from a system thumbnailer, asked for as the
+        // tile shows.
+        readonly property string kind: Model.previewKind(entry)
+        readonly property bool wantsThumbnail: kind === "thumbnail" || (kind === "pdf" && thumb.status === Image.Error)
+        readonly property string thumbKey: wantsThumbnail ? Model.thumbnailKey(entry, 256) : ""
+        readonly property string thumbPath: thumbKey !== "" ? (root.thumbnails[thumbKey] || "") : ""
+
+        onThumbKeyChanged: if (thumbKey !== "") root.requestThumbnail(entry, 256)
 
         CursorSurface {
           anchors.fill: parent
@@ -2662,18 +2723,28 @@ Panel {
             Image {
               id: thumb
               anchors.fill: parent
-              visible: Model.isImage(tile.entry) && status === Image.Ready
-              source: Model.isImage(tile.entry) ? Model.fileUrl(tile.entry.path) : ""
+              visible: status === Image.Ready
+              source: tile.kind === "image" || tile.kind === "pdf" ? Model.fileUrl(tile.entry.path) : ""
+              currentFrame: 0
               sourceSize.width: Style.space(220)
               sourceSize.height: Style.space(160)
-              fillMode: Image.PreserveAspectCrop
+              fillMode: tile.kind === "pdf" ? Image.PreserveAspectFit : Image.PreserveAspectCrop
               asynchronous: true
               cache: true
             }
 
+            Image {
+              id: tileThumb
+              anchors.fill: parent
+              visible: tile.wantsThumbnail && status === Image.Ready
+              source: tile.thumbPath !== "" ? Model.fileUrl(tile.thumbPath) : ""
+              fillMode: Image.PreserveAspectFit
+              asynchronous: true
+            }
+
             Text {
               anchors.centerIn: parent
-              visible: !thumb.visible
+              visible: !thumb.visible && !tileThumb.visible
               textFormat: Text.PlainText
               text: Model.kindIcon(tile.entry.kind)
               color: tile.entry.dir ? Color.accent : gridPane.foreground
@@ -3128,8 +3199,21 @@ Panel {
     required property color foreground
     required property var entry
 
-    readonly property bool hasEntry: entry !== null && entry !== undefined
-    readonly property bool textual: hasEntry && Model.isTextual(entry)
+    readonly property bool hasEntry: entry !== null && entry !== undefined && entry.path !== ""
+    readonly property string kind: Model.previewKind(entry)
+    readonly property bool textual: kind === "text"
+    // null once the file turns out to be binary.
+    readonly property var lines: textual ? Model.previewText(previewFile.text(), 40) : ""
+    // Qt draws pictures and PDF pages itself; a PDF falls back to its cover
+    // from a system thumbnailer when Qt's PDF reader is not installed, and
+    // video, audio, documents and fonts always come from one.
+    readonly property bool pdfFailed: kind === "pdf" && pageImage.status === Image.Error
+    readonly property bool wantsThumbnail: kind === "thumbnail" || pdfFailed
+    readonly property string thumbKey: wantsThumbnail ? Model.thumbnailKey(entry, 512) : ""
+    readonly property string thumbPath: thumbKey !== "" ? (root.thumbnails[thumbKey] || "") : ""
+    readonly property bool media: kind === "image" || kind === "pdf" || wantsThumbnail
+
+    onThumbKeyChanged: if (thumbKey !== "") root.requestThumbnail(entry, 512)
 
     FileView {
       id: previewFile
@@ -3178,31 +3262,81 @@ Panel {
           font.pixelSize: Style.font.caption
         }
 
+        // The picture, the PDF page or the thumbnail, as large as the pane
+        // allows, so files can be told apart at a glance.
         Item {
+          id: mediaBox
           visible: previewRoot.hasEntry && !previewRoot.textual
           width: parent.width
-          height: Style.space(150)
+          height: previewRoot.media ? Math.max(Style.space(150), Math.min(Style.space(360), previewRoot.height * 0.55)) : Style.space(110)
 
           Image {
-            id: previewImage
+            id: pageImage
             anchors.fill: parent
             visible: status === Image.Ready
-            source: previewRoot.hasEntry && Model.isImage(previewRoot.entry) ? Model.fileUrl(previewRoot.entry.path) : ""
-            sourceSize.width: Style.space(560)
-            sourceSize.height: Style.space(300)
+            source: previewRoot.kind === "image" || previewRoot.kind === "pdf" ? Model.fileUrl(previewRoot.entry.path) : ""
+            currentFrame: previewRoot.kind === "pdf" ? Math.min(root.previewPage, Math.max(0, frameCount - 1)) : 0
+            sourceSize.width: Math.round(mediaBox.width)
+            sourceSize.height: Math.round(mediaBox.height)
+            fillMode: Image.PreserveAspectFit
+            asynchronous: true
+            onFrameCountChanged: if (previewRoot.kind === "pdf") root.previewPages = frameCount
+          }
+
+          Image {
+            id: thumbImage
+            anchors.fill: parent
+            visible: previewRoot.wantsThumbnail && status === Image.Ready
+            source: previewRoot.thumbPath !== "" ? Model.fileUrl(previewRoot.thumbPath) : ""
             fillMode: Image.PreserveAspectFit
             asynchronous: true
           }
 
-          Text {
+          Column {
             anchors.centerIn: parent
-            visible: !previewImage.visible
-            textFormat: Text.PlainText
-            text: previewRoot.hasEntry ? Model.kindIcon(previewRoot.entry.kind) : ""
-            color: previewRoot.hasEntry && previewRoot.entry.dir ? Color.accent : previewRoot.foreground
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.displayLarge
+            visible: !pageImage.visible && !thumbImage.visible
+            spacing: Style.space(6)
+
+            Text {
+              anchors.horizontalCenter: parent.horizontalCenter
+              textFormat: Text.PlainText
+              text: previewRoot.hasEntry ? Model.kindIcon(previewRoot.entry.kind) : ""
+              color: previewRoot.hasEntry && previewRoot.entry.dir ? Color.accent : previewRoot.foreground
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.displayLarge
+            }
+
+            Text {
+              anchors.horizontalCenter: parent.horizontalCenter
+              visible: previewRoot.wantsThumbnail && previewRoot.thumbPath === "" && !(previewRoot.thumbKey in root.thumbnails)
+              textFormat: Text.PlainText
+              text: "Making a preview…"
+              color: previewRoot.foreground
+              opacity: 0.5
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+            }
           }
+        }
+
+        // Pages of a PDF: ‹ and › here, or < and > from the keyboard.
+        Row {
+          visible: previewRoot.kind === "pdf" && pageImage.visible && pageImage.frameCount > 1
+          anchors.horizontalCenter: parent.horizontalCenter
+          spacing: Style.space(8)
+
+          IconButton { glyph: "󰅁"; tip: "Previous page (<)"; enabled: root.previewPage > 0; onClicked: root.stepPage(-1) }
+
+          Text {
+            anchors.verticalCenter: parent.verticalCenter
+            textFormat: Text.PlainText
+            text: "Page " + (pageImage.currentFrame + 1) + " of " + pageImage.frameCount
+            color: previewRoot.foreground
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.caption
+          }
+
+          IconButton { glyph: "󰅂"; tip: "Next page (>)"; enabled: root.previewPage < pageImage.frameCount - 1; onClicked: root.stepPage(1) }
         }
 
         Text {
@@ -3217,8 +3351,18 @@ Panel {
           wrapMode: Text.WrapAnywhere
         }
 
+        Text {
+          visible: previewRoot.textual && previewRoot.lines === null
+          textFormat: Text.PlainText
+          text: "Binary file, no text to show"
+          color: previewRoot.foreground
+          opacity: 0.5
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.caption
+        }
+
         Rectangle {
-          visible: previewRoot.textual
+          visible: previewRoot.textual && previewRoot.lines !== null
           width: parent.width
           height: Math.min(Style.space(220), previewText.implicitHeight + Style.space(12))
           color: Qt.rgba(previewRoot.foreground.r, previewRoot.foreground.g, previewRoot.foreground.b, 0.05)
@@ -3233,7 +3377,7 @@ Panel {
             anchors.top: parent.top
             anchors.margins: Style.space(6)
             textFormat: Text.PlainText
-            text: previewRoot.textual ? String(previewFile.text()).split("\n").slice(0, 30).join("\n") : ""
+            text: previewRoot.lines || ""
             color: previewRoot.foreground
             font.family: root.fontFamily
             font.pixelSize: Style.font.caption
@@ -3255,6 +3399,7 @@ Panel {
               var rows = [["Kind", e.type]]
               if (e.dir) rows.push(["Contains", Model.plural(previewFolder.count, "item")])
               else rows.push(["Size", Model.formatSize(e.size)])
+              if (previewRoot.kind === "pdf" && pageImage.frameCount > 0) rows.push(["Pages", String(pageImage.frameCount)])
               if (isFinite(e.modified)) rows.push([e.trashName ? "Deleted" : "Modified", Model.formatFullDate(e.modified)])
               rows.push([e.trashName ? "From" : "Where", Model.prettyPath(Model.parentPath(e.trashName ? e.origin : e.path), root.home)])
               var flat = []
