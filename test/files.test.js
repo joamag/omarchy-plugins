@@ -2662,6 +2662,7 @@ esac`)
     const apps = path.join(s.data, "applications")
     const gone = { ...m.env, FAKE_SHELL_STATUS: "1" }
     assert.equal(s.run(["open", "/srv"], gone).stdout, "error\tno other file manager to open /srv\n")
+    assert.equal(s.run(["open"], gone).stdout, "error\tno other file manager\n")
     m.installed("org.gnome.Nautilus.desktop")
     s.run(["open", "/srv"], gone)
     m.installed("folio.desktop")
@@ -2672,6 +2673,7 @@ esac`)
     s.run(["open", "sftp://server/srv"], m.env)
     assert.deepEqual(s.log(), [
       "shell joamag.files go /srv",
+      "shell joamag.files summon",
       "shell joamag.files go /srv",
       `launch ${apps}/org.gnome.Nautilus.desktop /srv`,
       "shell joamag.files reveal /srv/notes.md",
@@ -2680,6 +2682,53 @@ esac`)
       `launch ${apps}/folio.desktop`,
       `launch ${apps}/nvim.desktop sftp://server/srv`,
     ])
+  })
+
+  it("quotes a plugin folder with a space for the desktop file and Hyprland", (t) => {
+    const s = setup(t)
+    const m = manager(s)
+    const here = path.join(s.dir, "my plugins", "joamag.files")
+    fs.mkdirSync(here, { recursive: true })
+    fs.copyFileSync(path.join(pluginDir("joamag.files"), "files.sh"), path.join(here, "files.sh"))
+    fs.chmodSync(path.join(here, "files.sh"), 0o755)
+    const result = require("node:child_process").spawnSync(path.join(here, "files.sh"), ["default", "on"], { env: { ...s.env, ...m.env, PATH: `${s.bin}:/usr/bin:/bin`, LANG: "C" } })
+    assert.equal(String(result.stdout), "")
+    assert.ok(fs.readFileSync(m.files.app, "utf8").includes(`Exec="${here}/files.sh" open %U\n`))
+    // Escaped for the shell Hyprland runs it in, then again for Lua.
+    const shell = here.replace(/ /g, "\\\\ ")
+    assert.ok(fs.readFileSync(m.files.bindings, "utf8").includes(`o.rebind("SUPER + SHIFT + F", "File manager", "${shell}/files.sh open")\n`))
+  })
+
+  it("finds and stops the FileManager1 service, never an editor on its script", async (t) => {
+    const s = setup(t)
+    const m = manager(s)
+    // The real pgrep and pkill, on a copy of the plugin whose service sleeps.
+    for (const name of ["pgrep", "pkill"]) fs.rmSync(path.join(s.bin, name))
+    const here = path.join(s.dir, "plugin")
+    fs.mkdirSync(here)
+    fs.copyFileSync(path.join(pluginDir("joamag.files"), "files.sh"), path.join(here, "files.sh"))
+    fs.chmodSync(path.join(here, "files.sh"), 0o755)
+    const script = path.join(here, "filemanager1.py")
+    fs.writeFileSync(script, "import time\ntime.sleep(30)\n")
+    const run = (mode) => require("node:child_process").spawnSync(path.join(here, "files.sh"), ["default", mode], { env: { ...s.env, ...m.env, PATH: `${s.bin}:/usr/bin:/bin`, LANG: "C" } })
+    const ended = (child) => new Promise((resolve) => child.on("exit", (code, signal) => resolve(signal)))
+    const editor = spawn("tail", ["-f", script])
+    t.after(() => editor.kill())
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    // Only the editor names the script: the service is not running yet.
+    run("on")
+    assert.deepEqual(s.log().filter((l) => l.startsWith("setsid")), [`setsid -f ${script}`])
+    const service = spawn("python3", [script])
+    t.after(() => service.kill())
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    fs.writeFileSync(s.env.FAKE_LOG, "")
+    run("on")
+    assert.deepEqual(s.log().filter((l) => l.startsWith("setsid")), [])
+    const stopped = ended(service)
+    run("off")
+    assert.equal(await stopped, "SIGTERM")
+    assert.equal(editor.exitCode, null)
+    assert.equal(editor.signalCode, null)
   })
 
   it("makes the widget the default file manager, and hands everything back", (t) => {
@@ -2793,53 +2842,6 @@ esac`)
     s.run(["default", "off"], m.env)
     assert.ok(!fs.existsSync(m.files.bindings))
     assert.equal(s.run(["default", "on"], { ...m.env, FAKE_MIME_FAIL: "1" }).stdout, "error\txdg-mime: cannot write\n")
-  })
-
-  it("finds and stops the FileManager1 service, never an editor on its script", async (t) => {
-    const s = setup(t)
-    const m = manager(s)
-    // The real pgrep and pkill, on a copy of the plugin whose service sleeps.
-    for (const name of ["pgrep", "pkill"]) fs.rmSync(path.join(s.bin, name))
-    const here = path.join(s.dir, "plugin")
-    fs.mkdirSync(here)
-    fs.copyFileSync(path.join(pluginDir("joamag.files"), "files.sh"), path.join(here, "files.sh"))
-    fs.chmodSync(path.join(here, "files.sh"), 0o755)
-    const script = path.join(here, "filemanager1.py")
-    fs.writeFileSync(script, "import time\ntime.sleep(30)\n")
-    const run = (mode) => require("node:child_process").spawnSync(path.join(here, "files.sh"), ["default", mode], { env: { ...s.env, ...m.env, PATH: `${s.bin}:/usr/bin:/bin`, LANG: "C" } })
-    const ended = (child) => new Promise((resolve) => child.on("exit", (code, signal) => resolve(signal)))
-    const editor = spawn("tail", ["-f", script])
-    t.after(() => editor.kill())
-    await new Promise((resolve) => setTimeout(resolve, 100))
-    // Only the editor names the script: the service is not running yet.
-    run("on")
-    assert.deepEqual(s.log().filter((l) => l.startsWith("setsid")), [`setsid -f ${script}`])
-    const service = spawn("python3", [script])
-    t.after(() => service.kill())
-    await new Promise((resolve) => setTimeout(resolve, 100))
-    fs.writeFileSync(s.env.FAKE_LOG, "")
-    run("on")
-    assert.deepEqual(s.log().filter((l) => l.startsWith("setsid")), [])
-    const stopped = ended(service)
-    run("off")
-    assert.equal(await stopped, "SIGTERM")
-    assert.equal(editor.exitCode, null)
-    assert.equal(editor.signalCode, null)
-  })
-
-  it("quotes a plugin folder with a space for the desktop file and Hyprland", (t) => {
-    const s = setup(t)
-    const m = manager(s)
-    const here = path.join(s.dir, "my plugins", "joamag.files")
-    fs.mkdirSync(here, { recursive: true })
-    fs.copyFileSync(path.join(pluginDir("joamag.files"), "files.sh"), path.join(here, "files.sh"))
-    fs.chmodSync(path.join(here, "files.sh"), 0o755)
-    const result = require("node:child_process").spawnSync(path.join(here, "files.sh"), ["default", "on"], { env: { ...s.env, ...m.env, PATH: `${s.bin}:/usr/bin:/bin`, LANG: "C" } })
-    assert.equal(String(result.stdout), "")
-    assert.ok(fs.readFileSync(m.files.app, "utf8").includes(`Exec="${here}/files.sh" open %U\n`))
-    // Escaped for the shell Hyprland runs it in, then again for Lua.
-    const shell = here.replace(/ /g, "\\\\ ")
-    assert.ok(fs.readFileSync(m.files.bindings, "utf8").includes(`o.rebind("SUPER + SHIFT + F", "File manager", "${shell}/files.sh open")\n`))
   })
 
   it("rejects bad invocations", (t) => {

@@ -846,9 +846,9 @@ previous_manager() {
 
 # A folder from another app, Show in folder or the file manager keys goes to
 # the widget (go, or reveal for an item to pick in its folder), which shows
-# it in the popup or its window; nothing toggles the widget. Without the
-# widget (not in the bar, or the shell is down), and for a location it
-# cannot browse, the previous file manager opens it.
+# it in the popup or its window; with none, the popup opens or closes.
+# Without the widget (not in the bar, or the shell is down), and for a
+# location it cannot browse, the previous file manager opens it.
 show() {
   local how="$1" target="${2:-}" path="" id
   if [[ -z $target ]]; then
@@ -858,7 +858,7 @@ show() {
     [[ $how == go && -e $path && ! -d $path ]] && how=reveal
     [[ -n $path ]] && omarchy-shell joamag.files "$how" "$path" >/dev/null 2>&1 && return 0
   fi
-  id=$(previous_manager) || fail "no other file manager to open ${target:-}"
+  id=$(previous_manager) || fail "no other file manager${target:+ to open $target}"
   if [[ -n $target ]]; then launch "$id" "$target"; else launch "$id"; fi
 }
 
@@ -890,6 +890,14 @@ dbus_reload() {
     --method org.freedesktop.DBus.ReloadConfig >/dev/null 2>&1 || true
 }
 
+# The FileManager1 service's whole command line, for pgrep and pkill: an
+# editor or a pager on the script names it too, and is not it.
+service_pattern() {
+  local here
+  here=$(printf '%s' "$HERE" | sed 's/[][\.*^$+?(){}|]/\\&/g')
+  printf '(.*/)?python3 %s/filemanager1\\.py' "$here"
+}
+
 # The lines of the user's Hyprland bindings that point the file manager keys
 # at the widget, between two markers so they can be taken out again.
 keys_block() {
@@ -912,14 +920,6 @@ bindings_without_keys() {
     /^$/ { blank++; next }
     { while (blank > 0) { print ""; blank-- } print }
   ' "$BINDINGS_FILE"
-}
-
-# The FileManager1 service's whole command line, for pgrep and pkill: an
-# editor or a pager on the script names it too, and is not it.
-service_pattern() {
-  local here
-  here=$(printf '%s' "$HERE" | sed 's/[][\.*^$+?(){}|]/\\&/g')
-  printf '(.*/)?python3 %s/filemanager1\\.py' "$here"
 }
 
 # Adds the block (on) or takes it out (off), and has Hyprland read the

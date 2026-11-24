@@ -561,17 +561,20 @@ Panel {
     if (deep) searchEntries = searchEntries.concat(Model.parseEntries(lines.join("\n")))
   }
 
+  // The cursor on the entry asked for, once it is listed.
+  function landPending() {
+    if (pendingSelect === "") return
+    var idx = Model.indexOfPath(entries, pendingSelect)
+    if (idx < 0) return
+    cursorIndex = idx
+    anchorIndex = idx
+    pendingSelect = ""
+  }
+
   // A fresh listing keeps the cursor on the same entry, or lands it on the
   // one asked for; the selection drops what went away.
   onEntriesChanged: {
-    if (pendingSelect !== "") {
-      var idx = Model.indexOfPath(entries, pendingSelect)
-      if (idx >= 0) {
-        cursorIndex = idx
-        anchorIndex = idx
-        pendingSelect = ""
-      }
-    }
+    landPending()
     if (pendingRename !== "" && Model.indexOfPath(entries, pendingRename) >= 0) {
       startRename(pendingRename)
       pendingRename = ""
@@ -1718,6 +1721,8 @@ Panel {
     if (pick) {
       pendingSelect = path
       go(Model.parentPath(path))
+      // In the folder on screen nothing new is listed to land on it.
+      landPending()
     } else {
       go(path)
     }
