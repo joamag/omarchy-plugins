@@ -1697,21 +1697,21 @@ describe("itemMenu", () => {
 
   it("offers folder actions for a folder", () => {
     const menu = Model.itemMenu(entry("d", { dir: true }), 1, true, true)
-    assert.deepEqual(menu.map((i) => i.id), ["open", "opentab", "compress", "copy", "cut", "pasteinto", "rename", "bookmark", "trash", "purge"])
+    assert.deepEqual(menu.map((i) => i.id), ["open", "opentab", "compress", "copy", "cut", "copypath", "pasteinto", "rename", "bookmark", "trash", "purge"])
     assert.equal(menu.find((i) => i.id === "bookmark").label, "Remove bookmark")
     assert.equal(menu.find((i) => i.id === "pasteinto").disabled, false)
   })
 
   it("offers Open with for a file and greys rename for several", () => {
     const menu = Model.itemMenu(entry("a.txt"), 2, false, false)
-    assert.deepEqual(menu.map((i) => i.id), ["open", "openwith", "compress", "copy", "cut", "rename", "trash", "purge"])
+    assert.deepEqual(menu.map((i) => i.id), ["open", "openwith", "compress", "copy", "cut", "copypath", "rename", "trash", "purge"])
     assert.equal(menu.find((i) => i.id === "rename").disabled, true)
     assert.deepEqual(Model.itemMenu(null, 1, false, false), [])
   })
 
   it("opens an archive as a folder and offers to extract it", () => {
     const menu = Model.itemMenu(entry("docs.zip"), 1, false, false)
-    assert.deepEqual(menu.map((i) => i.id), ["open", "openwith", "extracthere", "extractto", "compress", "copy", "cut", "rename", "trash", "purge"])
+    assert.deepEqual(menu.map((i) => i.id), ["open", "openwith", "extracthere", "extractto", "compress", "copy", "cut", "copypath", "rename", "trash", "purge"])
     assert.equal(menu[0].label, "Open as a folder")
   })
 
@@ -2022,6 +2022,36 @@ exit \${FAKE_PY_STATUS:-0}`)
     s.run(["clipboard-set", "cut", odd], { ...c.env, FAKE_PY_STATUS: "2" })
     assert.deepEqual(Model.parseClipboard(s.run(["clipboard-get"], c.env).stdout), { state: "files", mode: "cut", paths: [odd] })
     assert.equal(s.run(["clipboard-set", "copy", odd], { ...c.env, FAKE_PY_STATUS: "1", FAKE_PY_ERROR: "clipboard.py: the compositor refused the clipboard" }).stdout, "error\tclipboard.py: the compositor refused the clipboard\n")
+  })
+
+  it("offers copied paths as text under every text type", (t) => {
+    const s = setup(t)
+    const c = clipboard(s)
+    helper(s)
+    const text = `${s.home}/R&D notes.md\n${s.home}/b`
+    assert.equal(s.run(["clipboard-text", text], c.env).stdout, "")
+    const plain = `${s.home}/R&D notes.md/${s.home}/b`
+    assert.deepEqual(s.log(), [
+      `text/plain;charset=utf-8\t${plain}`,
+      `text/plain\t${plain}`,
+      `UTF8_STRING\t${plain}`,
+      `STRING\t${plain}`,
+      `TEXT\t${plain}`,
+    ])
+    assert.deepEqual(fs.readdirSync(s.dir).filter((n) => n.startsWith("files-clipboard.")), [])
+    // Text is not files: the widget finds nothing to paste.
+    assert.equal(s.run(["clipboard-text", ""], c.env).stdout, "error\tnothing to copy\n")
+  })
+
+  it("falls back to wl-copy for text, and reports its failures", (t) => {
+    const s = setup(t)
+    const c = clipboard(s)
+    helper(s)
+    assert.equal(s.run(["clipboard-text", "/srv/a b"], { ...c.env, FAKE_PY_STATUS: "2" }).stdout, "")
+    assert.equal(c.types(), "text/plain;charset=utf-8")
+    assert.equal(c.read(), "/srv/a b")
+    assert.equal(s.run(["clipboard-text", "/srv/a"], { ...c.env, FAKE_PY_STATUS: "2", FAKE_CLIP_FAIL: "1" }).stdout, "error\twl-copy: no seat\n")
+    assert.equal(s.run(["clipboard-text", "/srv/a"], { ...c.env, FAKE_PY_STATUS: "1", FAKE_PY_ERROR: "clipboard.py: the compositor refused the clipboard" }).stdout, "error\tclipboard.py: the compositor refused the clipboard\n")
   })
 
   it("reads what Nautilus and other apps copy", (t) => {

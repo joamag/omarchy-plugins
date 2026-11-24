@@ -758,6 +758,17 @@ Panel {
     showToast((mode === "copy" ? "Copied " : "Cut ") + Model.itemsLabel(list.length, list[0].name) + " · paste with p or Ctrl+V, here or in Nautilus")
   }
 
+  // Copy path: the full paths of the selection, or of the item, one a line,
+  // as text for a terminal, an editor or a chat. The files the widget had
+  // on the clipboard are no longer there.
+  function copyPaths() {
+    var list = picked().filter(function(e) { return !Model.isArchiveLocation(e.path) })
+    if (list.length === 0) return
+    clipboard = null
+    Util.execArgv([root.scriptPath, "clipboard-text", list.map(function(e) { return e.path }).join("\n")])
+    showToast(list.length === 1 ? "Copied the path of " + list[0].name : "Copied " + list.length + " paths")
+  }
+
   // Paste reads the shared clipboard first: what was copied or cut in
   // Nautilus (or any app that copies files) pastes here.
   function paste(dest) {
@@ -1575,6 +1586,7 @@ Panel {
     case "openwith": openWith(target); break
     case "copy": setClipboard("copy"); break
     case "cut": setClipboard("cut"); break
+    case "copypath": copyPaths(); break
     case "paste": paste(location); break
     case "pasteinto": if (target && target.dir) paste(target.path); break
     case "rename": startRename(target ? target.path : ""); break

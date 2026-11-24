@@ -1518,6 +1518,7 @@ function itemMenu(entry, count, clipboard, bookmarked) {
   items.push({ id: "compress", label: "Compress to .zip…", icon: "󰗄", shortcut: "Z" })
   items.push({ id: "copy", label: "Copy", icon: "󰆏", shortcut: "y" })
   items.push({ id: "cut", label: "Cut", icon: "󰆐", shortcut: "x" })
+  items.push({ id: "copypath", label: "Copy path", icon: "󰌷" })
   if (entry.dir) items.push({ id: "pasteinto", label: "Paste into folder", icon: "󰆒", disabled: !clipboard })
   items.push({ id: "rename", label: "Rename", icon: "󰏫", shortcut: "F2", disabled: count > 1 })
   if (entry.dir) items.push({ id: "bookmark", label: bookmarked ? "Remove bookmark" : "Bookmark", icon: "󰃀", shortcut: "Ctrl+D" })

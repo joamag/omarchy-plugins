@@ -17,6 +17,7 @@
 #   files.sh apps PATH              app   id name default   the apps that open PATH
 #   files.sh launch ID PATH...      open the files with the app ID
 #   files.sh clipboard-set copy|cut PATH...   put files on the clipboard other file managers share
+#   files.sh clipboard-text TEXT    put text on the clipboard, a copied path for instance
 #   files.sh clipboard-get          clipboard  copy|cut|empty|unavailable, then file  PATH lines
 #   files.sh clipboard-clear        empty the shared clipboard
 #   files.sh thumbnail PATH SIZE    thumbnail  PNG   a preview picture for PATH
@@ -356,6 +357,27 @@ clipboard_set() {
   (( status == 2 )) || fail "$(last_error)"
   command -v wl-copy >/dev/null || fail "wl-copy is not installed"
   printf '%s' "$gnome" | wl-copy --type x-special/gnome-copied-files 2>"$ERR_FILE" || fail "$(last_error)"
+}
+
+# Text on the clipboard under every type text is read by: Copy path puts
+# the paths there to paste in a terminal, an editor or a chat. clipboard.py
+# offers them all at once; without it, wl-copy offers plain text alone.
+clipboard_text() {
+  local text="${1:-}" dir mime status=2
+  [[ -n $text ]] || fail "nothing to copy"
+  dir=$(mktemp -d "${TMPDIR:-/tmp}/files-clipboard.XXXXXX")
+  printf '%s' "$text" >"$dir/plain"
+  local -a offers=()
+  for mime in "text/plain;charset=utf-8" text/plain UTF8_STRING STRING TEXT; do offers+=("$mime=$dir/plain"); done
+  if command -v python3 >/dev/null; then
+    python3 "$HERE/clipboard.py" "${offers[@]}" 2>"$ERR_FILE"
+    status=$?
+  fi
+  rm -rf -- "$dir"
+  (( status == 0 )) && return 0
+  (( status == 2 )) || fail "$(last_error)"
+  command -v wl-copy >/dev/null || fail "wl-copy is not installed"
+  printf '%s' "$text" | wl-copy --type "text/plain;charset=utf-8" 2>"$ERR_FILE" || fail "$(last_error)"
 }
 
 # What the clipboard holds: files from a file manager (copied or cut), or
@@ -811,6 +833,9 @@ case "${1:-}" in
   clipboard-set)
     shift
     clipboard_set "$@"
+    ;;
+  clipboard-text)
+    clipboard_text "${2:-}"
     ;;
   clipboard-get)
     clipboard_get
