@@ -1,0 +1,57 @@
+{
+  "schemaVersion": 1,
+  "id": "joamag.files",
+  "name": "Files",
+  "version": "0.1.0",
+  "author": "João Magalhães",
+  "license": "Apache-2.0",
+  "description": "File navigator in the bar: tabs, list, grid and columns views with a preview, copy and move with progress, Trash, drives and bookmarks, and a popup that pops out into its own window.",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "Panel.qml"
+  },
+  "barWidget": {
+    "displayName": "Files",
+    "description": "Browse, copy, move and trash files from the bar, in tabs, docked or in a window.",
+    "category": "System",
+    "allowMultiple": false,
+    "defaultSection": "right",
+    "defaults": {
+      "showHidden": false,
+      "showPreview": false,
+      "sortKey": "name",
+      "sortDescending": false,
+      "tabs": [],
+      "activeTab": 0
+    },
+    "schema": [
+      {
+        "key": "showHidden",
+        "type": "boolean",
+        "label": "Show hidden files",
+        "defaultValue": false
+      },
+      {
+        "key": "showPreview",
+        "type": "boolean",
+        "label": "Show the preview pane",
+        "defaultValue": false
+      },
+      {
+        "key": "sortKey",
+        "type": "select",
+        "label": "Sort by",
+        "options": ["name", "modified", "size", "type"],
+        "defaultValue": "name"
+      },
+      {
+        "key": "sortDescending",
+        "type": "boolean",
+        "label": "Sort in reverse order",
+        "defaultValue": false
+      }
+    ]
+  }
+}
