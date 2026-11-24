@@ -8,6 +8,14 @@ var ICON = "󰉋"
 // Locations that are not folders on disk.
 var RECENT = "recent:"
 var TRASH = "trash:"
+// A folder inside an archive: ARCHIVE_PREFIX, the archive's path, the
+// separator, and the folder inside it ("" for its top).
+var ARCHIVE_PREFIX = "archive:"
+var ARCHIVE_SEPARATOR = "::/"
+// Names bsdtar reads as archives, longest suffixes first.
+var ARCHIVE_SUFFIXES = [".tar.gz", ".tar.xz", ".tar.zst", ".tar.bz2", ".tar.lz4", ".zip", ".jar", ".tar", ".tgz", ".txz", ".tzst", ".tbz2", ".tbz", ".7z", ".rar", ".iso", ".cpio", ".xar", ".cab"]
+// Names bsdtar writes from the suffix alone.
+var COMPRESS_SUFFIXES = [".zip", ".7z", ".tar", ".tar.gz", ".tgz", ".tar.xz", ".txz", ".tar.zst", ".tzst", ".tar.bz2", ".tbz2"]
 var MAX_TABS = 12
 
 var VIEWS = [
@@ -103,6 +111,11 @@ var HINTS = {
   ],
   filter: [{ key: "type", label: "to filter" }, { key: "Enter", label: "search below" }, { key: "↓", label: "to the results" }, { key: "Esc", label: "clear" }],
   rename: [{ key: "Enter", label: "rename" }, { key: "Esc", label: "cancel" }],
+  archive: [
+    { key: "j/k", label: "move" }, { key: "l", label: "open" }, { key: "h", label: "up" }, { key: "Space", label: "select" },
+    { key: "y", label: "copy out" }, { key: "E", label: "extract all" }, { key: "g", label: "go to" }, { key: "?", label: "keys" }
+  ],
+  prompt: [{ key: "Enter", label: "go ahead" }, { key: "Esc", label: "cancel" }],
   path: [{ key: "Enter", label: "go" }, { key: "Tab", label: "complete" }, { key: "Esc", label: "cancel" }]
 }
 
@@ -113,7 +126,7 @@ var KEYS = [
   ["Alt+← Alt+→", "Back, forward"], ["Space  Ctrl+click", "Select"], ["Ctrl+A", "Select all"], ["y  Ctrl+C", "Copy"],
   ["x  Ctrl+X", "Cut"], ["p  Ctrl+V", "Paste"], ["r  F2", "Rename"], ["a  Ctrl+Shift+N", "New folder"],
   ["n", "New file"], ["d  Delete", "Move to Trash"], ["Ctrl+Z", "Undo the move to Trash"], ["Shift+Delete", "Delete for good"],
-  ["o", "Open with"],
+  ["o", "Open with"], ["E", "Extract the archive here"], ["Z", "Compress to .zip"],
   ["<  >", "Previous, next PDF page in the preview"], ["/  Ctrl+F", "Filter, Enter searches below"], ["g", "Go to a place"], ["e  Ctrl+L", "Type a path"], ["t  Ctrl+T", "New tab"],
   ["q  Ctrl+W", "Close the tab"], ["[ ]  Ctrl+Tab", "Previous, next tab"], ["1-9", "Go to a tab"], ["v  Ctrl+1 2 3", "List, grid, columns"],
   [".  Ctrl+H", "Hidden files"], ["i", "Preview pane"], ["s", "Sort by the next column"], ["Ctrl+D", "Bookmark the folder"],
@@ -155,15 +168,16 @@ function normalizePath(path) {
 function expandPath(text, home, base) {
   var value = String(text || "").trim()
   if (value === "") return ""
-  if (value === RECENT || value === TRASH) return value
+  if (value === RECENT || value === TRASH || isArchiveLocation(value)) return value
   if (value.indexOf("file://") === 0) return urlToPath(value)
   if (value === "~" || value.indexOf("~/") === 0) value = String(home || "") + value.slice(1)
   else if (value.charAt(0) !== "/") value = String(base || home || "") + "/" + value
   return normalizePath(value)
 }
 
+// Not a folder on disk: Recent, the Trash, or a folder inside an archive.
 function isVirtual(path) {
-  return path === RECENT || path === TRASH
+  return path === RECENT || path === TRASH || isArchiveLocation(path)
 }
 
 function isUnder(path, root) {
@@ -174,9 +188,12 @@ function isUnder(path, root) {
   return p.indexOf(r === "/" ? "/" : r + "/") === 0
 }
 
-// "" when there is nothing above: the root, or Recent and Trash.
+// "" when there is nothing above: the root, or Recent and Trash. Above the
+// top of an archive is the folder the archive sits in.
 function parentPath(path) {
   var p = String(path || "")
+  var inside = splitArchive(p)
+  if (inside) return inside.inner === "" ? parentPath(inside.archive) : archiveLocation(inside.archive, parentPath("/" + inside.inner).slice(1))
   if (p === "" || p === "/" || isVirtual(p)) return ""
   var idx = p.lastIndexOf("/")
   if (idx < 0) return ""
@@ -198,6 +215,8 @@ function joinPath(dir, name) {
 function prettyPath(path, home) {
   var p = String(path || "")
   var h = String(home || "")
+  var inside = splitArchive(p)
+  if (inside) return prettyPath(inside.archive, home) + (inside.inner !== "" ? " › " + inside.inner : "")
   if (h !== "" && p === h) return "~"
   if (h !== "" && p.indexOf(h + "/") === 0) return "~" + p.slice(h.length)
   return p
@@ -230,6 +249,176 @@ function uriList(paths) {
   var out = []
   for (var i = 0; i < (paths || []).length; i++) out.push(fileUrl(paths[i]))
   return out.length > 0 ? out.join("\r\n") + "\r\n" : ""
+}
+
+// ---------- Archives ----------
+
+function isArchiveName(name) {
+  var n = String(name || "").toLowerCase()
+  for (var i = 0; i < ARCHIVE_SUFFIXES.length; i++) {
+    var suffix = ARCHIVE_SUFFIXES[i]
+    if (n.length > suffix.length && n.slice(-suffix.length) === suffix) return true
+  }
+  return false
+}
+
+// A file that opens as a folder: an archive on disk, or one inside an
+// archive (it is extracted first).
+function isArchive(entry) {
+  return !!entry && !entry.dir && !entry.trashName && isArchiveName(entry.name)
+}
+
+function archiveLocation(archive, inner) {
+  return ARCHIVE_PREFIX + archive + ARCHIVE_SEPARATOR + String(inner || "").replace(/^\/+|\/+$/g, "")
+}
+
+function isArchiveLocation(path) {
+  return String(path || "").indexOf(ARCHIVE_PREFIX) === 0
+}
+
+// { archive, inner } for a folder inside an archive, or null.
+function splitArchive(path) {
+  var p = String(path || "")
+  if (!isArchiveLocation(p)) return null
+  var rest = p.slice(ARCHIVE_PREFIX.length)
+  var at = rest.indexOf(ARCHIVE_SEPARATOR)
+  if (at < 0) return { archive: rest, inner: "" }
+  return { archive: rest.slice(0, at), inner: rest.slice(at + ARCHIVE_SEPARATOR.length) }
+}
+
+// The name an archive extracts into: "photos.tar.gz" becomes "photos".
+function archiveStem(name) {
+  var n = String(name || "")
+  var lower = n.toLowerCase()
+  for (var i = 0; i < ARCHIVE_SUFFIXES.length; i++) {
+    var suffix = ARCHIVE_SUFFIXES[i]
+    if (lower.length > suffix.length && lower.slice(-suffix.length) === suffix) return n.slice(0, n.length - suffix.length)
+  }
+  return n
+}
+
+var MONTH_INDEX = { Jan: 0, Feb: 1, Mar: 2, Apr: 3, May: 4, Jun: 5, Jul: 6, Aug: 7, Sep: 8, Oct: 9, Nov: 10, Dec: 11 }
+
+// files.sh archive-list: bsdtar's listing in the C locale, one member a
+// line: mode, links, owner, group, size, date, name. Dates within the last
+// six months show a time instead of the year. Folders many zips never list
+// are made up from the paths below them. Members as { inner, dir, size,
+// modified }, inner without leading or trailing slashes.
+function parseArchiveListing(raw, nowMs) {
+  var now = new Date(num(nowMs) || Date.now())
+  var byPath = {}
+  var out = []
+  var lines = String(raw || "").split("\n")
+  var re = /^(\S)\S*\s+\d+\s+\S+\s+\S+\s+(\d+)\s+([A-Z][a-z]{2})\s+(\d{1,2})\s+(\d{1,2}:\d{2}|\d{4})\s(.+)$/
+  function add(inner, dir, size, modified) {
+    if (inner === "" || byPath[inner]) {
+      if (byPath[inner] && dir && isFinite(modified)) byPath[inner].modified = modified
+      return
+    }
+    var member = { inner: inner, dir: dir, size: dir ? NaN : size, modified: modified }
+    byPath[inner] = member
+    out.push(member)
+  }
+  for (var i = 0; i < lines.length; i++) {
+    var m = re.exec(lines[i])
+    if (!m) continue
+    var name = m[6]
+    if (m[1] === "l") name = name.replace(/ -> .*$/, "")
+    else if (m[1] === "h") name = name.replace(/ link to .*$/, "")
+    name = name.replace(/^\.\//, "")
+    var dir = m[1] === "d" || /\/$/.test(name)
+    name = name.replace(/^\/+|\/+$/g, "")
+    if (name === "" || name === ".") continue
+    var month = MONTH_INDEX[m[3]]
+    var date
+    if (m[5].indexOf(":") >= 0) {
+      var hm = m[5].split(":")
+      date = new Date(now.getFullYear(), month, Number(m[4]), Number(hm[0]), Number(hm[1]))
+      // A time means within the last six months, so a later date is last year's.
+      if (date.getTime() > now.getTime() + 86400000) date.setFullYear(now.getFullYear() - 1)
+    } else {
+      date = new Date(Number(m[5]), month, Number(m[4]))
+    }
+    var parts = name.split("/")
+    for (var j = 1; j < parts.length; j++) add(parts.slice(0, j).join("/"), true, NaN, NaN)
+    add(name, dir, Number(m[2]), date.getTime())
+  }
+  return out
+}
+
+// The entries of one folder inside an archive, as a listing shows them.
+function archiveEntries(members, archive, inner) {
+  var prefix = inner ? inner + "/" : ""
+  var out = []
+  for (var i = 0; i < (members || []).length; i++) {
+    var m = members[i]
+    if (prefix !== "" && m.inner.indexOf(prefix) !== 0) continue
+    var rest = m.inner.slice(prefix.length)
+    if (rest === "" || rest.indexOf("/") >= 0) continue
+    out.push(makeEntry({ path: archiveLocation(archive, m.inner), name: rest, dir: m.dir, size: m.size, modified: m.modified }))
+  }
+  return out
+}
+
+// What an archive holds, for the preview: counts, the unpacked size, and
+// the first few names.
+function archiveSummary(members, limit) {
+  var files = 0
+  var dirs = 0
+  var bytes = 0
+  var names = []
+  for (var i = 0; i < (members || []).length; i++) {
+    var m = members[i]
+    if (m.dir) dirs++
+    else {
+      files++
+      if (isFinite(m.size)) bytes += m.size
+    }
+    if (names.length < limit) names.push(m.inner + (m.dir ? "/" : ""))
+  }
+  return { files: files, dirs: dirs, bytes: bytes, names: names, more: Math.max(0, (members || []).length - names.length) }
+}
+
+// Where "Extract here" puts an archive, always a folder it makes: one
+// holding a single top folder unpacks as that folder, the rest into a
+// folder named after the archive, either way under a free name.
+function extractTarget(members, archiveName, names) {
+  var tops = {}
+  var count = 0
+  var single = null
+  for (var i = 0; i < (members || []).length; i++) {
+    var top = members[i].inner.split("/")[0]
+    if (tops[top]) continue
+    tops[top] = true
+    count++
+    single = members[i].inner === top ? members[i] : { inner: top, dir: true }
+  }
+  if (count === 1 && single.dir) return { name: uniqueName(names, single.inner, true), strip: 1 }
+  return { name: uniqueName(names, archiveStem(archiveName) || "Archive", true), strip: 0 }
+}
+
+// How many leading folders to drop when copying out of FOLDER inside an
+// archive, so the files land where they are pasted rather than under it.
+function stripCount(inner) {
+  return inner ? String(inner).split("/").length : 0
+}
+
+// The name offered for a new archive: the file's or folder's own name for
+// one item, "Archive" for several, as a free .zip in that folder.
+function compressName(entries, names) {
+  var list = entries || []
+  var stem = list.length === 1 ? (list[0].dir ? list[0].name : archiveStem(list[0].name).replace(/\.[^.]+$/, "") || list[0].name) : "Archive"
+  return uniqueName(names, stem + ".zip", false)
+}
+
+// A name bsdtar can tell the format of.
+function canCompressTo(name) {
+  var n = String(name || "").toLowerCase()
+  for (var i = 0; i < COMPRESS_SUFFIXES.length; i++) {
+    var suffix = COMPRESS_SUFFIXES[i]
+    if (n.length > suffix.length && n.slice(-suffix.length) === suffix) return true
+  }
+  return false
 }
 
 // ---------- Places ----------
@@ -293,6 +482,8 @@ function placeFor(path, places) {
 function placeLabel(path, home, places, drives) {
   if (path === TRASH) return "Trash"
   if (path === RECENT) return "Recent"
+  var inside = splitArchive(path)
+  if (inside) return baseName(inside.inner || inside.archive)
   var place = placeFor(path, places)
   if (place) return place.label
   if (path === home) return "Home"
@@ -304,6 +495,7 @@ function placeLabel(path, home, places, drives) {
 function placeIcon(path, home, places, drives) {
   if (path === TRASH) return GLYPHS.trash
   if (path === RECENT) return GLYPHS.recent
+  if (isArchiveLocation(path)) return KIND_ICONS.archive
   var place = placeFor(path, places)
   if (place) return place.icon
   if (path === home) return PLACE_ICONS.home
@@ -315,6 +507,15 @@ function placeIcon(path, home, places, drives) {
 // Path bar segments from the nearest root the user thinks in: home, a
 // drive, or the system root. The columns view shows one column per segment.
 function crumbs(path, home, drives) {
+  // Inside an archive: the way to the archive, the archive, then its folders.
+  var inside = splitArchive(path)
+  if (inside) {
+    var out = crumbs(parentPath(inside.archive) || "/", home, drives)
+    out.push({ label: baseName(inside.archive), path: archiveLocation(inside.archive, "") })
+    var parts = inside.inner === "" ? [] : inside.inner.split("/")
+    for (var a = 0; a < parts.length; a++) out.push({ label: parts[a], path: archiveLocation(inside.archive, parts.slice(0, a + 1).join("/")) })
+    return out
+  }
   if (isVirtual(path)) return [{ label: placeLabel(path, home, [], drives), path: path }]
   var p = normalizePath(path)
   var root = "/"
@@ -517,13 +718,15 @@ function isTextual(entry) {
 }
 
 // What the preview can show for an entry: the picture itself, a PDF page
-// (Qt draws those), the first lines of a text file, a picture a system
-// thumbnailer makes, or nothing beyond the glyph and the details.
+// (Qt draws those), what an archive holds, the first lines of a text file,
+// a picture a system thumbnailer makes, or nothing beyond the glyph and the
+// details.
 function previewKind(entry) {
   if (!entry || !entry.path) return "none"
   if (entry.dir) return "dir"
   if (isImage(entry)) return "image"
   if (extensionOf(entry.name) === "pdf") return "pdf"
+  if (isArchive(entry)) return "archive"
   if (isTextual(entry)) return "text"
   if (THUMBNAILED_KINDS.indexOf(entry.kind) >= 0) return "thumbnail"
   return "none"
@@ -1016,16 +1219,29 @@ function hints(mode) {
   return HINTS[mode] || HINTS.browse
 }
 
-// Right click on an item. Trash items can only go back or go for good.
+// Right click on an item. Trash items can only go back or go for good;
+// what is inside an archive can be opened, copied out or extracted.
 function itemMenu(entry, count, clipboard, bookmarked) {
   if (!entry) return []
   if (entry.trashName) return [
     { id: "restore", label: "Restore", icon: "󰦛", shortcut: "Enter" },
     { id: "purge", label: "Delete for good", icon: "󰆴", shortcut: "Shift+Del", danger: true }
   ]
-  var items = [{ id: "open", label: "Open", icon: "󰳋", shortcut: "Enter" }]
+  if (isArchiveLocation(entry.path)) {
+    var inside = [{ id: "open", label: "Open", icon: "󰳋", shortcut: "Enter" }]
+    if (!entry.dir) inside.push({ id: "openwith", label: "Open with…", icon: "󰀻", shortcut: "o" })
+    inside.push({ id: "copy", label: "Copy out", icon: "󰆏", shortcut: "y" })
+    inside.push({ id: "extractto", label: "Extract to…", icon: "󰇚" })
+    return inside
+  }
+  var items = [{ id: "open", label: isArchive(entry) ? "Open as a folder" : "Open", icon: "󰳋", shortcut: "Enter" }]
   if (entry.dir) items.push({ id: "opentab", label: "Open in new tab", icon: "󰐕", shortcut: "Ctrl+Enter" })
   else items.push({ id: "openwith", label: "Open with…", icon: "󰀻", shortcut: "o" })
+  if (isArchive(entry)) {
+    items.push({ id: "extracthere", label: "Extract here", icon: "󰇚", shortcut: "E" })
+    items.push({ id: "extractto", label: "Extract to…", icon: "󰇚" })
+  }
+  items.push({ id: "compress", label: "Compress to .zip…", icon: "󰗄", shortcut: "Z" })
   items.push({ id: "copy", label: "Copy", icon: "󰆏", shortcut: "y" })
   items.push({ id: "cut", label: "Cut", icon: "󰆐", shortcut: "x" })
   if (entry.dir) items.push({ id: "pasteinto", label: "Paste into folder", icon: "󰆒", disabled: !clipboard })
@@ -1040,6 +1256,7 @@ function itemMenu(entry, count, clipboard, bookmarked) {
 function folderMenu(path, clipboard, showHidden, sortKey, bookmarked) {
   if (path === TRASH) return [{ id: "emptytrash", label: "Empty Trash", icon: "󰆴", danger: true }]
   var items = []
+  if (isArchiveLocation(path)) items.push({ id: "extractall", label: "Extract the archive here", icon: "󰇚", shortcut: "E" })
   if (!isVirtual(path)) {
     items.push({ id: "newfolder", label: "New folder", icon: "󰉗", shortcut: "a" })
     items.push({ id: "newfile", label: "New file", icon: "󰝒", shortcut: "n" })

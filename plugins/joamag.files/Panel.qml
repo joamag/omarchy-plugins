@@ -71,6 +71,23 @@ Panel {
   property var thumbnails: ({})
   property var thumbQueue: []
   property string thumbRunning: ""
+  // Archive listings by the archive's path: { members, modified, error,
+  // loading }, read when an archive is opened or previewed.
+  property var archives: ({})
+  property var archiveWanted: []
+  // Members extracted into the cache, by their location inside the
+  // archive: the path of the copy, for the preview and for opening.
+  property var extracted: ({})
+  property var memberJobs: []
+  // Extract here, waiting on the archive's listing or the names beside it.
+  property var extractJob: null
+  // A question with a text field: where to extract to, or the name of a new
+  // archive. { kind, title, text, confirm, error, entries, archive, members, strip }
+  property var prompt: null
+  // Files copied out of an archive land here first, then move into place
+  // through the usual paste, conflicts and all.
+  property string stagingDir: ""
+  property string stagingDest: ""
   // The window's content is built on the first pop out and kept after.
   property bool windowBuilt: false
   // A path to put the cursor on (and to rename) as soon as it is listed:
@@ -87,6 +104,7 @@ Panel {
   property bool taskShown: false
   property var taskMoved: []
   property var taskErrors: []
+  property string taskCreated: ""
   property bool taskCancelled: false
 
   property string renamePath: ""
@@ -124,6 +142,11 @@ Panel {
   readonly property bool inTrash: location === Model.TRASH
   readonly property bool inRecent: location === Model.RECENT
   readonly property bool inFolder: !Model.isVirtual(location)
+  // Inside an archive: { archive, inner }, read-only.
+  readonly property var archiveAt: Model.splitArchive(location)
+  readonly property bool inArchive: archiveAt !== null
+  readonly property var archiveListing: archiveAt ? archives[archiveAt.archive] || null : null
+  readonly property string cacheHome: Quickshell.env("XDG_CACHE_HOME") || home + "/.cache"
   readonly property bool shown: opened || detached
   readonly property var places: placesData.places
   readonly property var bookmarks: placesData.bookmarks
@@ -137,6 +160,7 @@ Panel {
     var base = folderEntries
     if (inRecent) base = recentEntries
     else if (inTrash) base = trashEntries
+    else if (inArchive) base = archiveListing && archiveListing.members ? Model.archiveEntries(archiveListing.members, archiveAt.archive, archiveAt.inner) : []
     else if (deep) base = searchEntries
     // Recent keeps its newest-first order.
     return inRecent ? base : Model.sortEntries(base, sortKey, sortDescending)
@@ -151,9 +175,11 @@ Panel {
   readonly property bool busy: actionProc.running || transferProc.running || namesProc.running
   readonly property var conflictJob: transferJob ? transferJob.jobs[Model.conflictIndex(transferJob.jobs)] || null : null
   readonly property string hintMode: {
+    if (prompt) return "prompt"
     if (renamePath !== "") return "rename"
     if (editingPath) return "path"
     if (filtering && filterFocused) return "filter"
+    if (inArchive) return "archive"
     return inTrash ? "trash" : "browse"
   }
 
@@ -233,7 +259,8 @@ Panel {
   function up() {
     var parent = Model.parentPath(location)
     if (parent === "") return
-    var from = location
+    // Out of the top of an archive, the cursor lands on the archive file.
+    var from = inArchive && archiveAt.inner === "" ? archiveAt.archive : location
     go(parent)
     pendingSelect = from
   }
@@ -333,6 +360,8 @@ Panel {
       if (!recentProc.running) recentProc.running = true
     } else if (inTrash) {
       if (!trashProc.running) trashProc.running = true
+    } else if (inArchive) {
+      loadArchive(archiveAt.archive, undefined, false)
     } else {
       freeTimer.restart()
     }
@@ -521,7 +550,24 @@ Panel {
       go(entry.path)
       return
     }
-    Util.execArgv(["xdg-open", entry.path])
+    // A file inside an archive opens from its extracted copy; an archive
+    // inside one opens as a folder too.
+    if (Model.isArchiveLocation(entry.path)) {
+      extractMember(entry, function(copy) {
+        if (Model.isArchive(entry)) root.go(Model.archiveLocation(copy, ""))
+        else root.openFile(copy)
+      })
+      return
+    }
+    if (Model.isArchive(entry)) {
+      go(Model.archiveLocation(entry.path, ""))
+      return
+    }
+    openFile(entry.path)
+  }
+
+  function openFile(path) {
+    Util.execArgv(["xdg-open", path])
     if (!detached) root.close()
   }
 
@@ -538,7 +584,7 @@ Panel {
       openEntry(list[0])
       return
     }
-    for (var i = 0; i < list.length && i < 12; i++) if (!list[i].dir) Util.execArgv(["xdg-open", list[i].path])
+    for (var i = 0; i < list.length && i < 12; i++) if (!list[i].dir && !Model.isArchiveLocation(list[i].path)) Util.execArgv(["xdg-open", list[i].path])
     if (!detached) root.close()
   }
 
@@ -578,6 +624,10 @@ Panel {
 
   function openWith(entry) {
     if (!entry || entry.dir || entry.trashName) return
+    if (Model.isArchiveLocation(entry.path)) {
+      extractMember(entry, function(copy) { root.openWith(Model.makeEntry({ path: copy })) })
+      return
+    }
     appsPath = entry.path
     apps = []
     appsProc.command = [root.scriptPath, "apps", entry.path]
@@ -590,13 +640,16 @@ Panel {
   }
 
   function openNautilus() {
-    Util.execArgv(["setsid", "uwsm-app", "--", "nautilus", "--new-window", inFolder ? location : home])
+    var folder = inFolder ? location : home
+    if (inArchive) folder = Model.parentPath(archiveAt.archive)
+    Util.execArgv(["setsid", "uwsm-app", "--", "nautilus", "--new-window", folder])
     if (!detached) root.close()
   }
 
   // ---- Clipboard, copy and move -----------------------------------------
 
   function setClipboard(mode) {
+    if (mode === "cut" && readOnly()) return
     var list = picked().filter(function(e) { return !e.trashName })
     if (list.length === 0) return
     clipboard = { mode: mode, paths: list.map(function(e) { return e.path }) }
@@ -608,7 +661,51 @@ Panel {
       showToast("Nothing to paste: copy or cut first")
       return
     }
-    transfer(clipboard.paths, dest || location, clipboard.mode === "cut" ? "move" : "copy")
+    var target = dest || location
+    if (Model.isArchiveLocation(clipboard.paths[0])) copyOutOfArchive(clipboard.paths, target)
+    else transfer(clipboard.paths, target, clipboard.mode === "cut" ? "move" : "copy")
+  }
+
+  // Inside an archive only copying out works; it opens read-only.
+  function readOnly() {
+    if (!inArchive) return false
+    showToast("Archives open read-only: copy files out (y, then p) or extract it (E)")
+    return true
+  }
+
+  // Members of one folder of an archive, extracted into a staging folder
+  // first and then moved into DEST through the usual paste, so a name that
+  // is taken is asked about like any other.
+  function copyOutOfArchive(paths, dest) {
+    if (Model.isVirtual(dest) || !dest) {
+      showToast("Open a folder to paste into")
+      return
+    }
+    if (busy) {
+      showToast("Wait for the running copy or move to finish")
+      return
+    }
+    var first = Model.splitArchive(paths[0])
+    var members = paths.map(function(p) { return Model.splitArchive(p).inner })
+    var stage = cacheHome + "/joamag-files/staging/" + Date.now()
+    stagingDir = stage
+    stagingDest = dest
+    var label = "Extracting " + Model.itemsLabel(members.length, Model.baseName(members[0])) + " from " + Model.baseName(first.archive)
+    startJob("stage", dest, label, ["extract", first.archive, stage, String(Model.stripCount(Model.parentPath("/" + members[0]).slice(1)))].concat(members))
+  }
+
+  // A long job on the progress line: a copy, a move, an extraction or a
+  // new archive. One runs at a time.
+  function startJob(mode, dest, label, args) {
+    task = { mode: mode, dest: dest, label: label, count: 0, first: "", total: 0, done: 0 }
+    taskMoved = []
+    taskErrors = []
+    taskCreated = ""
+    taskCancelled = false
+    taskShown = false
+    taskTimer.restart()
+    transferProc.command = [root.scriptPath].concat(args)
+    transferProc.running = true
   }
 
   // First the names already in the destination, so every conflict can be
@@ -640,11 +737,13 @@ Panel {
     var plan = Model.planTransfer(transferJob.paths, transferJob.dest, transferJob.mode, names, transferJob.dirs)
     if (plan.error !== "") {
       transferJob = null
+      dropStaging()
       showToast(plan.error)
       return
     }
     if (plan.jobs.length === 0) {
       transferJob = null
+      dropStaging()
       return
     }
     transferJob = { mode: transferJob.mode, dest: transferJob.dest, paths: transferJob.paths, dirs: transferJob.dirs, names: names, jobs: plan.jobs }
@@ -658,14 +757,8 @@ Panel {
     var args = Model.transferArgs(job.jobs, job.dest, job.names)
     if (args.length === 0) return
     var count = args.length / 3
-    task = { mode: job.mode, dest: job.dest, label: Model.transferLabel(job.mode, count, Model.baseName(args[1]), Model.placeLabel(job.dest, home, places, drives)), count: count, first: Model.baseName(args[1]), total: 0, done: 0 }
-    taskMoved = []
-    taskErrors = []
-    taskCancelled = false
-    taskShown = false
-    taskTimer.restart()
-    transferProc.command = [root.scriptPath, "transfer", job.mode].concat(args)
-    transferProc.running = true
+    var label = stagingDir !== "" ? "Copying " + Model.itemsLabel(count, Model.baseName(args[1])) + " to " + Model.placeLabel(job.dest, home, places, drives) : Model.transferLabel(job.mode, count, Model.baseName(args[1]), Model.placeLabel(job.dest, home, places, drives))
+    startJob(job.mode, job.dest, label, ["transfer", job.mode].concat(args))
   }
 
   function resolveConflict(how, all) {
@@ -678,7 +771,15 @@ Panel {
 
   function cancelConflicts() {
     transferJob = null
+    dropStaging()
     focusRequested("view")
+  }
+
+  function dropStaging() {
+    if (stagingDir === "") return
+    Util.execArgv([root.scriptPath, "delete", stagingDir])
+    stagingDir = ""
+    stagingDest = ""
   }
 
   function applyTransferLine(line) {
@@ -688,6 +789,7 @@ Panel {
     if (isFinite(r.total)) next.total = r.total
     if (isFinite(r.progress)) next.done = r.progress
     if (r.done.length > 0) taskMoved = taskMoved.concat(r.done)
+    if (r.created.length > 0) taskCreated = r.created[0]
     if (r.errors.length > 0) taskErrors = taskErrors.concat(r.errors)
     if (r.cancelled) taskCancelled = true
     task = next
@@ -699,6 +801,21 @@ Panel {
     taskShown = false
     taskTimer.stop()
     if (!finished) return
+    if (finished.mode === "stage" || finished.mode === "extract" || finished.mode === "compress") {
+      finishArchiveJob(finished)
+      return
+    }
+    // What came out of an archive is in place now; the staging folder goes.
+    var fromArchive = stagingDir !== ""
+    dropStaging()
+    if (fromArchive) {
+      if (taskCancelled) showToast("Copy stopped; what was copied stays")
+      else if (taskErrors.length > 0) lastError = taskErrors[taskErrors.length - 1]
+      else if (taskMoved.length > 0) showToast("Copied " + Model.itemsLabel(taskMoved.length, Model.baseName(taskMoved[0].to)) + " out to " + Model.placeLabel(finished.dest, home, places, drives))
+      selected = []
+      refreshLocation()
+      return
+    }
     if (finished.mode === "move") {
       // A moved folder takes the tabs showing it along.
       var list = tabs
@@ -716,6 +833,224 @@ Panel {
 
   function cancelTransfer() {
     if (transferProc.running) transferProc.signal(15)
+  }
+
+  // ---- Archives ---------------------------------------------------------
+
+  // Reads an archive's listing, unless the one held is of the same version.
+  function loadArchive(path, modified, force) {
+    var held = archives[path]
+    if (held && !force && (held.loading || modified === undefined || held.modified === modified)) return
+    var next = Object.assign({}, archives)
+    next[path] = { members: held ? held.members : null, modified: modified, error: "", loading: true }
+    archives = next
+    if (archiveWanted.indexOf(path) < 0) archiveWanted = archiveWanted.concat([path])
+    nextArchive()
+  }
+
+  function nextArchive() {
+    if (archiveProc.running || archiveWanted.length === 0) return
+    archiveProc.archive = archiveWanted[0]
+    archiveWanted = archiveWanted.slice(1)
+    archiveProc.command = [root.scriptPath, "archive-list", archiveProc.archive]
+    archiveProc.running = true
+  }
+
+  function applyArchive(path, raw) {
+    var errors = Model.parseResult(raw).errors
+    var next = Object.assign({}, archives)
+    var held = next[path] || {}
+    next[path] = { members: Model.parseArchiveListing(raw, Date.now()), modified: held.modified, error: errors.length > 0 ? errors[errors.length - 1] : "", loading: false }
+    archives = next
+    if (inArchive && archiveAt.archive === path && next[path].error !== "") lastError = "Cannot read " + Model.baseName(path) + ": " + next[path].error
+    if (extractJob && extractJob.archive === path) advanceExtract()
+  }
+
+  // A member of an archive copied into the cache, then THEN with its path.
+  function extractMember(entry, then) {
+    var copy = extracted[entry.path]
+    if (copy) {
+      if (then) then(copy)
+      return
+    }
+    var at = Model.splitArchive(entry.path)
+    if (!at || at.inner === "") return
+    memberJobs = memberJobs.filter(function(job) { return job.location !== entry.path || job.then }).concat([{ location: entry.path, archive: at.archive, member: at.inner, then: then }])
+    nextMember()
+  }
+
+  function nextMember() {
+    if (memberProc.running || memberJobs.length === 0) return
+    memberProc.job = memberJobs[memberJobs.length - 1]
+    memberJobs = memberJobs.slice(0, memberJobs.length - 1)
+    memberProc.command = [root.scriptPath, "archive-file", memberProc.job.archive, memberProc.job.member]
+    memberProc.running = true
+  }
+
+  function applyMember(job, raw) {
+    var lines = String(raw || "").split("\n")
+    var copy = ""
+    for (var i = 0; i < lines.length; i++) if (lines[i].indexOf("extracted\t") === 0) copy = lines[i].slice(10)
+    if (copy === "") {
+      var errors = Model.parseResult(raw).errors
+      if (job.then) showToast("Cannot open " + Model.baseName(job.member) + (errors.length > 0 ? ": " + errors[0] : ""))
+      return
+    }
+    var next = Object.assign({}, extracted)
+    next[job.location] = copy
+    extracted = next
+    if (job.then) job.then(copy)
+  }
+
+  // Extract here: into a folder it makes beside the archive, named after the
+  // archive's single top folder or after the archive. The listing and the
+  // names already beside it come first.
+  function extractHere(archivePath, modified) {
+    if (busy) {
+      showToast("Wait for the running copy or move to finish")
+      return
+    }
+    extractJob = { archive: archivePath, parent: Model.parentPath(archivePath), names: null }
+    loadArchive(archivePath, modified, false)
+    extractNamesProc.command = [root.scriptPath, "names", extractJob.parent]
+    extractNamesProc.running = true
+  }
+
+  function advanceExtract() {
+    var job = extractJob
+    if (!job || job.names === null) return
+    var listing = archives[job.archive]
+    if (!listing || listing.loading) return
+    extractJob = null
+    if (!listing.members || listing.members.length === 0) {
+      showToast("Cannot read " + Model.baseName(job.archive) + (listing.error ? ": " + listing.error : ""))
+      return
+    }
+    var target = Model.extractTarget(listing.members, Model.baseName(job.archive), job.names)
+    var dest = Model.joinPath(job.parent, target.name)
+    startJob("extract", dest, "Extracting " + Model.baseName(job.archive) + " into " + target.name, ["extract", job.archive, dest, String(target.strip)])
+  }
+
+  // Extract to: the whole archive, or the members picked inside it, into a
+  // folder typed in the prompt.
+  function askExtractTo(entry) {
+    var inside = entry && Model.isArchiveLocation(entry.path)
+    var archivePath = inside ? Model.splitArchive(entry.path).archive : (entry ? entry.path : "")
+    if (archivePath === "") return
+    var members = []
+    var strip = 0
+    if (inside) {
+      members = picked().map(function(e) { return Model.splitArchive(e.path).inner })
+      strip = Model.stripCount(archiveAt ? archiveAt.inner : "")
+    }
+    var parent = Model.parentPath(archivePath)
+    openPrompt({
+      kind: "extractto",
+      title: "Extract " + (members.length > 0 ? Model.itemsLabel(members.length, Model.baseName(members[0])) + " from " : "") + Model.baseName(archivePath) + " to",
+      text: Model.prettyPath(Model.joinPath(parent, Model.archiveStem(Model.baseName(archivePath))), home),
+      confirm: "Extract",
+      archive: archivePath,
+      members: members,
+      strip: strip
+    })
+  }
+
+  function askCompress() {
+    if (readOnly()) return
+    if (!inFolder || deep) {
+      showToast("Open a folder to compress files in")
+      return
+    }
+    var list = picked().filter(function(e) { return !e.trashName })
+    if (list.length === 0) return
+    openPrompt({
+      kind: "compress",
+      title: "Compress " + Model.itemsLabel(list.length, list[0].name) + " into",
+      text: Model.compressName(list, folderEntries.map(function(e) { return e.name })),
+      confirm: "Compress",
+      entries: list
+    })
+  }
+
+  function openPrompt(spec) {
+    spec.error = ""
+    prompt = spec
+    focusRequested("prompt")
+  }
+
+  function cancelPrompt() {
+    prompt = null
+    focusRequested("view")
+  }
+
+  function setPromptError(text) {
+    var next = Object.assign({}, prompt)
+    next.error = text
+    prompt = next
+  }
+
+  function commitPrompt(text) {
+    var spec = prompt
+    if (!spec) return
+    if (busy) {
+      setPromptError("Wait for the running copy or move to finish")
+      return
+    }
+    if (spec.kind === "extractto") {
+      var dest = Model.expandPath(text, home, Model.parentPath(spec.archive))
+      if (dest === "" || Model.isVirtual(dest)) {
+        setPromptError("Type a folder to extract into")
+        return
+      }
+      prompt = null
+      focusRequested("view")
+      startJob("extract", dest, "Extracting " + Model.baseName(spec.archive) + " into " + Model.prettyPath(dest, home), ["extract", spec.archive, dest, String(spec.strip)].concat(spec.members))
+      return
+    }
+    var name = String(text || "").trim()
+    if (name === "" || name.indexOf("/") >= 0) {
+      setPromptError("Type a name without /")
+      return
+    }
+    if (!Model.canCompressTo(name)) {
+      setPromptError("End the name in .zip, .7z, .tar, .tar.gz, .tar.xz, .tar.zst or .tar.bz2")
+      return
+    }
+    if (Model.indexOfPath(folderEntries, Model.joinPath(location, name)) >= 0) {
+      setPromptError(name + " already exists here")
+      return
+    }
+    prompt = null
+    focusRequested("view")
+    startJob("compress", location, "Compressing " + Model.itemsLabel(spec.entries.length, spec.entries[0].name) + " into " + name, ["compress", Model.joinPath(location, name)].concat(spec.entries.map(function(e) { return e.path })))
+  }
+
+  function finishArchiveJob(finished) {
+    if (finished.mode === "stage") {
+      if (taskCancelled || taskErrors.length > 0 || taskMoved.length === 0) {
+        if (taskErrors.length > 0) lastError = taskErrors[taskErrors.length - 1]
+        else if (taskCancelled) showToast("Copy cancelled; nothing was written")
+        dropStaging()
+        return
+      }
+      // The members are staged under their own names; they move into place.
+      var staged = clipboard ? clipboard.paths.map(function(p) { return Model.joinPath(root.stagingDir, Model.baseName(Model.splitArchive(p).inner)) }) : []
+      // After the extraction's process has fully let go.
+      Qt.callLater(function() { root.transfer(staged, root.stagingDest, "move") })
+      return
+    }
+    if (taskCancelled) showToast(finished.mode === "extract" ? "Extraction cancelled; what it made is gone" : "Compression cancelled; nothing was written")
+    else if (taskErrors.length > 0) lastError = taskErrors[taskErrors.length - 1]
+    else if (finished.mode === "extract" && taskMoved.length > 0) {
+      var into = taskMoved[0].to
+      if (Model.parentPath(into) === location) pendingSelect = into
+      showToast("Extracted into " + Model.prettyPath(into, home))
+    } else if (finished.mode === "compress" && taskCreated !== "") {
+      pendingSelect = taskCreated
+      showToast("Compressed into " + Model.baseName(taskCreated))
+    }
+    refreshPlaces()
+    refreshLocation()
   }
 
   // Files dropped on a folder, a tab, a place or a path segment. A drag
@@ -745,6 +1080,7 @@ Panel {
   }
 
   function startRename(path) {
+    if (readOnly()) return
     var target = path || (cursorEntry ? cursorEntry.path : "")
     var idx = Model.indexOfPath(entries, target)
     if (idx < 0 || entries[idx].trashName || inRecent || deep) return
@@ -786,6 +1122,7 @@ Panel {
   }
 
   function trashPicked() {
+    if (readOnly()) return
     var list = picked().filter(function(e) { return !e.trashName })
     if (list.length === 0) return
     act("trash", ["trash"].concat(list.map(function(e) { return e.path })), { entries: list })
@@ -798,6 +1135,7 @@ Panel {
   }
 
   function askPurge() {
+    if (readOnly()) return
     var list = picked()
     if (list.length === 0) return
     confirm = {
@@ -1041,6 +1379,10 @@ Panel {
     case "selectall": selectAll(); break
     case "hidden": toggleHidden(); break
     case "nautilus": openNautilus(); break
+    case "extracthere": if (target && Model.isArchive(target)) extractHere(target.path, target.modified); break
+    case "extractall": if (inArchive) extractHere(archiveAt.archive, undefined); break
+    case "extractto": askExtractTo(target); break
+    case "compress": askCompress(); break
     }
   }
 
@@ -1131,7 +1473,10 @@ Panel {
       case Qt.Key_2: setView("grid"); return true
       case Qt.Key_3: setView("columns"); return true
       case Qt.Key_Return:
-      case Qt.Key_Enter: openInNewTab(cursorEntry); return true
+      case Qt.Key_Enter:
+        if (cursorEntry && Model.isArchive(cursorEntry) && !Model.isArchiveLocation(cursorEntry.path)) newTab(Model.archiveLocation(cursorEntry.path, ""))
+        else openInNewTab(cursorEntry)
+        return true
       }
       return false
     }
@@ -1152,7 +1497,7 @@ Panel {
     case Qt.Key_End: moveCursor(entries.length, shift); return true
     case Qt.Key_Right:
       if (view === "grid") moveCursor(1, shift)
-      else if (cursorEntry && cursorEntry.dir) go(cursorEntry.path)
+      else if (cursorEntry && (cursorEntry.dir || Model.isArchive(cursorEntry))) openEntry(cursorEntry)
       return true
     case Qt.Key_Left:
       if (view === "grid") moveCursor(-1, shift)
@@ -1175,7 +1520,7 @@ Panel {
     case "k": moveCursor(-1, false); return true
     case "J": moveCursor(1, true); return true
     case "K": moveCursor(-1, true); return true
-    case "l": if (cursorEntry && cursorEntry.dir) go(cursorEntry.path); return true
+    case "l": if (cursorEntry && (cursorEntry.dir || Model.isArchive(cursorEntry))) openEntry(cursorEntry); return true
     case "h": up(); return true
     case "y": setClipboard("copy"); return true
     case "x": setClipboard("cut"); return true
@@ -1202,6 +1547,11 @@ Panel {
     case "[": switchTab(activeTab - 1); return true
     case "N": openNautilus(); return true
     case "?": keysOpen = true; return true
+    case "E":
+      if (inArchive) extractHere(archiveAt.archive, undefined)
+      else if (cursorEntry && Model.isArchive(cursorEntry)) extractHere(cursorEntry.path, cursorEntry.modified)
+      return true
+    case "Z": askCompress(); return true
     case "<": stepPage(-1); return true
     case ">": stepPage(1); return true
     }
@@ -1414,6 +1764,34 @@ Panel {
   }
 
   Process {
+    id: archiveProc
+    property string archive: ""
+    stdout: StdioCollector { waitForEnd: true; onStreamFinished: root.applyArchive(archiveProc.archive, text) }
+    onExited: Qt.callLater(root.nextArchive)
+  }
+
+  Process {
+    id: memberProc
+    property var job: null
+    stdout: StdioCollector { waitForEnd: true; onStreamFinished: root.applyMember(memberProc.job, text) }
+    onExited: Qt.callLater(root.nextMember)
+  }
+
+  Process {
+    id: extractNamesProc
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        if (!root.extractJob) return
+        var job = Object.assign({}, root.extractJob)
+        job.names = Model.parseNames(text)
+        root.extractJob = job
+        root.advanceExtract()
+      }
+    }
+  }
+
+  Process {
     id: thumbProc
     stdout: StdioCollector { waitForEnd: true; onStreamFinished: root.applyThumbnail(text) }
     onExited: Qt.callLater(root.nextThumbnail)
@@ -1537,7 +1915,7 @@ Panel {
     required property color background
     required property bool active
 
-    readonly property bool typing: pathField.activeFocus || filterField.activeFocus || root.renamePath !== ""
+    readonly property bool typing: pathField.activeFocus || filterField.activeFocus || root.renamePath !== "" || root.prompt !== null
     readonly property real rowHeight: Style.space(26)
 
     focus: true
@@ -1564,7 +1942,8 @@ Panel {
           pathField.text = root.inFolder ? Model.prettyPath(root.location, root.home) : "~"
           pathField.forceActiveFocus()
           pathField.selectAll()
-        } else if (what === "view") viewRoot.forceActiveFocus()
+        } else if (what === "prompt") promptCard.focusField()
+        else if (what === "view") viewRoot.forceActiveFocus()
       }
     }
 
@@ -1851,7 +2230,12 @@ Panel {
               anchors.rightMargin: Style.space(10)
               anchors.verticalCenter: parent.verticalCenter
               textFormat: Text.PlainText
-              text: Model.statusText(root.entries, root.selected, root.deep, Model.prettyPath(root.location, root.home))
+              text: {
+                var text = Model.statusText(root.entries, root.selected, root.deep, Model.prettyPath(root.location, root.home))
+                if (!root.inArchive) return text
+                if (root.archiveListing && root.archiveListing.loading && !root.archiveListing.members) return "Reading the archive…"
+                return text + " · read-only archive"
+              }
               color: viewRoot.foreground
               opacity: 0.6
               font.family: root.fontFamily
@@ -1883,7 +2267,13 @@ Panel {
             width: parent.width
             spacing: Style.space(6)
 
-            readonly property var actions: root.inTrash ? [
+            readonly property var actions: root.inArchive ? [
+              { id: "open", label: "Open", icon: "󰏌" },
+              { id: "copy", label: "Copy out", icon: "󰆏" },
+              { id: "extractto", label: "Extract to…", icon: "󰇚" },
+              { id: "extractall", label: "Extract all", icon: "󰇚" },
+              { id: "nautilus", label: "Nautilus", icon: "󰉋" }
+            ] : root.inTrash ? [
               { id: "restore", label: "Restore", icon: "󰦛" },
               { id: "purge", label: "Delete", icon: "󰆴" },
               { id: "emptytrash", label: "Empty Trash", icon: "󰩹" },
@@ -1969,6 +2359,13 @@ Panel {
 
     ConflictCard {
       id: conflictCard
+      anchors.fill: parent
+      foreground: viewRoot.foreground
+      background: viewRoot.background
+    }
+
+    PromptCard {
+      id: promptCard
       anchors.fill: parent
       foreground: viewRoot.foreground
       background: viewRoot.background
@@ -2398,7 +2795,7 @@ Panel {
     anchors.fill: parent
     hoverEnabled: true
     acceptedButtons: Qt.LeftButton | Qt.RightButton
-    drag.target: entry.trashName || root.renamePath === entry.path ? null : dragItem
+    drag.target: entry.trashName || root.renamePath === entry.path || Model.isArchiveLocation(entry.path) ? null : dragItem
     drag.threshold: Style.space(8)
 
     onClicked: function(mouse) {
@@ -2585,7 +2982,7 @@ Panel {
       id: drop
       anchors.fill: parent
       keys: ["text/uri-list"]
-      enabled: row.entry.dir && !row.entry.trashName && root.dragPaths.indexOf(row.entry.path) < 0
+      enabled: row.entry.dir && !row.entry.trashName && !Model.isArchiveLocation(row.entry.path) && root.dragPaths.indexOf(row.entry.path) < 0
       onDropped: function(event) {
         if (root.dropUrls(event.urls, row.entry.path, event.proposedAction === Qt.CopyAction)) event.accept()
       }
@@ -2694,7 +3091,7 @@ Panel {
         // Pictures and a PDF's first page come from the file; video, audio,
         // documents and fonts from a system thumbnailer, asked for as the
         // tile shows.
-        readonly property string kind: Model.previewKind(entry)
+        readonly property string kind: Model.isArchiveLocation(entry.path) ? "none" : Model.previewKind(entry)
         readonly property bool wantsThumbnail: kind === "thumbnail" || (kind === "pdf" && thumb.status === Image.Error)
         readonly property string thumbKey: wantsThumbnail ? Model.thumbnailKey(entry, 256) : ""
         readonly property string thumbPath: thumbKey !== "" ? (root.thumbnails[thumbKey] || "") : ""
@@ -2814,7 +3211,7 @@ Panel {
           id: tileDrop
           anchors.fill: parent
           keys: ["text/uri-list"]
-          enabled: tile.entry.dir && !tile.entry.trashName && root.dragPaths.indexOf(tile.entry.path) < 0
+          enabled: tile.entry.dir && !tile.entry.trashName && !Model.isArchiveLocation(tile.entry.path) && root.dragPaths.indexOf(tile.entry.path) < 0
           onDropped: function(event) {
             if (root.dropUrls(event.urls, tile.entry.path, event.proposedAction === Qt.CopyAction)) event.accept()
           }
@@ -2994,7 +3391,7 @@ Panel {
                 id: cellDrop
                 anchors.fill: parent
                 keys: ["text/uri-list"]
-                enabled: cell.entry.dir && root.dragPaths.indexOf(cell.entry.path) < 0
+                enabled: cell.entry.dir && !Model.isArchiveLocation(cell.entry.path) && root.dragPaths.indexOf(cell.entry.path) < 0
                 onDropped: function(event) {
                   if (root.dropUrls(event.urls, cell.entry.path, event.proposedAction === Qt.CopyAction)) event.accept()
                 }
@@ -3201,6 +3598,14 @@ Panel {
 
     readonly property bool hasEntry: entry !== null && entry !== undefined && entry.path !== ""
     readonly property string kind: Model.previewKind(entry)
+    // A member of an archive is shown from its copy in the cache, made as it
+    // is previewed; an archive inside an archive only shows its details.
+    readonly property bool member: hasEntry && Model.isArchiveLocation(entry.path)
+    readonly property bool needsContent: kind === "image" || kind === "pdf" || kind === "text" || kind === "thumbnail"
+    readonly property string sourcePath: !hasEntry ? "" : (member ? (root.extracted[entry.path] || "") : entry.path)
+    readonly property bool ready: sourcePath !== "" && (!member || needsContent)
+    readonly property var listing: kind === "archive" && !member ? root.archives[entry.path] || null : null
+    readonly property var summary: listing && listing.members ? Model.archiveSummary(listing.members, 40) : null
     readonly property bool textual: kind === "text"
     // null once the file turns out to be binary.
     readonly property var lines: textual ? Model.previewText(previewFile.text(), 40) : ""
@@ -3208,23 +3613,32 @@ Panel {
     // from a system thumbnailer when Qt's PDF reader is not installed, and
     // video, audio, documents and fonts always come from one.
     readonly property bool pdfFailed: kind === "pdf" && pageImage.status === Image.Error
-    readonly property bool wantsThumbnail: kind === "thumbnail" || pdfFailed
-    readonly property string thumbKey: wantsThumbnail ? Model.thumbnailKey(entry, 512) : ""
+    readonly property bool wantsThumbnail: ready && (kind === "thumbnail" || pdfFailed)
+    readonly property string thumbKey: wantsThumbnail ? Model.thumbnailKey({ path: sourcePath, modified: entry.modified }, 512) : ""
     readonly property string thumbPath: thumbKey !== "" ? (root.thumbnails[thumbKey] || "") : ""
-    readonly property bool media: kind === "image" || kind === "pdf" || wantsThumbnail
+    readonly property bool media: kind === "image" || kind === "pdf" || kind === "thumbnail"
 
-    onThumbKeyChanged: if (thumbKey !== "") root.requestThumbnail(entry, 512)
+    onThumbKeyChanged: if (thumbKey !== "") root.requestThumbnail({ path: sourcePath, modified: entry.modified }, 512)
+    // The bindings above may not have caught up with a new entry yet, so the
+    // entry itself is read here.
+    onEntryChanged: {
+      if (!entry || !entry.path) return
+      var kindNow = Model.previewKind(entry)
+      var inside = Model.isArchiveLocation(entry.path)
+      if (inside && (kindNow === "image" || kindNow === "pdf" || kindNow === "text" || kindNow === "thumbnail")) root.extractMember(entry, null)
+      else if (kindNow === "archive" && !inside) root.loadArchive(entry.path, entry.modified, false)
+    }
 
     FileView {
       id: previewFile
-      path: previewRoot.textual ? previewRoot.entry.path : ""
+      path: previewRoot.textual && previewRoot.ready ? previewRoot.sourcePath : ""
       printErrors: false
       blockLoading: false
     }
 
     FolderListModel {
       id: previewFolder
-      folder: previewRoot.hasEntry && previewRoot.entry.dir ? Model.fileUrl(previewRoot.entry.path) : ""
+      folder: previewRoot.hasEntry && previewRoot.entry.dir && !previewRoot.member ? Model.fileUrl(previewRoot.entry.path) : ""
       showHidden: root.showHidden
       showDotAndDotDot: false
     }
@@ -3274,7 +3688,7 @@ Panel {
             id: pageImage
             anchors.fill: parent
             visible: status === Image.Ready
-            source: previewRoot.kind === "image" || previewRoot.kind === "pdf" ? Model.fileUrl(previewRoot.entry.path) : ""
+            source: previewRoot.ready && (previewRoot.kind === "image" || previewRoot.kind === "pdf") ? Model.fileUrl(previewRoot.sourcePath) : ""
             currentFrame: previewRoot.kind === "pdf" ? Math.min(root.previewPage, Math.max(0, frameCount - 1)) : 0
             sourceSize.width: Math.round(mediaBox.width)
             sourceSize.height: Math.round(mediaBox.height)
@@ -3308,9 +3722,9 @@ Panel {
 
             Text {
               anchors.horizontalCenter: parent.horizontalCenter
-              visible: previewRoot.wantsThumbnail && previewRoot.thumbPath === "" && !(previewRoot.thumbKey in root.thumbnails)
+              visible: (previewRoot.wantsThumbnail && previewRoot.thumbPath === "" && !(previewRoot.thumbKey in root.thumbnails)) || (previewRoot.member && previewRoot.needsContent && !previewRoot.ready)
               textFormat: Text.PlainText
-              text: "Making a preview…"
+              text: previewRoot.member && !previewRoot.ready ? "Taking it out of the archive…" : "Making a preview…"
               color: previewRoot.foreground
               opacity: 0.5
               font.family: root.fontFamily
@@ -3349,6 +3763,54 @@ Panel {
           font.pixelSize: Style.font.bodySmall
           font.bold: true
           wrapMode: Text.WrapAnywhere
+        }
+
+        // What an archive holds, without going in.
+        Column {
+          visible: previewRoot.kind === "archive" && !previewRoot.member
+          width: parent.width
+          spacing: Style.space(4)
+
+          Text {
+            width: parent.width
+            textFormat: Text.PlainText
+            text: {
+              var l = previewRoot.listing
+              if (!l || (l.loading && !l.members)) return "Reading the archive…"
+              if (l.error !== "" && (!l.members || l.members.length === 0)) return "Cannot read it: " + l.error
+              var sum = previewRoot.summary
+              return Model.plural(sum.files, "file") + ", " + Model.plural(sum.dirs, "folder") + " · " + Model.formatSize(sum.bytes) + " unpacked"
+            }
+            color: previewRoot.foreground
+            opacity: 0.7
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.caption
+            wrapMode: Text.Wrap
+          }
+
+          Rectangle {
+            visible: previewRoot.summary !== null && previewRoot.summary.names.length > 0
+            width: parent.width
+            height: Math.min(Style.space(240), archiveNames.implicitHeight + Style.space(12))
+            color: Qt.rgba(previewRoot.foreground.r, previewRoot.foreground.g, previewRoot.foreground.b, 0.05)
+            border.width: 1
+            border.color: Qt.rgba(previewRoot.foreground.r, previewRoot.foreground.g, previewRoot.foreground.b, 0.12)
+            clip: true
+
+            Text {
+              id: archiveNames
+              anchors.left: parent.left
+              anchors.right: parent.right
+              anchors.top: parent.top
+              anchors.margins: Style.space(6)
+              textFormat: Text.PlainText
+              text: previewRoot.summary ? previewRoot.summary.names.join("\n") + (previewRoot.summary.more > 0 ? "\n… and " + previewRoot.summary.more + " more" : "") : ""
+              color: previewRoot.foreground
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+              elide: Text.ElideMiddle
+            }
+          }
         }
 
         Text {
@@ -3397,8 +3859,8 @@ Panel {
               var e = previewRoot.entry
               if (!e) return []
               var rows = [["Kind", e.type]]
-              if (e.dir) rows.push(["Contains", Model.plural(previewFolder.count, "item")])
-              else rows.push(["Size", Model.formatSize(e.size)])
+              if (!e.dir) rows.push(["Size", Model.formatSize(e.size)])
+              else if (!previewRoot.member) rows.push(["Contains", Model.plural(previewFolder.count, "item")])
               if (previewRoot.kind === "pdf" && pageImage.frameCount > 0) rows.push(["Pages", String(pageImage.frameCount)])
               if (isFinite(e.modified)) rows.push([e.trashName ? "Deleted" : "Modified", Model.formatFullDate(e.modified)])
               rows.push([e.trashName ? "From" : "Where", Model.prettyPath(Model.parentPath(e.trashName ? e.origin : e.path), root.home)])
@@ -3430,6 +3892,8 @@ Panel {
             var e = previewRoot.entry
             if (!e) return []
             if (e.trashName) return [{ id: "restore", label: "Restore" }, { id: "purge", label: "Delete" }]
+            if (previewRoot.member) return [{ id: "open", label: "Open" }, { id: "copy", label: "Copy out" }]
+            if (Model.isArchive(e)) return [{ id: "open", label: "Browse" }, { id: "extracthere", label: "Extract here" }]
             if (e.dir) return [{ id: "open", label: "Open" }, { id: "opentab", label: "In new tab" }]
             return [{ id: "open", label: "Open" }, { id: "openwith", label: "Open with" }]
           }
@@ -3968,6 +4432,117 @@ Panel {
             font.family: root.fontFamily
             font.pixelSize: Style.font.caption
             elide: Text.ElideRight
+          }
+        }
+      }
+    }
+  }
+
+  // A question with a text field: the folder to extract into, or the name
+  // of a new archive. Enter goes ahead, Esc or a click outside cancels, a
+  // name that will not do says why.
+  component PromptCard: Item {
+    id: promptLayer
+    required property color foreground
+    required property color background
+    visible: root.prompt !== null
+    z: 16
+
+    function focusField() {
+      if (!root.prompt) return
+      promptField.text = root.prompt.text
+      promptField.forceActiveFocus()
+      var dot = root.prompt.kind === "compress" ? promptField.text.indexOf(".") : -1
+      promptField.select(0, dot > 0 ? dot : promptField.text.length)
+    }
+
+    Rectangle {
+      anchors.fill: parent
+      color: Qt.rgba(promptLayer.background.r, promptLayer.background.g, promptLayer.background.b, 0.7)
+      MouseArea { anchors.fill: parent; onClicked: root.cancelPrompt() }
+    }
+
+    BorderSurface {
+      id: promptBox
+      anchors.centerIn: parent
+      width: Math.min(parent.width - Style.space(32), Style.space(440))
+      height: promptColumn.implicitHeight + promptBox.contentTopInset + promptBox.contentBottomInset
+      color: promptLayer.background
+      borderSpec: Border.flat(Color.accent, Style.normalBorderWidth)
+      padding: Style.space(18)
+
+      MouseArea { anchors.fill: parent }
+
+      Column {
+        id: promptColumn
+        x: promptBox.contentLeftInset
+        y: promptBox.contentTopInset
+        width: promptBox.width - promptBox.contentLeftInset - promptBox.contentRightInset
+        spacing: Style.space(10)
+
+        Text {
+          width: parent.width
+          textFormat: Text.PlainText
+          text: root.prompt ? root.prompt.title : ""
+          color: promptLayer.foreground
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.title
+          wrapMode: Text.Wrap
+        }
+
+        TextField {
+          id: promptField
+          width: parent.width
+          foreground: promptLayer.foreground
+          font.family: root.fontFamily
+          onTextEdited: if (root.prompt && root.prompt.error !== "") root.setPromptError("")
+          Keys.onPressed: function(event) {
+            if (event.key === Qt.Key_Escape) {
+              root.cancelPrompt()
+              event.accepted = true
+            } else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
+              root.commitPrompt(promptField.text)
+              event.accepted = true
+            }
+          }
+        }
+
+        Text {
+          visible: root.prompt !== null && root.prompt.error !== ""
+          width: parent.width
+          textFormat: Text.PlainText
+          text: root.prompt ? root.prompt.error : ""
+          color: Color.urgent
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.caption
+          wrapMode: Text.Wrap
+        }
+
+        Row {
+          anchors.right: parent.right
+          spacing: Style.space(8)
+
+          Button {
+            width: Style.space(96)
+            height: Style.spacing.controlHeight
+            text: "Cancel"
+            fontSize: Style.font.bodySmall
+            foreground: promptLayer.foreground
+            fontFamily: root.fontFamily
+            bordered: true
+            onClicked: root.cancelPrompt()
+          }
+
+          Button {
+            width: Style.space(96)
+            height: Style.spacing.controlHeight
+            text: root.prompt ? root.prompt.confirm : ""
+            fontSize: Style.font.bodySmall
+            foreground: promptLayer.foreground
+            fontFamily: root.fontFamily
+            bordered: true
+            active: true
+            onClicked: root.commitPrompt(promptField.text)
           }
         }
       }

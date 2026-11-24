@@ -34,6 +34,24 @@ const PLACES = [
 
 const places = Model.parsePlaces(PLACES)
 
+// An archive as bsdtar lists it in the C locale: a zip that never lists
+// its folders, a symlink, a hard link, a member older than six months and
+// one dated in the last six months.
+const ZIP = "/home/joamag/Downloads/docs.zip"
+const LISTING_NOW = new Date(2026, 10, 24, 12, 0).getTime()
+const ARCHIVE_LISTING = [
+  "-rw-r--r--  0 1000   1000        3 Nov 24 10:05 docs/a b.txt",
+  "-rw-r--r--  0 1000   1000     2048 Mar  3  2024 docs/sub/c.md",
+  "drwxr-xr-x  0 1000   1000        0 Nov 20 09:00 docs/empty/",
+  "-rw-r--r--  0 1000   1000        4 Dec 30 23:00 ./readme.txt",
+  "lrwxrwxrwx  0 1000   1000        0 Nov 24 10:05 link -> readme.txt",
+  "hrw-r--r--  0 1000   1000        0 Nov 24 10:05 hard link to readme.txt",
+  "drwxr-xr-x  0 1000   1000        0 Nov 24 10:05 ./",
+  "bsdtar: Damaged archive",
+  "",
+].join("\n")
+const members = Model.parseArchiveListing(ARCHIVE_LISTING, LISTING_NOW)
+
 function entry(name, fields = {}) {
   return Model.makeEntry({ path: `${HOME}/Downloads/${name}`, ...fields })
 }
@@ -75,6 +93,10 @@ describe("normalizePath", () => {
 })
 
 describe("expandPath", () => {
+  it("passes a folder inside an archive through", () => {
+    assert.equal(Model.expandPath(Model.archiveLocation(ZIP, "docs"), HOME, "/"), `archive:${ZIP}::/docs`)
+  })
+
   it("expands home, file URLs and relative names", () => {
     assert.equal(Model.expandPath("~", HOME, "/tmp"), HOME)
     assert.equal(Model.expandPath(" ~/Downloads/ ", HOME, "/tmp"), `${HOME}/Downloads`)
@@ -93,9 +115,10 @@ describe("expandPath", () => {
 })
 
 describe("isVirtual", () => {
-  it("knows Recent and Trash only", () => {
+  it("knows Recent, the Trash and folders inside archives", () => {
     assert.equal(Model.isVirtual(Model.RECENT), true)
     assert.equal(Model.isVirtual(Model.TRASH), true)
+    assert.equal(Model.isVirtual(Model.archiveLocation(ZIP, "")), true)
     assert.equal(Model.isVirtual("/"), false)
   })
 })
@@ -126,6 +149,12 @@ describe("parentPath", () => {
     assert.equal(Model.parentPath("relative"), "")
     assert.equal(Model.parentPath(""), "")
   })
+
+  it("climbs inside an archive, then out to its folder", () => {
+    assert.equal(Model.parentPath(Model.archiveLocation(ZIP, "docs/sub")), Model.archiveLocation(ZIP, "docs"))
+    assert.equal(Model.parentPath(Model.archiveLocation(ZIP, "docs")), Model.archiveLocation(ZIP, ""))
+    assert.equal(Model.parentPath(Model.archiveLocation(ZIP, "")), `${HOME}/Downloads`)
+  })
 })
 
 describe("baseName", () => {
@@ -150,6 +179,11 @@ describe("prettyPath", () => {
     assert.equal(Model.prettyPath(`${HOME}/Music`, HOME), "~/Music")
     assert.equal(Model.prettyPath("/home/joamagic", HOME), "/home/joamagic")
     assert.equal(Model.prettyPath("/etc", ""), "/etc")
+  })
+
+  it("writes the folder inside an archive after the archive", () => {
+    assert.equal(Model.prettyPath(Model.archiveLocation(ZIP, "docs/sub"), HOME), "~/Downloads/docs.zip › docs/sub")
+    assert.equal(Model.prettyPath(Model.archiveLocation(ZIP, ""), HOME), "~/Downloads/docs.zip")
   })
 })
 
@@ -179,6 +213,143 @@ describe("uriList", () => {
     assert.equal(Model.uriList(["/a b", "/c"]), "file:///a%20b\r\nfile:///c\r\n")
     assert.equal(Model.uriList([]), "")
     assert.equal(Model.uriList(null), "")
+  })
+})
+
+describe("isArchiveName", () => {
+  it("knows the suffixes bsdtar reads, ignoring case", () => {
+    for (const name of ["a.zip", "a.TAR.GZ", "a.tgz", "a.tar.zst", "a.7z", "a.rar", "a.iso", "a.jar"]) assert.equal(Model.isArchiveName(name), true, name)
+    assert.equal(Model.isArchiveName("a.gz"), false)
+    assert.equal(Model.isArchiveName(".zip"), false)
+    assert.equal(Model.isArchiveName(null), false)
+  })
+})
+
+describe("isArchive", () => {
+  it("is a file with an archive name, not a folder or a trash item", () => {
+    assert.equal(Model.isArchive(entry("a.zip")), true)
+    assert.equal(Model.isArchive(entry("a.zip", { dir: true })), false)
+    assert.equal(Model.isArchive({ name: "a.zip", trashName: "a.zip" }), false)
+    assert.equal(Model.isArchive(null), false)
+  })
+})
+
+describe("archiveLocation", () => {
+  it("joins the archive and the folder inside it", () => {
+    assert.equal(Model.archiveLocation(ZIP, "/docs/sub/"), `archive:${ZIP}::/docs/sub`)
+    assert.equal(Model.archiveLocation(ZIP, ""), `archive:${ZIP}::/`)
+    assert.equal(Model.archiveLocation(ZIP), `archive:${ZIP}::/`)
+  })
+})
+
+describe("isArchiveLocation", () => {
+  it("recognises the prefix", () => {
+    assert.equal(Model.isArchiveLocation(Model.archiveLocation(ZIP, "")), true)
+    assert.equal(Model.isArchiveLocation(ZIP), false)
+    assert.equal(Model.isArchiveLocation(null), false)
+  })
+})
+
+describe("splitArchive", () => {
+  it("parts the archive from the folder inside it", () => {
+    assert.deepEqual(Model.splitArchive(Model.archiveLocation(ZIP, "docs/sub")), { archive: ZIP, inner: "docs/sub" })
+    assert.deepEqual(Model.splitArchive(`archive:${ZIP}`), { archive: ZIP, inner: "" })
+    assert.equal(Model.splitArchive(ZIP), null)
+  })
+})
+
+describe("archiveStem", () => {
+  it("drops the archive suffix", () => {
+    assert.equal(Model.archiveStem("photos.tar.gz"), "photos")
+    assert.equal(Model.archiveStem("Report.ZIP"), "Report")
+    assert.equal(Model.archiveStem("notes.txt"), "notes.txt")
+    assert.equal(Model.archiveStem(null), "")
+  })
+})
+
+describe("parseArchiveListing", () => {
+  it("reads members with sizes and dates", () => {
+    const byInner = Object.fromEntries(members.map((m) => [m.inner, m]))
+    assert.equal(byInner["docs/a b.txt"].size, 3)
+    assert.equal(byInner["docs/a b.txt"].modified, new Date(2026, 10, 24, 10, 5).getTime())
+    assert.equal(byInner["docs/sub/c.md"].modified, new Date(2024, 2, 3).getTime())
+    // A time on a date after today is from last year.
+    assert.equal(byInner["readme.txt"].modified, new Date(2025, 11, 30, 23, 0).getTime())
+    assert.equal(byInner["docs/empty"].dir, true)
+  })
+
+  it("makes up folders a zip leaves out and names links by themselves", () => {
+    assert.deepEqual(members.map((m) => m.inner), ["docs", "docs/a b.txt", "docs/sub", "docs/sub/c.md", "docs/empty", "readme.txt", "link", "hard"])
+    assert.equal(members[0].dir, true)
+    assert.ok(Number.isNaN(members[0].size))
+  })
+
+  it("starts empty", () => {
+    assert.deepEqual(Model.parseArchiveListing("", LISTING_NOW), [])
+    assert.ok(Model.parseArchiveListing("-rw-r--r--  0 a b 1 Jan  1 10:00 x", undefined).length === 1)
+  })
+})
+
+describe("archiveEntries", () => {
+  it("lists one folder of the archive", () => {
+    assert.deepEqual(Model.archiveEntries(members, ZIP, "").map((e) => [e.name, e.dir]), [["docs", true], ["readme.txt", false], ["link", false], ["hard", false]])
+    const docs = Model.archiveEntries(members, ZIP, "docs")
+    assert.deepEqual(docs.map((e) => e.name), ["a b.txt", "sub", "empty"])
+    assert.equal(docs[0].path, Model.archiveLocation(ZIP, "docs/a b.txt"))
+    assert.equal(docs[0].size, 3)
+    assert.deepEqual(Model.archiveEntries(members, ZIP, "nowhere"), [])
+    assert.deepEqual(Model.archiveEntries(null, ZIP, ""), [])
+  })
+})
+
+describe("archiveSummary", () => {
+  it("counts files, folders and the unpacked size, with the first names", () => {
+    assert.deepEqual(Model.archiveSummary(members, 3), { files: 5, dirs: 3, bytes: 2055, names: ["docs/", "docs/a b.txt", "docs/sub/"], more: 5 })
+    assert.deepEqual(Model.archiveSummary(null, 3), { files: 0, dirs: 0, bytes: 0, names: [], more: 0 })
+  })
+})
+
+describe("extractTarget", () => {
+  it("unpacks a single top folder as itself", () => {
+    const single = Model.parseArchiveListing("-rw-r--r-- 0 a b 1 Jan  1  2024 proj/a.txt\n-rw-r--r-- 0 a b 1 Jan  1  2024 proj/b.txt", LISTING_NOW)
+    assert.deepEqual(Model.extractTarget(single, "proj-1.0.tar.gz", []), { name: "proj", strip: 1 })
+    assert.deepEqual(Model.extractTarget(single, "proj-1.0.tar.gz", ["proj"]), { name: "proj (copy)", strip: 1 })
+  })
+
+  it("unpacks anything else into a folder named after the archive", () => {
+    assert.deepEqual(Model.extractTarget(members, "docs.zip", []), { name: "docs", strip: 0 })
+    assert.deepEqual(Model.extractTarget(members, "docs.zip", ["docs"]), { name: "docs (copy)", strip: 0 })
+    const lone = Model.parseArchiveListing("-rw-r--r-- 0 a b 1 Jan  1  2024 only.txt", LISTING_NOW)
+    assert.deepEqual(Model.extractTarget(lone, "only.zip", []), { name: "only", strip: 0 })
+    assert.deepEqual(Model.extractTarget([], ".zip", []), { name: ".zip", strip: 0 })
+    assert.deepEqual(Model.extractTarget(null, "", []), { name: "Archive", strip: 0 })
+  })
+})
+
+describe("stripCount", () => {
+  it("counts the folders above the members copied out", () => {
+    assert.equal(Model.stripCount(""), 0)
+    assert.equal(Model.stripCount("docs"), 1)
+    assert.equal(Model.stripCount("docs/sub"), 2)
+  })
+})
+
+describe("compressName", () => {
+  it("offers a free .zip named after the item, or Archive for several", () => {
+    assert.equal(Model.compressName([entry("notes.md")], []), "notes.zip")
+    assert.equal(Model.compressName([entry("photos", { dir: true })], ["photos.zip"]), "photos (copy).zip")
+    assert.equal(Model.compressName([entry("a"), entry("b")], []), "Archive.zip")
+    assert.equal(Model.compressName([entry("old.tar.gz")], []), "old.zip")
+    assert.equal(Model.compressName(null, null), "Archive.zip")
+  })
+})
+
+describe("canCompressTo", () => {
+  it("needs a suffix bsdtar can write", () => {
+    for (const name of ["a.zip", "a.7z", "a.tar", "a.TAR.GZ", "a.tar.zst"]) assert.equal(Model.canCompressTo(name), true, name)
+    assert.equal(Model.canCompressTo("a.rar"), false)
+    assert.equal(Model.canCompressTo("zip"), false)
+    assert.equal(Model.canCompressTo(null), false)
   })
 })
 
@@ -253,6 +424,8 @@ describe("placeLabel", () => {
     assert.equal(Model.placeLabel("/run/media/joamag/T7", HOME, places.places, places.drives), "T7")
     assert.equal(Model.placeLabel("/", HOME, [], []), "System")
     assert.equal(Model.placeLabel("/etc/X11", HOME, places.places, places.drives), "X11")
+    assert.equal(Model.placeLabel(Model.archiveLocation(ZIP, ""), HOME, [], []), "docs.zip")
+    assert.equal(Model.placeLabel(Model.archiveLocation(ZIP, "docs/sub"), HOME, [], []), "sub")
   })
 })
 
@@ -266,6 +439,7 @@ describe("placeIcon", () => {
     assert.equal(Model.placeIcon("/mnt/data", HOME, [], places.drives), Model.GLYPHS.drive)
     assert.equal(Model.placeIcon("/", HOME, [], []), Model.GLYPHS.drive)
     assert.equal(Model.placeIcon("/etc", HOME, [], []), Model.KIND_ICONS.dir)
+    assert.equal(Model.placeIcon(Model.archiveLocation(ZIP, "docs"), HOME, [], []), Model.KIND_ICONS.archive)
   })
 })
 
@@ -285,6 +459,17 @@ describe("crumbs", () => {
     // A drive mounted inside home still starts from the drive.
     const inside = [{ mount: `${HOME}/mnt`, name: "Inside", device: "/dev/sdz1" }]
     assert.deepEqual(Model.crumbs(`${HOME}/mnt/a`, HOME, inside).map((c) => c.label), ["Inside", "a"])
+  })
+
+  it("goes through the archive into its folders", () => {
+    assert.deepEqual(Model.crumbs(Model.archiveLocation(ZIP, "docs/sub"), HOME, []), [
+      { label: "Home", path: HOME },
+      { label: "Downloads", path: `${HOME}/Downloads` },
+      { label: "docs.zip", path: Model.archiveLocation(ZIP, "") },
+      { label: "docs", path: Model.archiveLocation(ZIP, "docs") },
+      { label: "sub", path: Model.archiveLocation(ZIP, "docs/sub") },
+    ])
+    assert.equal(Model.crumbs(`archive:/a.zip::/`, HOME, [])[0].path, "/")
   })
 
   it("is a single segment for Recent and Trash", () => {
@@ -566,7 +751,9 @@ describe("previewKind", () => {
   it("shows text, asks a thumbnailer for media and documents, and nothing else", () => {
     assert.equal(Model.previewKind(entry("a.md", { size: 10 })), "text")
     for (const name of ["a.mp4", "a.flac", "a.docx", "a.ods", "a.pptx", "a.ttf", "a.heic"]) assert.equal(Model.previewKind(entry(name)), "thumbnail", name)
-    assert.equal(Model.previewKind(entry("a.zip")), "none")
+    assert.equal(Model.previewKind(entry("a.zip")), "archive")
+    assert.equal(Model.previewKind(entry("a.iso")), "archive")
+    assert.equal(Model.previewKind(entry("a.bin")), "none")
     assert.equal(Model.previewKind(entry("d", { dir: true })), "dir")
     assert.equal(Model.previewKind(Model.makeEntry({ path: "" })), "none")
     assert.equal(Model.previewKind(null), "none")
@@ -1123,6 +1310,8 @@ describe("hints", () => {
   it("picks the hint line for the mode", () => {
     assert.equal(Model.hints("rename"), Model.HINTS.rename)
     assert.equal(Model.hints("trash")[1].label, "restore")
+    assert.equal(Model.hints("archive")[4].label, "copy out")
+    assert.equal(Model.hints("prompt")[0].key, "Enter")
     assert.equal(Model.hints("whatever"), Model.HINTS.browse)
   })
 })
@@ -1134,16 +1323,27 @@ describe("itemMenu", () => {
 
   it("offers folder actions for a folder", () => {
     const menu = Model.itemMenu(entry("d", { dir: true }), 1, true, true)
-    assert.deepEqual(menu.map((i) => i.id), ["open", "opentab", "copy", "cut", "pasteinto", "rename", "bookmark", "trash", "purge"])
+    assert.deepEqual(menu.map((i) => i.id), ["open", "opentab", "compress", "copy", "cut", "pasteinto", "rename", "bookmark", "trash", "purge"])
     assert.equal(menu.find((i) => i.id === "bookmark").label, "Remove bookmark")
     assert.equal(menu.find((i) => i.id === "pasteinto").disabled, false)
   })
 
   it("offers Open with for a file and greys rename for several", () => {
     const menu = Model.itemMenu(entry("a.txt"), 2, false, false)
-    assert.deepEqual(menu.map((i) => i.id), ["open", "openwith", "copy", "cut", "rename", "trash", "purge"])
+    assert.deepEqual(menu.map((i) => i.id), ["open", "openwith", "compress", "copy", "cut", "rename", "trash", "purge"])
     assert.equal(menu.find((i) => i.id === "rename").disabled, true)
     assert.deepEqual(Model.itemMenu(null, 1, false, false), [])
+  })
+
+  it("opens an archive as a folder and offers to extract it", () => {
+    const menu = Model.itemMenu(entry("docs.zip"), 1, false, false)
+    assert.deepEqual(menu.map((i) => i.id), ["open", "openwith", "extracthere", "extractto", "compress", "copy", "cut", "rename", "trash", "purge"])
+    assert.equal(menu[0].label, "Open as a folder")
+  })
+
+  it("keeps what is inside an archive to opening, copying out and extracting", () => {
+    assert.deepEqual(Model.itemMenu(Model.makeEntry({ path: Model.archiveLocation(ZIP, "docs/a.txt") }), 1, false, false).map((i) => i.id), ["open", "openwith", "copy", "extractto"])
+    assert.deepEqual(Model.itemMenu(Model.makeEntry({ path: Model.archiveLocation(ZIP, "docs"), dir: true }), 1, false, false).map((i) => i.id), ["open", "copy", "extractto"])
   })
 })
 
@@ -1157,6 +1357,10 @@ describe("folderMenu", () => {
     assert.equal(Model.folderMenu(HOME, false, false, "name", false).find((i) => i.id === "hidden").icon, Model.GLYPHS.hiddenShown)
     assert.match(menu.find((i) => i.id === "sort:size").label, /✓$/)
     assert.equal(Model.folderMenu(HOME, true, false, "name", true).find((i) => i.id === "bookmark").label, "Remove bookmark")
+  })
+
+  it("offers to extract the whole archive from inside it", () => {
+    assert.deepEqual(Model.folderMenu(Model.archiveLocation(ZIP, "docs"), true, false, "name", false).map((i) => i.id), ["extractall", "selectall", "hidden", "sort:name", "sort:modified", "sort:size", "sort:type"])
   })
 
   it("keeps Recent to selection and view, and the Trash to emptying", () => {
@@ -1414,6 +1618,129 @@ esac`)
     assert.equal(s.run(["thumbnail", file, "big"], env).stdout, "error\tbad size big\n")
     assert.equal(s.run(["thumbnail", path.join(s.home, "none"), "256"], env).stdout, `error\tno file at ${s.home}/none\n`)
     assert.equal(s.run(["thumbnail"], env).status, 1)
+  })
+
+  // Real archives, made with bsdtar from a small tree: a folder with a
+  // subfolder, a file at the top and a name with a glob character.
+  function archives(s) {
+    const src = path.join(s.dir, "src")
+    write(path.join(src, "docs", "a b.txt"), "hello")
+    write(path.join(src, "docs", "sub", "c[1].md"), "deep")
+    write(path.join(src, "readme.txt"), "top")
+    const zip = path.join(s.home, "docs.zip")
+    const tgz = path.join(s.home, "docs.tar.gz")
+    for (const out of [zip, tgz]) {
+      const made = require("node:child_process").spawnSync("bsdtar", ["-a", "-cf", out, "-C", src, "docs", "readme.txt"])
+      assert.equal(made.status, 0, String(made.stderr))
+    }
+    return { src, zip, tgz }
+  }
+
+  it("lists an archive's members", (t) => {
+    const s = setup(t)
+    const a = archives(s)
+    for (const archive of [a.zip, a.tgz]) {
+      const listed = Model.parseArchiveListing(s.run(["archive-list", archive]).stdout, Date.now())
+      assert.deepEqual(listed.map((m) => m.inner).sort(), ["docs", "docs/a b.txt", "docs/sub", "docs/sub/c[1].md", "readme.txt"])
+    }
+    write(path.join(s.home, "broken.zip"), "not a zip")
+    assert.match(s.run(["archive-list", path.join(s.home, "broken.zip")]).stdout, /^error\t/)
+    assert.equal(s.run(["archive-list", path.join(s.home, "none.zip")]).stdout, `error\tno archive at ${s.home}/none.zip\n`)
+    assert.equal(s.run(["archive-list"]).status, 1)
+  })
+
+  it("takes one member out into the cache, once", (t) => {
+    const s = setup(t)
+    const a = archives(s)
+    const env = { XDG_CACHE_HOME: path.join(s.dir, "cache") }
+    const out = s.run(["archive-file", a.zip, "docs/sub/c[1].md"], env).stdout
+    assert.match(out, /^extracted\t.+\/joamag-files\/archives\/[0-9a-f]{32}\/docs\/sub\/c\[1\]\.md\n$/)
+    const copy = out.trim().split("\t")[1]
+    assert.equal(fs.readFileSync(copy, "utf8"), "deep")
+    // Taken again, the copy is reused rather than extracted over.
+    fs.writeFileSync(copy, "kept")
+    assert.equal(s.run(["archive-file", a.zip, "docs/sub/c[1].md"], env).stdout, out)
+    assert.equal(fs.readFileSync(copy, "utf8"), "kept")
+    assert.match(s.run(["archive-file", a.zip, "nothing.txt"], env).stdout, /^error\t/)
+    assert.equal(s.run(["archive-file", a.zip, "../escape"], env).stdout, "error\tbad member ../escape\n")
+    assert.equal(s.run(["archive-file", a.zip, "/abs"], env).stdout, "error\tbad member /abs\n")
+    assert.equal(s.run(["archive-file", path.join(s.home, "none.zip"), "x"], env).stdout, `error\tno archive at ${s.home}/none.zip\n`)
+  })
+
+  it("extracts an archive with its progress, and a folder of it without the folders above", (t) => {
+    const s = setup(t)
+    const a = archives(s)
+    const all = path.join(s.home, "all")
+    const r = Model.parseResult(s.run(["extract", a.tgz, all, "0"]).stdout)
+    assert.equal(r.total, 12)
+    assert.equal(r.progress, 12)
+    assert.deepEqual(r.done, [{ from: a.tgz, to: all }])
+    assert.equal(fs.readFileSync(path.join(all, "docs", "sub", "c[1].md"), "utf8"), "deep")
+    const part = path.join(s.home, "part")
+    Model.parseResult(s.run(["extract", a.zip, part, "1", "docs/sub", "docs/a b.txt"]).stdout)
+    assert.deepEqual(fs.readdirSync(part).sort(), ["a b.txt", "sub"])
+    assert.equal(fs.readFileSync(path.join(part, "sub", "c[1].md"), "utf8"), "deep")
+  })
+
+  it("keeps files already where it extracts, and reports what fails", (t) => {
+    const s = setup(t)
+    const a = archives(s)
+    const into = path.join(s.home, "into")
+    write(path.join(into, "readme.txt"), "mine")
+    Model.parseResult(s.run(["extract", a.zip, into, "0"]).stdout)
+    assert.equal(fs.readFileSync(path.join(into, "readme.txt"), "utf8"), "mine")
+    assert.equal(fs.readFileSync(path.join(into, "docs", "a b.txt"), "utf8"), "hello")
+    write(path.join(s.home, "bad.zip"), "nope")
+    assert.match(s.run(["extract", path.join(s.home, "bad.zip"), path.join(s.home, "x"), "0"]).stdout, /error\t/)
+    assert.equal(s.run(["extract", path.join(s.home, "none.zip"), into, "0"]).stdout, `error\tno archive at ${s.home}/none.zip\n`)
+    assert.equal(s.run(["extract", a.zip, into, "x"]).stdout, "error\tbad strip x\n")
+    assert.equal(s.run(["extract", a.zip, into]).stdout, "error\textract needs an archive, a destination and a strip count\n")
+  })
+
+  it("cancels an extraction and removes the folder it made", async (t) => {
+    const s = setup(t)
+    const a = archives(s)
+    // A bsdtar whose extraction stalls after writing a file.
+    fakeCommand(s.bin, "bsdtar", 'if [[ $1 == -xkf ]]; then mkdir -p "$4"; echo x > "$4/partial"; exec sleep 30; fi; exec /usr/bin/bsdtar "$@"')
+    const dest = path.join(s.home, "made")
+    const child = spawn(path.join(pluginDir("joamag.files"), "files.sh"), ["extract", a.zip, dest, "0"], { env: { ...s.env, PATH: [s.bin, "/usr/bin", "/bin"].join(":"), LANG: "C" } })
+    let stdout = ""
+    const progressed = new Promise((resolve) => child.stdout.on("data", (chunk) => {
+      stdout += chunk
+      if (stdout.includes("progress\t")) resolve()
+    }))
+    const closed = new Promise((resolve) => child.on("close", resolve))
+    await progressed
+    child.kill("SIGTERM")
+    await closed
+    assert.equal(Model.parseResult(stdout).cancelled, true)
+    assert.ok(!fs.existsSync(dest))
+  })
+
+  it("compresses into the format its name asks for", (t) => {
+    const s = setup(t)
+    const a = archives(s)
+    const zip = path.join(s.home, "out.zip")
+    assert.equal(s.run(["compress", zip, path.join(a.src, "docs"), path.join(a.src, "readme.txt")]).stdout, `total\t0\ncreated\t${zip}\n`)
+    const listed = Model.parseArchiveListing(s.run(["archive-list", zip]).stdout, Date.now())
+    assert.deepEqual(listed.map((m) => m.inner).sort(), ["docs", "docs/a b.txt", "docs/sub", "docs/sub/c[1].md", "readme.txt"])
+    const tgz = path.join(s.home, "out.tar.gz")
+    write(path.join(s.home, "-dash.txt"), "d")
+    s.run(["compress", tgz, path.join(s.home, "-dash.txt")])
+    assert.match(require("node:child_process").execFileSync("file", ["-b", tgz]).toString(), /gzip/)
+    assert.deepEqual(fs.readdirSync(s.home).filter((n) => n.startsWith(".partial")), [])
+  })
+
+  it("refuses a taken name, a missing file or folder, and nothing to pack", (t) => {
+    const s = setup(t)
+    const a = archives(s)
+    assert.equal(s.run(["compress", a.zip, path.join(a.src, "readme.txt")]).stdout, "error\tdocs.zip already exists\n")
+    assert.equal(s.run(["compress", path.join(s.home, "n.zip"), path.join(s.home, "gone")]).stdout, "error\tgone is gone\n")
+    assert.equal(s.run(["compress", path.join(s.home, "nowhere", "n.zip"), path.join(a.src, "readme.txt")]).stdout, `error\tno folder at ${s.home}/nowhere\n`)
+    assert.equal(s.run(["compress", path.join(s.home, "n.zip")]).stdout, "error\tnothing to compress\n")
+    fakeCommand(s.bin, "bsdtar", 'echo "bsdtar: disk full" >&2; exit 1')
+    assert.equal(s.run(["compress", path.join(s.home, "n.zip"), path.join(a.src, "readme.txt")]).stdout, "total\t0\nerror\tbsdtar: disk full\n")
+    assert.ok(!fs.existsSync(path.join(s.home, "n.zip")))
   })
 
   it("copies files and folders with the total and progress", (t) => {

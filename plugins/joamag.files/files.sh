@@ -17,6 +17,10 @@
 #   files.sh apps PATH              app   id name default   the apps that open PATH
 #   files.sh launch ID PATH...      open the files with the app ID
 #   files.sh thumbnail PATH SIZE    thumbnail  PNG   a preview picture for PATH
+#   files.sh archive-list ARCHIVE   bsdtar's listing of the members, in the C locale
+#   files.sh archive-file ARCHIVE MEMBER   extracted  PATH   one member, cached
+#   files.sh extract ARCHIVE DEST STRIP [MEMBER...]   total, progress, done ARCHIVE DEST
+#   files.sh compress DEST PATH...  created  DEST   the format follows DEST's suffix
 #   files.sh transfer copy|move SRC TARGET POLICY [...]
 #     total BYTES, progress BYTES, done SRC TARGET; POLICY is new or replace
 #   files.sh rename PATH NAME       done  PATH TARGET
@@ -40,6 +44,7 @@ TRASH_DIR=${XDG_DATA_HOME:-$HOME/.local/share}/Trash
 RECENT_FILE=${XDG_DATA_HOME:-$HOME/.local/share}/recently-used.xbel
 BOOKMARKS_FILE=${XDG_CONFIG_HOME:-$HOME/.config}/gtk-3.0/bookmarks
 THUMB_DIR=${XDG_CACHE_HOME:-$HOME/.cache}/joamag-files/thumbnails
+ARCHIVE_CACHE=${XDG_CACHE_HOME:-$HOME/.cache}/joamag-files/archives
 # Where apps and thumbnailers are registered, the spec's default when unset.
 DATA_DIRS=${XDG_DATA_DIRS:-/usr/local/share:/usr/share}
 SEARCH_LIMIT=200
@@ -372,6 +377,118 @@ thumbnail() {
   fi
 }
 
+# bsdtar reads member names as patterns; a name with [ * ? or \ in it is
+# taken literally.
+member_pattern() {
+  printf '%s' "$1" | sed 's/[][*?\\]/\\&/g'
+}
+
+archive_list() {
+  local archive="${1:?archive required}"
+  [[ -f $archive ]] || fail "no archive at $archive"
+  LC_ALL=C bsdtar -tvf "$archive" 2>"$ERR_FILE" || fail "$(last_error)"
+}
+
+# One member of ARCHIVE, extracted once into the widget's cache under the
+# archive's path and date, for the preview and for opening it in an app.
+# Copies nobody touched for a week go.
+archive_file() {
+  local archive="${1:?archive required}" member="${2:-}" key out
+  [[ -f $archive ]] || fail "no archive at $archive"
+  [[ -n $member && $member != /* && $member != *..* ]] || fail "bad member $member"
+  key=$(printf '%s|%s' "$archive" "$(stat -c %Y -- "$archive")" | md5sum | cut -d' ' -f1)
+  out="$ARCHIVE_CACHE/$key"
+  if [[ ! -e $out/$member ]]; then
+    mkdir -p "$out"
+    LC_ALL=C bsdtar -xf "$archive" -C "$out" "$(member_pattern "$member")" 2>"$ERR_FILE" || fail "$(last_error)"
+  fi
+  [[ -e $out/$member ]] || fail "$(basename "$member") is not in the archive"
+  touch -c -- "$out"
+  find "$ARCHIVE_CACHE" -mindepth 1 -maxdepth 1 -mtime +7 -exec rm -rf {} + 2>/dev/null
+  printf 'extracted\t%s\n' "$out/$member"
+}
+
+# Extracts ARCHIVE into DEST, made when missing, dropping STRIP leading
+# folders from each name (copying out of a folder inside the archive), all
+# of it or only the MEMBERs given. The total comes from the listing and the
+# progress from what has landed. Files already in DEST are kept. TERM stops
+# it and removes DEST if this call made it.
+extract() {
+  local archive="${1:?archive required}" dest="${2:?destination required}" strip="${3:-0}" made=0 total base child="" member
+  shift 3
+  local -a members=()
+  [[ -f $archive ]] || fail "no archive at $archive"
+  [[ $strip =~ ^[0-9]+$ ]] || fail "bad strip $strip"
+  for member in "$@"; do members+=("$(member_pattern "$member")"); done
+  if [[ ! -d $dest ]]; then
+    mkdir -p -- "$dest" 2>"$ERR_FILE" || fail "$(last_error)"
+    made=1
+  fi
+  total=$(LC_ALL=C bsdtar -tvf "$archive" "${members[@]}" 2>/dev/null | awk '{ sum += $5 } END { print sum + 0 }')
+  base=$(bytes_of "$dest")
+  printf 'total\t%s\n' "$total"
+
+  stop_extract() {
+    [[ -n $child ]] && kill "$child" 2>/dev/null && wait "$child" 2>/dev/null
+    (( made )) && rm -rf -- "$dest"
+    printf 'cancelled\n'
+    exit 0
+  }
+  trap stop_extract TERM INT
+
+  LC_ALL=C bsdtar -xkf "$archive" -C "$dest" --strip-components "$strip" "${members[@]}" 2>"$ERR_FILE" &
+  child=$!
+  while kill -0 "$child" 2>/dev/null; do
+    printf 'progress\t%s\n' "$(( $(bytes_of "$dest") - base ))"
+    sleep 0.3
+  done
+  if wait "$child"; then
+    printf 'progress\t%s\n' "$total"
+    printf 'done\t%s\t%s\n' "$archive" "$dest"
+  else
+    report "$(last_error)"
+  fi
+  return 0
+}
+
+# Packs PATHs into DEST, the format following DEST's suffix (.zip, .7z,
+# .tar.gz ...). It is written under a hidden name beside DEST and renamed
+# when complete, so a cancelled or failed run leaves nothing behind.
+compress() {
+  local dest="${1:?archive required}" tmp child="" path name
+  shift
+  local -a args=()
+  (( $# > 0 )) || fail "nothing to compress"
+  [[ -e $dest || -L $dest ]] && fail "$(basename "$dest") already exists"
+  [[ -d $(dirname "$dest") ]] || fail "no folder at $(dirname "$dest")"
+  for path in "$@"; do
+    [[ -e $path || -L $path ]] || fail "$(basename "$path") is gone"
+    name=$(basename "$path")
+    [[ $name == -* ]] && name="./$name"
+    args+=(-C "$(dirname "$path")" "$name")
+  done
+  # The hidden name keeps DEST's suffix, which is how bsdtar picks the format.
+  tmp="$(dirname "$dest")/.partial-$$-$(basename "$dest")"
+  printf 'total\t0\n'
+
+  stop_compress() {
+    [[ -n $child ]] && kill "$child" 2>/dev/null && wait "$child" 2>/dev/null
+    rm -f -- "$tmp"
+    printf 'cancelled\n'
+    exit 0
+  }
+  trap stop_compress TERM INT
+
+  bsdtar -a -cf "$tmp" "${args[@]}" 2>"$ERR_FILE" &
+  child=$!
+  if wait "$child" && mv -n -- "$tmp" "$dest" && [[ ! -e $tmp ]]; then
+    printf 'created\t%s\n' "$dest"
+  else
+    rm -f -- "$tmp"
+    fail "$(last_error)"
+  fi
+}
+
 # Bytes under a list of paths, for the progress line.
 bytes_of() {
   (( $# > 0 )) || { printf '0'; return; }
@@ -618,6 +735,21 @@ case "${1:-}" in
   thumbnail)
     thumbnail "${2:-}" "${3:-}"
     ;;
+  archive-list)
+    archive_list "${2:-}"
+    ;;
+  archive-file)
+    archive_file "${2:-}" "${3:-}"
+    ;;
+  extract)
+    shift
+    (( $# >= 3 )) || fail "extract needs an archive, a destination and a strip count"
+    extract "$@"
+    ;;
+  compress)
+    shift
+    compress "$@"
+    ;;
   transfer)
     shift
     transfer "$@"
@@ -663,7 +795,7 @@ case "${1:-}" in
     unbookmark "${2:-}"
     ;;
   *)
-    echo "Usage: files.sh places | free DIR | recent | trashed | search DIR QUERY [all] | names DIR | apps PATH | launch ID PATH... | thumbnail PATH SIZE | transfer copy|move SRC TARGET POLICY... | rename PATH NAME | mkdir|touch DIR NAME | trash PATH... | restore NAME... | purge NAME... | delete PATH... | empty-trash | mount DEVICE | eject MOUNTPOINT | bookmark|unbookmark PATH" >&2
+    echo "Usage: files.sh places | free DIR | recent | trashed | search DIR QUERY [all] | names DIR | apps PATH | launch ID PATH... | thumbnail PATH SIZE | archive-list ARCHIVE | archive-file ARCHIVE MEMBER | extract ARCHIVE DEST STRIP [MEMBER...] | compress DEST PATH... | transfer copy|move SRC TARGET POLICY... | rename PATH NAME | mkdir|touch DIR NAME | trash PATH... | restore NAME... | purge NAME... | delete PATH... | empty-trash | mount DEVICE | eject MOUNTPOINT | bookmark|unbookmark PATH" >&2
     exit 1
     ;;
 esac

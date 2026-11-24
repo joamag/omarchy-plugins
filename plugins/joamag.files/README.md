@@ -25,6 +25,16 @@ The popup and the window share the tabs; they are saved on the widget's `shell.j
 - Move to Trash shows a note with Undo (or Ctrl+Z); in the Trash, Enter restores an item to where it was (under a "(copy)" name if that name was taken again meanwhile). Delete for good and Empty Trash ask first.
 - Opening a drive that is not mounted mounts it; the eject button in the sidebar unmounts and ejects it, and any tab on it goes home.
 
+## Archives
+
+Zip files and everything else `bsdtar` reads (tar, tar.gz / xz / zst / bz2, 7z, rar, iso, cpio) open like folders:
+
+- **Browse inside**: Enter, `l` or a double click opens an archive as a read-only folder in the tab; the path bar runs through it (`Downloads › photos.zip › 2024`), `h` climbs out. Files inside preview like any other (they are taken out into the cache as they are looked at) and open in their app; an archive inside an archive opens as a folder too. Renaming, the Trash and pasting are off inside, and dragging out is not offered: copy instead.
+- **Copy out**: `y` (or Copy out) inside the archive, then `p` in any folder: the files are extracted aside and moved into place through the usual paste, so a name that is taken is asked about.
+- **Extract**: Extract here (`E`, or from the menus) unpacks into a new folder beside the archive, named after its single top folder or after the archive, under a free name. Extract to… asks for the folder (made if missing; files already in it are kept), for the whole archive or for what is selected inside it. Both show the progress line with Cancel, which removes what a cancelled extraction made.
+- **In the preview pane**: an archive under the cursor lists what it holds, with the file and folder counts and the unpacked size.
+- **Compress**: `Z` or Compress to .zip… packs the selection into a new archive beside it; the name is asked for (`Archive.zip` or the item's name), and its suffix picks the format: `.zip`, `.7z`, `.tar`, `.tar.gz`, `.tar.xz`, `.tar.zst` or `.tar.bz2`.
+
 ## Keys
 
 The panel keys of the other widgets and the Nautilus shortcuts both work; `?` shows them all.
@@ -44,6 +54,8 @@ The panel keys of the other widgets and the Nautilus shortcuts both work; `?` sh
 | Ctrl+Z | Undo the last move to the Trash |
 | Shift+Delete | Delete for good |
 | `o` | Open with |
+| `E` | Extract the archive under the cursor here (inside an archive: all of it) |
+| `Z` | Compress the selection |
 | `<` `>` | Previous, next page of the PDF in the preview |
 | `/`, Ctrl+F | Filter; Enter searches below |
 | `g` | Go to: `h` home, `k` desktop, `D` documents, `d` downloads, `m` music, `p` pictures, `v` videos, `r` recent, `t` trash, `/` system, digits for bookmarks and drives |
@@ -86,6 +98,6 @@ omarchy-shell joamag.files version
 
 ## Data source
 
-Qt's folder model (`Qt.labs.folderlistmodel`) lists the folder on screen and follows changes on disk. Everything else goes through `files.sh`: the standard folders (`xdg-user-dir`), the GTK bookmarks file Nautilus uses, drives from `lsblk` and `df`, Recent from `recently-used.xbel`, the Trash from `~/.local/share/Trash` (items trashed on other drives stay in that drive's own trash), search with `find`, "Open with" from `gio mime`, and thumbnails from the `.thumbnailer` files the system registers, made once per version of a file and kept in `~/.cache/joamag-files/thumbnails` (pictures unused for three months are dropped). PDF pages are drawn by Qt's PDF reader when it is installed (`qt6-webengine` ships it), and by the PDF thumbnailer otherwise. Copies run `cp -a` and moves `mv`, with the progress measured as the copy lands; Cancel stops the item in flight, and a cancelled copy removes what it wrote. The Trash, restore, mount and eject go through `gio`. Nothing needs root.
+Qt's folder model (`Qt.labs.folderlistmodel`) lists the folder on screen and follows changes on disk. Everything else goes through `files.sh`: the standard folders (`xdg-user-dir`), the GTK bookmarks file Nautilus uses, drives from `lsblk` and `df`, Recent from `recently-used.xbel`, the Trash from `~/.local/share/Trash` (items trashed on other drives stay in that drive's own trash), search with `find`, "Open with" from `gio mime`, and thumbnails from the `.thumbnailer` files the system registers, made once per version of a file and kept in `~/.cache/joamag-files/thumbnails` (pictures unused for three months are dropped). PDF pages are drawn by Qt's PDF reader when it is installed (`qt6-webengine` ships it), and by the PDF thumbnailer otherwise. Archives are listed, extracted and made with `bsdtar` (libarchive, which pacman itself depends on); members looked at inside an archive are kept in `~/.cache/joamag-files/archives` for a week. Copies run `cp -a` and moves `mv`, with the progress measured as the copy lands; Cancel stops the item in flight, and a cancelled copy removes what it wrote. The Trash, restore, mount and eject go through `gio`. Nothing needs root.
 
-Network shares, browsing inside archives and file properties stay with Nautilus.
+Network shares, editing inside archives and file properties stay with Nautilus.
