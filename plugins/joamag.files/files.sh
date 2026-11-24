@@ -52,6 +52,7 @@ ARCHIVE_CACHE=${XDG_CACHE_HOME:-$HOME/.cache}/joamag-files/archives
 DATA_DIRS=${XDG_DATA_DIRS:-/usr/local/share:/usr/share}
 SEARCH_LIMIT=200
 RECENT_LIMIT=40
+HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 ERR_FILE="${TMPDIR:-/tmp}/files-widget.$$.err"
 trap 'rm -f "$ERR_FILE"' EXIT
 
@@ -321,18 +322,43 @@ launch() {
   gio launch "$file" "$@" >/dev/null 2>"$ERR_FILE" || fail "$(last_error)"
 }
 
-# The clipboard file managers share is x-special/gnome-copied-files: copy
-# or cut on the first line, then a file:// URI a line. Nautilus reads and
-# writes it, and so do Thunar and Dolphin.
+# Files on the clipboard in every form apps look for: the one file managers
+# share (x-special/gnome-copied-files: copy or cut, then a file:// URI a
+# line; Nautilus, Thunar and Dolphin), the text/uri-list browsers and most
+# apps read, the paths as plain text, and a single picture as the picture
+# itself. clipboard.py offers them all at once; without Python or the
+# data-control protocol, wl-copy offers the file managers' form alone.
 clipboard_set() {
-  local mode="${1:-}" path text
+  local mode="${1:-}" path uri gnome uris="" plain="" dir mime status=2
   shift
   [[ $mode == copy || $mode == cut ]] || fail "unknown clipboard mode $mode"
   (( $# > 0 )) || fail "nothing to copy"
+  gnome=$mode
+  for path in "$@"; do
+    uri="file://$(urlencode "$path")"
+    gnome+=$'\n'"$uri"
+    uris+="$uri"$'\r\n'
+    plain+="${plain:+$'\n'}$path"
+  done
+  dir=$(mktemp -d "${TMPDIR:-/tmp}/files-clipboard.XXXXXX")
+  printf '%s' "$gnome" >"$dir/gnome"
+  printf '%s' "$uris" >"$dir/uris"
+  printf '%s' "$plain" >"$dir/plain"
+  local -a offers=("x-special/gnome-copied-files=$dir/gnome" "text/uri-list=$dir/uris")
+  for mime in "text/plain;charset=utf-8" text/plain UTF8_STRING STRING TEXT; do offers+=("$mime=$dir/plain"); done
+  if (( $# == 1 )) && [[ -f $1 ]] && (( $(stat -c %s -- "$1") <= 33554432 )); then
+    mime=$(gio info -a standard::content-type -- "$1" 2>/dev/null | sed -n 's/^ *standard::content-type: //p')
+    [[ $mime == image/* ]] && offers+=("$mime=$1")
+  fi
+  if command -v python3 >/dev/null; then
+    python3 "$HERE/clipboard.py" "${offers[@]}" 2>"$ERR_FILE"
+    status=$?
+  fi
+  rm -rf -- "$dir"
+  (( status == 0 )) && return 0
+  (( status == 2 )) || fail "$(last_error)"
   command -v wl-copy >/dev/null || fail "wl-copy is not installed"
-  text=$mode
-  for path in "$@"; do text+=$'\n'"file://$(urlencode "$path")"; done
-  printf '%s' "$text" | wl-copy --type x-special/gnome-copied-files 2>"$ERR_FILE" || fail "$(last_error)"
+  printf '%s' "$gnome" | wl-copy --type x-special/gnome-copied-files 2>"$ERR_FILE" || fail "$(last_error)"
 }
 
 # What the clipboard holds: files from a file manager (copied or cut), or

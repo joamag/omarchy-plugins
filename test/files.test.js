@@ -6,7 +6,7 @@ const assert = require("node:assert/strict")
 const fs = require("node:fs")
 const path = require("node:path")
 const { spawn } = require("node:child_process")
-const { loadModel, pluginDir, runScript, tmpdir, fakeCommand } = require("./helpers")
+const { loadModel, pluginDir, fixturePath, runScript, runScriptAsync, tmpdir, fakeCommand } = require("./helpers")
 
 const Model = loadModel("joamag.files")
 
@@ -1449,7 +1449,7 @@ case "$1" in
       mv "$1" "$trash/files/$name"
       printf '[Trash Info]\\nPath=%s\\nDeletionDate=2026-11-24T10:00:00\\n' "\${1// /%20}" > "$trash/info/$name.trashinfo"
     fi ;;
-  info) [[ -e \${@: -1} ]] && echo "  standard::content-type: text/markdown" ;;
+  info) case "\${@: -1}" in *.png) [[ -e \${@: -1} ]] && echo "  standard::content-type: image/png" ;; *) [[ -e \${@: -1} ]] && echo "  standard::content-type: text/markdown" ;; esac ;;
   mime) printf 'Default application for “text/markdown”: obsidian.desktop\\nRegistered applications:\\n\\tobsidian.desktop\\n\\tnvim.desktop\\n\\tghost.desktop\\n\\tobsidian.desktop\\nRecommended applications:\\n\\tnvim.desktop\\n' ;;
   launch) ;;
   mount) if [[ $2 == -d ]]; then echo "Mounted $3 at /run/media/u/STICK"; fi ;;
@@ -1626,16 +1626,62 @@ esac`)
     return { clip, env, offer, read: () => fs.readFileSync(clip, "utf8"), types: () => fs.readFileSync(`${clip}.types`, "utf8").trim() }
   }
 
-  it("puts files on the clipboard Nautilus reads, copied or cut", (t) => {
+  // A python3 stand-in in front of clipboard.py: it logs every TYPE=FILE
+  // offer with the file's content and exits with FAKE_PY_STATUS.
+  function helper(s) {
+    fakeCommand(s.bin, "python3", `
+for arg in "\${@:2}"; do printf '%s\\t%s\\n' "\${arg%=*}" "$(tr '\\r\\n' '|/' < "\${arg##*=}")" >> "$FAKE_LOG"; done
+[[ -n \${FAKE_PY_ERROR:-} ]] && echo "$FAKE_PY_ERROR" >&2
+exit \${FAKE_PY_STATUS:-0}`)
+  }
+
+  it("offers copied files in every form apps read", (t) => {
     const s = setup(t)
     const c = clipboard(s)
+    helper(s)
     const odd = path.join(s.home, "R&D notes.md")
-    assert.equal(s.run(["clipboard-set", "copy", odd, `${s.home}/b`], c.env).stdout, "")
+    assert.equal(s.run(["clipboard-set", "cut", odd, `${s.home}/b`], c.env).stdout, "")
+    const uri = `file://${s.home}/R%26D%20notes.md`
+    const plain = `${odd}/${s.home}/b`
+    assert.deepEqual(s.log(), [
+      `x-special/gnome-copied-files\tcut/${uri}/file://${s.home}/b`,
+      `text/uri-list\t${uri}|/file://${s.home}/b|/`,
+      `text/plain;charset=utf-8\t${plain}`,
+      `text/plain\t${plain}`,
+      `UTF8_STRING\t${plain}`,
+      `STRING\t${plain}`,
+      `TEXT\t${plain}`,
+    ])
+    // The payload files were only there for the helper to read.
+    assert.deepEqual(fs.readdirSync(s.dir).filter((n) => n.startsWith("files-clipboard.")), [])
+  })
+
+  it("offers a single picture as the picture too", (t) => {
+    const s = setup(t)
+    const c = clipboard(s)
+    helper(s)
+    const png = path.join(s.home, "shot.png")
+    write(png, "PNGDATA")
+    s.run(["clipboard-set", "copy", png], c.env)
+    assert.equal(s.log().at(-1), `image/png\tPNGDATA`)
+    // Not for several files, nor for a folder.
+    fs.rmSync(s.env.FAKE_LOG)
+    s.run(["clipboard-set", "copy", png, png], c.env)
+    assert.ok(!s.log().some((l) => l.startsWith("image/")))
+  })
+
+  it("falls back to wl-copy without the helper, and reports its failures", (t) => {
+    const s = setup(t)
+    const c = clipboard(s)
+    helper(s)
+    const odd = path.join(s.home, "R&D notes.md")
+    assert.equal(s.run(["clipboard-set", "copy", odd, `${s.home}/b`], { ...c.env, FAKE_PY_STATUS: "2" }).stdout, "")
     assert.equal(c.types(), "x-special/gnome-copied-files")
     assert.equal(c.read(), `copy\nfile://${s.home}/R%26D%20notes.md\nfile://${s.home}/b`)
     assert.deepEqual(Model.parseClipboard(s.run(["clipboard-get"], c.env).stdout), { state: "files", mode: "copy", paths: [odd, `${s.home}/b`] })
-    s.run(["clipboard-set", "cut", odd], c.env)
+    s.run(["clipboard-set", "cut", odd], { ...c.env, FAKE_PY_STATUS: "2" })
     assert.deepEqual(Model.parseClipboard(s.run(["clipboard-get"], c.env).stdout), { state: "files", mode: "cut", paths: [odd] })
+    assert.equal(s.run(["clipboard-set", "copy", odd], { ...c.env, FAKE_PY_STATUS: "1", FAKE_PY_ERROR: "clipboard.py: the compositor refused the clipboard" }).stdout, "error\tclipboard.py: the compositor refused the clipboard\n")
   })
 
   it("reads what Nautilus and other apps copy", (t) => {
@@ -1667,13 +1713,79 @@ esac`)
     const c = clipboard(s)
     assert.equal(s.run(["clipboard-set", "move", "/a"], c.env).stdout, "error\tunknown clipboard mode move\n")
     assert.equal(s.run(["clipboard-set", "copy"], c.env).stdout, "error\tnothing to copy\n")
-    assert.equal(s.run(["clipboard-set", "copy", "/a"], { ...c.env, FAKE_CLIP_FAIL: "1" }).stdout, "error\twl-copy: no seat\n")
+    helper(s)
+    assert.equal(s.run(["clipboard-set", "copy", "/a"], { ...c.env, FAKE_PY_STATUS: "2", FAKE_CLIP_FAIL: "1" }).stdout, "error\twl-copy: no seat\n")
     // Without wl-clipboard there is only the widget's own clipboard.
     const bare = path.join(s.dir, "bare")
     fs.mkdirSync(bare)
     assert.equal(runScript("joamag.files", "files.sh", ["clipboard-get"], { path: bare, env: s.env }).stdout, "clipboard\tunavailable\n")
     assert.equal(runScript("joamag.files", "files.sh", ["clipboard-set", "copy", "/a"], { path: bare, env: s.env }).stdout, "error\twl-copy is not installed\n")
     assert.equal(runScript("joamag.files", "files.sh", ["clipboard-clear"], { path: bare, env: s.env }).stdout, "error\twl-copy is not installed\n")
+  })
+
+  // clipboard.py against the compositor stand-in, over a real socket.
+  async function compositor(t, manager) {
+    const dir = tmpdir(t)
+    const sock = path.join(dir, "wayland-test")
+    const child = spawn("python3", [fixturePath("fake_compositor.py"), sock, manager])
+    let stdout = ""
+    child.stdout.on("data", (chunk) => { stdout += chunk })
+    const closed = new Promise((resolve) => child.on("close", () => resolve(stdout)))
+    for (let i = 0; i < 100 && !fs.existsSync(sock); i++) await new Promise((r) => setTimeout(r, 20))
+    const files = {}
+    for (const [name, content] of [["uris", "file:///a%20b\r\n"], ["plain", "/a b"], ["png", "PNG\u0000DATA"]]) {
+      files[name] = path.join(dir, name)
+      fs.writeFileSync(files[name], content)
+    }
+    return { dir, sock, files, seen: async () => JSON.parse(await closed) }
+  }
+
+  it("owns the clipboard with every format and serves each paste (clipboard.py)", async (t) => {
+    const c = await compositor(t, "ext_data_control_manager_v1")
+    const run = await runScriptAsync("joamag.files", "clipboard.py", ["--foreground", `text/uri-list=${c.files.uris}`, `text/plain;charset=utf-8=${c.files.plain}`, `image/png=${c.files.png}`], { env: { WAYLAND_DISPLAY: c.sock } })
+    assert.equal(run.status, 0, run.stderr)
+    assert.deepEqual(await c.seen(), {
+      manager: "ext_data_control_manager_v1",
+      version: 1,
+      offers: ["text/uri-list", "text/plain;charset=utf-8", "image/png"],
+      selection: "clipboard",
+      data: { "text/uri-list": "file:///a%20b\r\n", "text/plain;charset=utf-8": "/a b", "image/png": "PNG\u0000DATA" },
+    })
+  })
+
+  it("goes to the background once the clipboard is its own, and can set the primary one", async (t) => {
+    const c = await compositor(t, "zwlr_data_control_manager_v1")
+    const display = path.basename(c.sock)
+    const run = await runScriptAsync("joamag.files", "clipboard.py", ["--primary", `text/plain=${c.files.plain}`], { env: { WAYLAND_DISPLAY: display, XDG_RUNTIME_DIR: c.dir } })
+    assert.equal(run.status, 0, run.stderr)
+    const seen = await c.seen()
+    assert.equal(seen.manager, "zwlr_data_control_manager_v1")
+    assert.equal(seen.version, 2)
+    assert.equal(seen.selection, "primary")
+    assert.deepEqual(seen.data, { "text/plain": "/a b" })
+  })
+
+  it("tells the caller to fall back when there is no data-control or no session", async (t) => {
+    const c = await compositor(t, "none")
+    const run = await runScriptAsync("joamag.files", "clipboard.py", [`text/plain=${c.files.plain}`], { env: { WAYLAND_DISPLAY: c.sock } })
+    assert.equal(run.status, 2)
+    assert.match(run.stderr, /no data-control protocol/)
+    assert.equal((await c.seen()).selection, null)
+    const away = await runScriptAsync("joamag.files", "clipboard.py", [`text/plain=${c.files.plain}`], { env: { WAYLAND_DISPLAY: path.join(c.dir, "gone") } })
+    assert.equal(away.status, 2)
+    const unset = await runScriptAsync("joamag.files", "clipboard.py", [`text/plain=${c.files.plain}`], { env: { WAYLAND_DISPLAY: "wayland-9" } })
+    assert.equal(unset.status, 2)
+    assert.match(unset.stderr, /no Wayland session/)
+  })
+
+  it("refuses arguments it cannot offer", async (t) => {
+    const c = await compositor(t, "none")
+    assert.equal((await runScriptAsync("joamag.files", "clipboard.py", ["text/plain"], { env: { WAYLAND_DISPLAY: c.sock } })).status, 1)
+    assert.equal((await runScriptAsync("joamag.files", "clipboard.py", ["--foreground"], { env: { WAYLAND_DISPLAY: c.sock } })).status, 1)
+    // Nothing connected, so the stand-in is let go.
+    const free = await runScriptAsync("joamag.files", "clipboard.py", [`text/plain=${c.files.plain}`], { env: { WAYLAND_DISPLAY: c.sock } })
+    assert.equal(free.status, 2)
+    await c.seen()
   })
 
   it("makes a thumbnail with the registered thumbnailer and keeps it", (t) => {
