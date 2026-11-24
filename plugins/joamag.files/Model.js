@@ -761,6 +761,30 @@ function keepSelected(selected, list) {
   return out
 }
 
+// ---------- Wheel ----------
+
+// Wheel turns into whole rows: a notch (120) is PER rows, and a touchpad's
+// small deltas add up until they make one. Rows toward the top are
+// positive, the way the wheel reports them; what is left waits for the
+// next event.
+function wheelRows(carry, delta, per) {
+  var unit = 120 / Math.max(1, per)
+  var total = (Number(carry) || 0) + (Number(delta) || 0)
+  // || 0 turns the -0 a small upward remainder rounds to into 0.
+  var rows = (total > 0 ? Math.floor(total / unit) : Math.ceil(total / unit)) || 0
+  return { rows: rows, carry: total - rows * unit }
+}
+
+// The scroll offset ROWS rows further down (negative goes up), on a row
+// edge and inside the content, so the view never glides or stops between
+// rows.
+function steppedScroll(offset, rows, pitch, contentSize, viewSize) {
+  if (!(pitch > 0)) return offset
+  var last = Math.max(0, contentSize - viewSize)
+  var row = Math.round(offset / pitch) + rows
+  return Math.max(0, Math.min(last, row * pitch))
+}
+
 // ---------- Copy, move and name conflicts ----------
 
 // The first free "name (copy).ext", "name (copy 2).ext" ... Folders and dot

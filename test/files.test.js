@@ -848,6 +848,46 @@ describe("keepSelected", () => {
   })
 })
 
+describe("wheelRows", () => {
+  it("turns a notch into the wheel step, up positive", () => {
+    assert.deepEqual(Model.wheelRows(0, 120, 3), { rows: 3, carry: 0 })
+    assert.deepEqual(Model.wheelRows(0, -240, 3), { rows: -6, carry: 0 })
+    assert.deepEqual(Model.wheelRows(0, 120, 1), { rows: 1, carry: 0 })
+  })
+
+  it("adds a touchpad's small deltas up to whole rows", () => {
+    let step = Model.wheelRows(0, -15, 3)
+    assert.deepEqual(step, { rows: 0, carry: -15 })
+    step = Model.wheelRows(step.carry, -30, 3)
+    assert.deepEqual(step, { rows: -1, carry: -5 })
+    // Turning back spends what was carried first.
+    assert.deepEqual(Model.wheelRows(-5, 10, 3), { rows: 0, carry: 5 })
+  })
+
+  it("treats a missing step or delta as nothing", () => {
+    assert.deepEqual(Model.wheelRows(undefined, null, 0), { rows: 0, carry: 0 })
+    assert.deepEqual(Model.wheelRows(0, 120, 0), { rows: 1, carry: 0 })
+  })
+})
+
+describe("steppedScroll", () => {
+  it("moves by whole rows and lands on a row edge", () => {
+    assert.equal(Model.steppedScroll(0, 3, 26, 2600, 260), 78)
+    assert.equal(Model.steppedScroll(80, 3, 26, 2600, 260), 156)
+    assert.equal(Model.steppedScroll(78, -1, 26, 2600, 260), 52)
+  })
+
+  it("stays inside the content", () => {
+    assert.equal(Model.steppedScroll(2300, 10, 26, 2600, 260), 2340)
+    assert.equal(Model.steppedScroll(26, -5, 26, 2600, 260), 0)
+    assert.equal(Model.steppedScroll(0, 3, 26, 100, 260), 0)
+  })
+
+  it("leaves the offset alone without a row size", () => {
+    assert.equal(Model.steppedScroll(40, 3, 0, 2600, 260), 40)
+  })
+})
+
 describe("uniqueName", () => {
   it("returns a free name unchanged", () => {
     assert.equal(Model.uniqueName(["b.txt"], "a.txt", false), "a.txt")

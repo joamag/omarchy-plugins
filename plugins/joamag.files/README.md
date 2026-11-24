@@ -17,6 +17,7 @@ The popup and the window share the tabs; they are saved on the widget's `shell.j
 
 - Left click on the bar: open the popup, or dock the window back into it. Middle click: pop out into a window or dock. Right click: open the folder on screen in Nautilus.
 - Click selects, Ctrl+click adds to the selection, Shift+click selects a range, double click opens. Right click on an item or on empty space opens a menu.
+- The wheel scrolls in whole rows with no glide: the system's wheel step per notch (three rows by default), one row of tiles in the grid, one column sideways in the columns view; a touchpad's movement adds up to whole rows. Pressing and dragging never scrolls the list, it moves files.
 - Click a path segment to go there, or the empty end of the path bar to type a path (`~/Downloads`, `/etc`, `file:///…`, or a name relative to the folder on screen).
 - Type in the filter to narrow the folder on screen as you type; Enter searches every folder below it by name (hidden files too while they are shown), ↓ goes to the results, Esc clears.
 - Drag files onto a folder, a tab, a sidebar place or a path segment to move them there (hold Ctrl to copy), or out to another app. Files dropped from another app are copied in.

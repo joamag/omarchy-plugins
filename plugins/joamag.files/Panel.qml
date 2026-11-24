@@ -1930,6 +1930,30 @@ Panel {
     }
   }
 
+  // Discrete wheel scrolling: a notch moves the view a whole number of rows
+  // (the system's wheel step; whole columns sideways) and lands on a row
+  // edge, with no glide, so the files stay where the wheel left them. A
+  // touchpad's small deltas add up to whole rows. The views do not flick:
+  // pressing and dragging moves files instead.
+  component StepScroll: WheelHandler {
+    id: stepScroll
+    required property Flickable flick
+    required property real pitch
+    property int rowsPerNotch: Math.max(1, Qt.styleHints.wheelScrollLines)
+    property real carry: 0
+    target: null
+    onWheel: function(event) {
+      var horizontal = stepScroll.orientation === Qt.Horizontal
+      var delta = horizontal ? (event.angleDelta.x || event.pixelDelta.x) : (event.angleDelta.y || event.pixelDelta.y)
+      var step = Model.wheelRows(stepScroll.carry, delta, stepScroll.rowsPerNotch)
+      stepScroll.carry = step.carry
+      if (step.rows === 0) return
+      var f = stepScroll.flick
+      if (horizontal) f.contentX = f.originX + Model.steppedScroll(f.contentX - f.originX, -step.rows, stepScroll.pitch, f.contentWidth, f.width)
+      else f.contentY = f.originY + Model.steppedScroll(f.contentY - f.originY, -step.rows, stepScroll.pitch, f.contentHeight, f.height)
+    }
+  }
+
   // A square header button with a glyph.
   component IconButton: Button {
     property string glyph: ""
@@ -2218,6 +2242,7 @@ Panel {
       anchors.right: parent.right
       anchors.bottom: parent.bottom
       clip: true
+      interactive: false
       boundsBehavior: Flickable.StopAtBounds
       model: listPane.shown ? root.entries.length : 0
       reuseItems: true
@@ -2230,6 +2255,8 @@ Panel {
         function onListingWillChange() { list.keptY = list.contentY }
         function onListingChanged() { list.contentY = list.keptY }
       }
+
+      StepScroll { flick: list; pitch: listPane.rowHeight }
       onCurrentIndexChanged: if (currentIndex >= 0) positionViewAtIndex(currentIndex, ListView.Contain)
       onCountChanged: if (currentIndex >= 0) positionViewAtIndex(currentIndex, ListView.Contain)
 
@@ -2573,6 +2600,7 @@ Panel {
       anchors.fill: parent
       anchors.margins: Style.space(6)
       clip: true
+      interactive: false
       boundsBehavior: Flickable.StopAtBounds
       cellWidth: Math.floor(width / Math.max(1, Math.floor(width / Style.space(124))))
       cellHeight: Style.space(124)
@@ -2587,6 +2615,8 @@ Panel {
         function onListingWillChange() { grid.keptY = grid.contentY }
         function onListingChanged() { grid.contentY = grid.keptY }
       }
+
+      StepScroll { flick: grid; pitch: grid.cellHeight; rowsPerNotch: 1 }
       onCurrentIndexChanged: if (currentIndex >= 0) positionViewAtIndex(currentIndex, GridView.Contain)
       onWidthChanged: if (gridPane.shown) root.gridColumns = Math.max(1, Math.floor(width / cellWidth))
       onVisibleChanged: if (visible) root.gridColumns = Math.max(1, Math.floor(width / cellWidth))
@@ -2746,12 +2776,15 @@ Panel {
       id: columnsFlick
       anchors.fill: parent
       clip: true
+      interactive: false
       boundsBehavior: Flickable.StopAtBounds
       flickableDirection: Flickable.HorizontalFlick
       contentWidth: columnsRow.width
       contentHeight: height
       // The deepest column, where the cursor is, stays in view.
       onContentWidthChanged: contentX = Math.max(0, contentWidth - width)
+
+      StepScroll { flick: columnsFlick; pitch: columnsPane.columnWidth; orientation: Qt.Horizontal; rowsPerNotch: 1 }
 
       Row {
         id: columnsRow
@@ -2781,12 +2814,15 @@ Panel {
             id: currentColumn
             anchors.fill: parent
             clip: true
+            interactive: false
             boundsBehavior: Flickable.StopAtBounds
             model: columnsPane.shown ? root.entries.length : 0
             reuseItems: true
             currentIndex: root.cursorIndex
             highlightFollowsCurrentItem: false
             onCurrentIndexChanged: if (currentIndex >= 0) positionViewAtIndex(currentIndex, ListView.Contain)
+
+            StepScroll { flick: currentColumn; pitch: columnsPane.rowHeight }
 
             delegate: Item {
               id: cell
@@ -2972,9 +3008,12 @@ Panel {
       id: columnList
       anchors.fill: parent
       clip: true
+      interactive: false
       boundsBehavior: Flickable.StopAtBounds
       model: column.columnEntries
       opacity: column.passive ? 0.7 : 1
+
+      StepScroll { flick: columnList; pitch: column.rowHeight }
 
       delegate: Item {
         id: item
@@ -3107,11 +3146,15 @@ Panel {
     }
 
     Flickable {
+      id: previewFlick
       anchors.fill: parent
       anchors.margins: Style.space(10)
       clip: true
+      interactive: false
       contentHeight: previewColumn.implicitHeight
       boundsBehavior: Flickable.StopAtBounds
+
+      StepScroll { flick: previewFlick; pitch: Style.space(20) }
 
       Column {
         id: previewColumn
@@ -3266,8 +3309,11 @@ Panel {
     id: side
     required property color foreground
     clip: true
+    interactive: false
     contentHeight: sideColumn.implicitHeight
     boundsBehavior: Flickable.StopAtBounds
+
+    StepScroll { flick: side; pitch: Style.space(30) }
 
     Column {
       id: sideColumn
