@@ -460,6 +460,13 @@ Panel {
     moveCursor(1, false)
   }
 
+  // What an action applies to: the selection, or the entry under the
+  // cursor when nothing is selected. Worked out when an action runs rather
+  // than on every cursor step.
+  function picked() {
+    return Model.pickedEntries(entries, selected, cursorIndex)
+  }
+
   function selectAll() {
     selected = entries.map(function(e) { return e.path })
   }
