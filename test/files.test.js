@@ -906,6 +906,25 @@ describe("previewKind", () => {
   })
 })
 
+describe("lookKind", () => {
+  it("plays video and music on disk", () => {
+    assert.equal(Model.lookKind(entry("a.mp4")), "video")
+    assert.equal(Model.lookKind(entry("a.flac")), "audio")
+  })
+
+  it("shows the rest the way the pane does", () => {
+    assert.equal(Model.lookKind(entry("a.png")), "image")
+    assert.equal(Model.lookKind(entry("a.docx")), "thumbnail")
+    assert.equal(Model.lookKind(entry("a.zip")), "archive")
+    assert.equal(Model.lookKind(entry("d", { dir: true })), "dir")
+    assert.equal(Model.lookKind(null), "none")
+  })
+
+  it("does not take media out of an archive to play it", () => {
+    assert.equal(Model.lookKind(Model.makeEntry({ path: Model.archiveLocation(ZIP, "clip.mp4") })), "thumbnail")
+  })
+})
+
 describe("thumbnailKey", () => {
   it("changes with the file's date and the size asked for", () => {
     const a = entry("a.mp4", { modified: 5 })
@@ -922,11 +941,59 @@ describe("previewText", () => {
     assert.equal(Model.previewText(null, 3), "")
   })
 
+  it("reads 8192 characters unless given more", () => {
+    const long = Array.from({ length: 2000 }, (_, i) => `line ${i}`).join("\n")
+    assert.equal(Model.previewText(long, 5000), long.slice(0, 8192))
+    assert.equal(Model.previewText(long, 5000, 1e6), long)
+    assert.equal(Model.previewText(long, 10, 1e6).split("\n").length, 10)
+  })
+
   it("gives up on binary content", () => {
     assert.equal(Model.previewText("\u007fELF\u0002\u0001\u0000", 5), null)
     assert.equal(Model.previewText("caf\uFFFD", 5), null)
     // ANSI colours in a log are still text.
     assert.equal(Model.previewText("\u001b[31mred\u001b[0m", 5), "\u001b[31mred\u001b[0m")
+    // Only the start is looked at for binary, however much is read.
+    assert.equal(Model.previewText("text\n" + "a".repeat(9000) + "\u0000", 5, 1e6), "text\n" + "a".repeat(9000) + "\u0000")
+  })
+})
+
+describe("previewActions", () => {
+  it("offers to open a file or pick its app", () => {
+    assert.deepEqual(Model.previewActions(entry("a.png")).map((a) => a.id), ["open", "openwith"])
+  })
+
+  it("offers a new tab for a folder, browsing and extracting for an archive", () => {
+    assert.deepEqual(Model.previewActions(entry("d", { dir: true })).map((a) => a.id), ["open", "opentab"])
+    assert.deepEqual(Model.previewActions(entry("a.zip")).map((a) => a.label), ["Browse", "Extract here"])
+  })
+
+  it("offers copying out inside an archive and restoring in the Trash", () => {
+    assert.deepEqual(Model.previewActions(Model.makeEntry({ path: Model.archiveLocation(ZIP, "a.txt") })).map((a) => a.id), ["open", "copy"])
+    assert.deepEqual(Model.previewActions(Model.makeEntry({ path: "/t/a", trashName: "a" })).map((a) => a.id), ["restore", "purge"])
+    assert.deepEqual(Model.previewActions(null), [])
+  })
+})
+
+describe("previewFacts", () => {
+  const modified = new Date(2026, 10, 24, 9, 14).getTime()
+
+  it("lists a file's kind, size, date and folder", () => {
+    assert.deepEqual(Model.previewFacts(entry("a.pdf", { size: 184000, modified }), HOME, { pages: 3 }), [
+      ["Kind", "PDF document"], ["Size", "184 kB"], ["Pages", "3"], ["Modified", "24 Nov 2026, 09:14"], ["Where", "~/Downloads"],
+    ])
+    assert.deepEqual(Model.previewFacts(entry("a.mp4", { size: 1000 }), HOME, { length: "2:34" }).map((r) => r[0]), ["Kind", "Size", "Length", "Where"])
+  })
+
+  it("counts a folder's items when known", () => {
+    assert.deepEqual(Model.previewFacts(entry("d", { dir: true }), HOME, { items: 1 })[1], ["Contains", "1 item"])
+    assert.deepEqual(Model.previewFacts(entry("d", { dir: true }), HOME).map((r) => r[0]), ["Kind", "Where"])
+  })
+
+  it("says where a trashed file came from", () => {
+    const trashed = Model.makeEntry({ path: "/t/a.txt", trashName: "a.txt", origin: `${HOME}/Documents/a.txt`, size: 5, modified })
+    assert.deepEqual(Model.previewFacts(trashed, HOME).slice(2), [["Deleted", "24 Nov 2026, 09:14"], ["From", "~/Documents"]])
+    assert.deepEqual(Model.previewFacts(null, HOME), [])
   })
 })
 
@@ -1201,6 +1268,20 @@ describe("formatFullDate", () => {
   it("spells out day, month, year and time", () => {
     assert.equal(Model.formatFullDate(new Date(2026, 10, 24, 13, 8).getTime()), "24 Nov 2026, 13:08")
     assert.equal(Model.formatFullDate(NaN), "")
+  })
+})
+
+describe("formatDuration", () => {
+  it("shows minutes and seconds, and hours past an hour", () => {
+    assert.equal(Model.formatDuration(154000), "2:34")
+    assert.equal(Model.formatDuration(9999), "0:09")
+    assert.equal(Model.formatDuration(3723000), "1:02:03")
+  })
+
+  it("starts at zero for nothing known", () => {
+    assert.equal(Model.formatDuration(NaN), "0:00")
+    assert.equal(Model.formatDuration(-5), "0:00")
+    assert.equal(Model.formatDuration(undefined), "0:00")
   })
 })
 
@@ -1577,6 +1658,16 @@ describe("hints", () => {
     assert.equal(Model.hints("prompt")[0].key, "Enter")
     assert.equal(Model.hints("jump")[3].key, "Ctrl+Enter")
     assert.equal(Model.hints("whatever"), Model.HINTS.browse)
+  })
+})
+
+describe("lookHints", () => {
+  it("adds pages, playing and the app picker by what is shown", () => {
+    const keys = (kind) => Model.lookHints(kind).map((h) => h.key)
+    assert.deepEqual(keys("image"), ["j/k", "Space Esc", "Enter", "o"])
+    assert.deepEqual(keys("pdf"), ["j/k", "Space Esc", "Enter", "< >", "o"])
+    assert.deepEqual(keys("audio"), ["j/k", "Space Esc", "Enter", "p", "o"])
+    assert.deepEqual(keys("dir"), ["j/k", "Space Esc", "Enter"])
   })
 })
 

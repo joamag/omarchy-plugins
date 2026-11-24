@@ -8,6 +8,7 @@ A file navigator in the Omarchy bar, in the spirit of GNOME Files: a popup under
 - **Tabs** under the header, each with its place glyph, its name and its number for the `1`-`9` keys; `+` opens a new one at the same folder.
 - **The folder** as a list (name, type, size, date, sortable by clicking a column), a grid with the pictures themselves for images, the first page of PDFs and thumbnails for videos, audio, documents and fonts, or columns from the root of the path down to the folder on screen, followed by the folder under the cursor or the file's preview. Opening or closing a column slides the strip over quickly, and only that column is added or taken away; folders seen lately show at once while they are read again. Each column keeps the folder it leads through in sight. Drag a column's divider to size every column (double click it to fit the longest names); columns scrolled off to one side come back with Shift+wheel, a sideways swipe, or the ‹ › at that edge. Recent, Trash and search results also say where each item lives.
 - **Preview pane** (`i`): the selected file up close, as large as the pane allows: pictures; PDF pages, with ‹ › (or `<` `>`) to turn them and the page count; a frame of a video, an album cover, the first page of an office document or a font sample from the thumbnailers the system registers (the ones Nautilus uses); or the first lines of a text file (a binary file says so instead of showing noise). Under it the kind, size, date and folder, and Open / Open with, Open / In new tab, or Restore / Delete.
+- **Large preview** (Space): the item under the cursor over the whole view, the way Quick Look shows it. Pictures fill it, PDFs turn their pages (`<` `>`), text and code scroll with line numbers (the first 256 kB), video and music play (`p` or a click plays and pauses; they stop when the preview moves on or closes), folders and archives list what they hold, documents and fonts show their thumbnail, and anything else its details. `j` `k` or the arrows step to the previous and next item with the cursor following, Enter opens it, `o` picks the app, and Space or Esc closes it. Playing needs Qt Multimedia (`qt6-multimedia`); without it video and music show their still.
 - **Footer**: a progress line with Cancel while a long copy or move runs, the item count and the selection on the left, the clipboard, hidden files and free space on the right, the action buttons, and a line of key hints.
 - **Window**: the same view in a regular window that Hyprland moves, resizes and tiles, with a places sidebar: the standard folders, the bookmarks shared with Nautilus, drives with their free space and eject or mount, Recent and the Trash.
 
@@ -49,7 +50,8 @@ The panel keys of the other widgets and the Nautilus shortcuts both work; `?` sh
 | `l`, Enter | Open (`l` only enters folders) |
 | `h`, Backspace, Alt+`↑` | Up a folder |
 | Alt+`←` Alt+`→` | Back, forward |
-| Space, Ctrl+A | Select, select all |
+| Space | Large preview (inside it: `j` `k` step, `p` plays, Enter opens, Space or Esc closes) |
+| Ctrl+Space, Ctrl+A | Select, select all |
 | `y` `x` `p`, Ctrl+C X V | Copy, cut, paste |
 | `r`, F2 | Rename (Enter keeps it, Esc cancels) |
 | `a`, Ctrl+Shift+N, `n` | New folder, new file |
@@ -59,7 +61,7 @@ The panel keys of the other widgets and the Nautilus shortcuts both work; `?` sh
 | `o` | Open with |
 | `E` | Extract the archive under the cursor here (inside an archive: all of it) |
 | `Z` | Compress the selection |
-| `<` `>` | Previous, next page of the PDF in the preview |
+| `<` `>` | Previous, next page of the PDF in the preview pane or the large preview |
 | `/`, Ctrl+F | Filter; Enter searches below |
 | `g` | Go to: `h` home, `k` desktop, `D` documents, `d` downloads, `m` music, `p` pictures, `v` videos, `r` recent, `t` trash, `/` system, digits for bookmarks and drives |
 | `e`, Ctrl+L | Type a path |

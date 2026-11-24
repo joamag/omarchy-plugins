@@ -100,19 +100,19 @@ var GO_KEYS = [
 
 var HINTS = {
   browse: [
-    { key: "j/k", label: "move" }, { key: "l", label: "open" }, { key: "h", label: "up" }, { key: "Space", label: "select" },
+    { key: "j/k", label: "move" }, { key: "l", label: "open" }, { key: "h", label: "up" }, { key: "Space", label: "preview" },
     { key: "y", label: "copy" }, { key: "x", label: "cut" }, { key: "p", label: "paste" }, { key: "r", label: "rename" },
     { key: "a", label: "folder" }, { key: "d", label: "trash" }, { key: "o", label: "open with" }, { key: "/", label: "filter" },
     { key: "g", label: "go to" }, { key: "w", label: "window" }, { key: "?", label: "keys" }
   ],
   trash: [
-    { key: "j/k", label: "move" }, { key: "Enter", label: "restore" }, { key: "Space", label: "select" },
+    { key: "j/k", label: "move" }, { key: "Enter", label: "restore" }, { key: "Space", label: "preview" },
     { key: "Delete", label: "delete for good" }, { key: "g", label: "go to" }, { key: "?", label: "keys" }
   ],
   filter: [{ key: "type", label: "to filter" }, { key: "Enter", label: "search below" }, { key: "↓", label: "to the results" }, { key: "Esc", label: "clear" }],
   rename: [{ key: "Enter", label: "rename" }, { key: "Esc", label: "cancel" }],
   archive: [
-    { key: "j/k", label: "move" }, { key: "l", label: "open" }, { key: "h", label: "up" }, { key: "Space", label: "select" },
+    { key: "j/k", label: "move" }, { key: "l", label: "open" }, { key: "h", label: "up" }, { key: "Space", label: "preview" },
     { key: "y", label: "copy out" }, { key: "E", label: "extract all" }, { key: "g", label: "go to" }, { key: "?", label: "keys" }
   ],
   prompt: [{ key: "Enter", label: "go ahead" }, { key: "Esc", label: "cancel" }],
@@ -124,11 +124,11 @@ var HINTS = {
 // Nautilus shortcuts side by side.
 var KEYS = [
   ["j k  ↓ ↑", "Move"], ["J K  Shift+↓ ↑", "Extend the selection"], ["l  Enter", "Open"], ["h  Backspace  Alt+↑", "Up a folder"],
-  ["Alt+← Alt+→", "Back, forward"], ["Space  Ctrl+click", "Select"], ["Middle click  Ctrl+double click", "Folder in a new tab"], ["Ctrl+A", "Select all"], ["y  Ctrl+C", "Copy"],
+  ["Alt+← Alt+→", "Back, forward"], ["Space", "Large preview: j k step, Space or Esc closes"], ["Ctrl+Space  Ctrl+click", "Select"], ["Middle click  Ctrl+double click", "Folder in a new tab"], ["Ctrl+A", "Select all"], ["y  Ctrl+C", "Copy"],
   ["x  Ctrl+X", "Cut"], ["p  Ctrl+V", "Paste"], ["r  F2", "Rename"], ["a  Ctrl+Shift+N", "New folder"],
   ["n", "New file"], ["d  Delete", "Move to Trash"], ["Ctrl+Z", "Undo the move to Trash"], ["Shift+Delete", "Delete for good"],
   ["o", "Open with"], ["E", "Extract the archive here"], ["Z", "Compress to .zip"],
-  ["<  >", "Previous, next PDF page in the preview"], ["/  Ctrl+F", "Filter, Enter searches below"], ["g", "Go to a place"], ["Ctrl+P", "Jump to a recent folder"], ["e  Ctrl+L", "Type a path"], ["t  Ctrl+T", "New tab"],
+  ["<  >", "Previous, next PDF page in the preview"], ["p, in the large preview", "Play or pause"], ["/  Ctrl+F", "Filter, Enter searches below"], ["g", "Go to a place"], ["Ctrl+P", "Jump to a recent folder"], ["e  Ctrl+L", "Type a path"], ["t  Ctrl+T", "New tab"],
   ["q  Ctrl+W", "Close the tab"], ["[ ]  Ctrl+Tab", "Previous, next tab"], ["1-9", "Go to a tab"], ["v  Ctrl+1 2 3", "List, grid, columns"],
   [".  Ctrl+H", "Hidden files"], ["i", "Preview pane"], ["s", "Sort by the next column"], ["Ctrl+D", "Bookmark the folder"],
   ["w", "Pop out or dock"], ["N", "Open in Nautilus"], ["Esc", "Clear, then close"], ["Tab", "Next widget"]
@@ -853,17 +853,53 @@ function previewKind(entry) {
   return "none"
 }
 
+// What the large preview shows: what the pane shows, except that video and
+// music on disk play rather than show a still. Inside an archive they are
+// not taken out to be played.
+function lookKind(entry) {
+  var kind = previewKind(entry)
+  if (kind === "thumbnail" && (entry.kind === "video" || entry.kind === "audio") && !isArchiveLocation(entry.path)) return entry.kind
+  return kind
+}
+
 // One thumbnail per file version and size.
 function thumbnailKey(entry, size) {
   return entry ? entry.path + "|" + entry.modified + "|" + size : ""
 }
 
-// The first lines of a text file for the preview, or null when it turns
-// out to be binary: a file without an extension is often a program.
-function previewText(text, lines) {
-  var head = String(text || "").slice(0, 8192)
-  if (/[\u0000-\u0008\u000E-\u001A\u001C-\u001F\uFFFD]/.test(head)) return null
+// The first lines of a text file for the preview, from its first SIZE
+// characters (8192 unless told), or null when it turns out to be binary: a
+// file without an extension is often a program.
+function previewText(text, lines, size) {
+  var head = String(text || "").slice(0, size || 8192)
+  if (/[\u0000-\u0008\u000E-\u001A\u001C-\u001F\uFFFD]/.test(head.slice(0, 8192))) return null
   return head.split("\n").slice(0, lines).join("\n")
+}
+
+// What the preview offers to do with an entry, by what it is and where.
+function previewActions(entry) {
+  if (!entry || !entry.path) return []
+  if (entry.trashName) return [{ id: "restore", label: "Restore" }, { id: "purge", label: "Delete" }]
+  if (isArchiveLocation(entry.path)) return [{ id: "open", label: "Open" }, { id: "copy", label: "Copy out" }]
+  if (isArchive(entry)) return [{ id: "open", label: "Browse" }, { id: "extracthere", label: "Extract here" }]
+  if (entry.dir) return [{ id: "open", label: "Open" }, { id: "opentab", label: "In new tab" }]
+  return [{ id: "open", label: "Open" }, { id: "openwith", label: "Open with" }]
+}
+
+// The details the preview lists, as label and value pairs. MORE adds what
+// only the preview knows: how many items a folder holds, a PDF's pages,
+// a video's or a song's length.
+function previewFacts(entry, home, more) {
+  if (!entry || !entry.path) return []
+  var extra = more || {}
+  var rows = [["Kind", entry.type]]
+  if (!entry.dir) rows.push(["Size", formatSize(entry.size)])
+  else if (extra.items !== undefined) rows.push(["Contains", plural(extra.items, "item")])
+  if (extra.pages > 0) rows.push(["Pages", String(extra.pages)])
+  if (extra.length) rows.push(["Length", extra.length])
+  if (isFinite(entry.modified)) rows.push([entry.trashName ? "Deleted" : "Modified", formatFullDate(entry.modified)])
+  rows.push([entry.trashName ? "From" : "Where", prettyPath(parentPath(entry.trashName ? entry.origin : entry.path), home)])
+  return rows
 }
 
 // One row of a listing, from the folder model or a files.sh entry line.
@@ -1091,6 +1127,17 @@ function formatFullDate(ms) {
   if (!isFinite(t) || t <= 0) return ""
   var d = new Date(t)
   return d.getDate() + " " + MONTHS[d.getMonth()] + " " + d.getFullYear() + ", " + pad2(d.getHours()) + ":" + pad2(d.getMinutes())
+}
+
+// A media position or length in milliseconds as the players show it:
+// 2:34, or 1:02:03 past an hour.
+function formatDuration(ms) {
+  var total = Math.floor(num(ms) / 1000)
+  if (!isFinite(total) || total < 0) total = 0
+  var h = Math.floor(total / 3600)
+  var m = Math.floor(total / 60) % 60
+  var sec = pad2(total % 60)
+  return h > 0 ? h + ":" + pad2(m) + ":" + sec : m + ":" + sec
 }
 
 function plural(n, one, many) {
@@ -1424,6 +1471,15 @@ function tooltip(tabs, active, label) {
 
 function hints(mode) {
   return HINTS[mode] || HINTS.browse
+}
+
+// The large preview's hint line, by what it shows.
+function lookHints(kind) {
+  var out = [{ key: "j/k", label: "previous / next" }, { key: "Space Esc", label: "close" }, { key: "Enter", label: "open" }]
+  if (kind === "pdf") out.push({ key: "< >", label: "pages" })
+  if (kind === "video" || kind === "audio") out.push({ key: "p", label: "play / pause" })
+  if (kind !== "dir") out.push({ key: "o", label: "open with" })
+  return out
 }
 
 // Where a menu goes in an area: its corner at the pointer, or its right

@@ -33,6 +33,8 @@ Panel {
   property bool jumpOpen: false
   property string jumpQuery: ""
   property int jumpIndex: 0
+  // Space: the entry under the cursor in a large preview over the view.
+  property bool lookOpen: false
 
   // Places, bookmarks, drives and the trash count from files.sh, and the
   // free space of the filesystem the folder on screen lives on.
@@ -263,6 +265,7 @@ Panel {
     editingPath = false
     menu = null
     goMenuOpen = false
+    lookOpen = false
     lastError = ""
   }
 
@@ -1445,6 +1448,22 @@ Panel {
     focusRequested("jump")
   }
 
+  // Space: the entry under the cursor up close, over the whole view. It
+  // shows the preview's entry, which follows the cursor as j and k step.
+  function openLook() {
+    if (!cursorEntry) return
+    previewTimer.stop()
+    previewEntry = cursorEntry
+    previewPage = 0
+    menu = null
+    goMenuOpen = false
+    lookOpen = true
+  }
+
+  function closeLook() {
+    lookOpen = false
+  }
+
   function closeJump() {
     jumpOpen = false
     focusRequested("view")
@@ -1652,6 +1671,7 @@ Panel {
       case Qt.Key_PageUp: switchTab(activeTab - 1); return true
       case Qt.Key_L: startPathEdit(); return true
       case Qt.Key_P: openJump(); return true
+      case Qt.Key_Space: toggleCursorSelection(); return true
       case Qt.Key_H: toggleHidden(); return true
       case Qt.Key_F: startFilter(); return true
       case Qt.Key_C: setClipboard("copy"); return true
@@ -1697,7 +1717,7 @@ Panel {
       return true
     case Qt.Key_Return:
     case Qt.Key_Enter: openPicked(); return true
-    case Qt.Key_Space: toggleCursorSelection(); return true
+    case Qt.Key_Space: openLook(); return true
     case Qt.Key_Backspace: up(); return true
     case Qt.Key_F2: startRename(""); return true
     case Qt.Key_Delete:
@@ -1796,6 +1816,7 @@ Panel {
       if (renamePath !== "") cancelRename()
       editingPath = false
       jumpOpen = false
+      lookOpen = false
       menu = null
       confirm = null
       if (tabsDirty) saveTabs()
@@ -2144,6 +2165,10 @@ Panel {
       }
       if (root.conflictJob) {
         if (conflictCard.handleKey(event)) event.accepted = true
+        return
+      }
+      if (root.lookOpen) {
+        if (lookCard.handleKey(event)) event.accepted = true
         return
       }
       if (viewRoot.typing) return
@@ -2611,6 +2636,13 @@ Panel {
 
     JumpCard {
       id: jumpCard
+      anchors.fill: parent
+      foreground: viewRoot.foreground
+      background: viewRoot.background
+    }
+
+    LookCard {
+      id: lookCard
       anchors.fill: parent
       foreground: viewRoot.foreground
       background: viewRoot.background
@@ -4392,14 +4424,10 @@ Panel {
 
           Repeater {
             model: {
-              var e = previewRoot.entry
-              if (!e) return []
-              var rows = [["Kind", e.type]]
-              if (!e.dir) rows.push(["Size", Model.formatSize(e.size)])
-              else if (!previewRoot.member) rows.push(["Contains", Model.plural(previewFolder.count, "item")])
-              if (previewRoot.kind === "pdf" && pageImage.frameCount > 0) rows.push(["Pages", String(pageImage.frameCount)])
-              if (isFinite(e.modified)) rows.push([e.trashName ? "Deleted" : "Modified", Model.formatFullDate(e.modified)])
-              rows.push([e.trashName ? "From" : "Where", Model.prettyPath(Model.parentPath(e.trashName ? e.origin : e.path), root.home)])
+              var rows = Model.previewFacts(previewRoot.entry, root.home, {
+                items: previewRoot.member ? undefined : previewFolder.count,
+                pages: previewRoot.kind === "pdf" ? pageImage.frameCount : 0
+              })
               var flat = []
               for (var i = 0; i < rows.length; i++) flat.push({ text: rows[i][0], key: true }, { text: rows[i][1], key: false })
               return flat
@@ -4424,15 +4452,7 @@ Panel {
           width: parent.width
           spacing: Style.space(6)
 
-          readonly property var buttons: {
-            var e = previewRoot.entry
-            if (!e) return []
-            if (e.trashName) return [{ id: "restore", label: "Restore" }, { id: "purge", label: "Delete" }]
-            if (previewRoot.member) return [{ id: "open", label: "Open" }, { id: "copy", label: "Copy out" }]
-            if (Model.isArchive(e)) return [{ id: "open", label: "Browse" }, { id: "extracthere", label: "Extract here" }]
-            if (e.dir) return [{ id: "open", label: "Open" }, { id: "opentab", label: "In new tab" }]
-            return [{ id: "open", label: "Open" }, { id: "openwith", label: "Open with" }]
-          }
+          readonly property var buttons: Model.previewActions(previewRoot.entry)
 
           Repeater {
             model: parent.buttons
@@ -5297,6 +5317,601 @@ Panel {
           }
 
           StepScroll { flick: jumpView; pitch: jumpLayer.rowHeight }
+        }
+      }
+    }
+  }
+
+  // Space: the entry under the cursor up close, over the whole view, the way
+  // Quick Look shows it. j and k step through the folder with it open, Space
+  // or Esc closes it. Pictures fill it, PDFs turn their pages, text scrolls,
+  // video and music play, folders and archives list what they hold, and
+  // anything else shows its details.
+  component LookCard: Item {
+    id: lookLayer
+    required property color foreground
+    required property color background
+    visible: root.lookOpen
+    z: 18
+
+    // Read through entry itself, never through a flag worked out from it: as
+    // the preview closes or moves on, a flag can lag the entry by a moment.
+    readonly property var entry: root.lookOpen && root.previewEntry && root.previewEntry.path !== "" ? root.previewEntry : null
+    readonly property string wanted: Model.lookKind(entry)
+    readonly property bool playable: wanted === "video" || wanted === "audio"
+    // Without Qt Multimedia, video and music show their still instead.
+    readonly property string kind: playable && mediaLoader.status === Loader.Error ? "thumbnail" : wanted
+    // A member of an archive is shown from its copy in the cache, made as it
+    // is previewed.
+    readonly property bool member: entry !== null && Model.isArchiveLocation(entry.path)
+    readonly property bool needsContent: kind === "image" || kind === "pdf" || kind === "text" || kind === "thumbnail"
+    readonly property string sourcePath: !entry ? "" : (Model.isArchiveLocation(entry.path) ? (root.extracted[entry.path] || "") : entry.path)
+    readonly property bool ready: sourcePath !== "" && (!member || needsContent || kind === "dir" || kind === "archive")
+    readonly property bool pdfFailed: kind === "pdf" && lookPage.status === Image.Error
+    // The thumbnailer's picture: for documents and fonts, a PDF Qt cannot
+    // read, and as a video's still or a song's cover.
+    readonly property bool wantsThumbnail: ready && (kind === "thumbnail" || pdfFailed || playable)
+    readonly property string thumbKey: wantsThumbnail && entry ? Model.thumbnailKey({ path: sourcePath, modified: entry.modified }, 512) : ""
+    readonly property string thumbPath: thumbKey !== "" ? (root.thumbnails[thumbKey] || "") : ""
+
+    // A folder's or an archive's contents, and how much they hold.
+    property var folderItems: []
+    readonly property var archiveInfo: kind === "archive" && entry && !Model.isArchiveLocation(entry.path) ? root.archives[entry.path] || null : null
+    readonly property var contents: kind === "dir" ? folderItems : (archiveInfo && archiveInfo.members && entry ? Model.archiveEntries(archiveInfo.members, entry.path, "") : [])
+    readonly property string contentsSummary: {
+      if (kind === "archive") {
+        var l = archiveInfo
+        if (!l || (l.loading && !l.members)) return "Reading the archive…"
+        if (l.error !== "" && (!l.members || l.members.length === 0)) return "Cannot read it: " + l.error
+        var sum = Model.archiveSummary(l.members, 0)
+        return Model.plural(sum.files, "file") + ", " + Model.plural(sum.dirs, "folder") + " · " + Model.formatSize(sum.bytes) + " unpacked"
+      }
+      var dirs = folderItems.filter(function(e) { return e.dir }).length
+      return Model.plural(folderItems.length, "item") + ", " + Model.plural(dirs, "folder")
+    }
+
+    // The first 256 kB of a text file, read with head so a huge log costs no
+    // more than a small one.
+    readonly property string textPath: kind === "text" && ready ? sourcePath : ""
+    property string textBody: ""
+    property string textOf: ""
+    readonly property bool textReady: textPath !== "" && textOf === textPath
+    readonly property var textLines: textReady ? Model.previewText(textBody, 5000, 262144) : ""
+    readonly property var textRows: textReady && textLines ? textLines.split("\n") : []
+
+    function readText() {
+      if (textPath === "" || textPath === textOf || textProc.running) return
+      textProc.target = textPath
+      textProc.command = ["head", "-c", "262144", "--", textPath]
+      textProc.running = true
+    }
+
+    function snapshotContents() {
+      if (kind !== "dir" || contentsModel.status === FolderListModel.Loading) return
+      var out = []
+      for (var i = 0; i < contentsModel.count; i++) {
+        out.push(Model.makeEntry({
+          path: contentsModel.get(i, "filePath"),
+          dir: contentsModel.get(i, "fileIsDir") === true,
+          size: contentsModel.get(i, "fileSize")
+        }))
+      }
+      folderItems = Model.sortEntries(Model.filterEntries(out, "", root.showHidden), root.sortKey, root.sortDescending)
+    }
+
+    // Open closes the preview first, as every other action does.
+    function runAction(id) {
+      var target = entry
+      root.closeLook()
+      if (id === "open") root.openEntry(target)
+      else root.run(id, target)
+    }
+
+    function handleKey(event) {
+      var key = event.key
+      var text = event.text
+      if (key === Qt.Key_Space && (event.modifiers & Qt.ControlModifier)) root.toggleCursorSelection()
+      else if (key === Qt.Key_Escape || key === Qt.Key_Space) root.closeLook()
+      else if (key === Qt.Key_Down || key === Qt.Key_Right || text === "j") root.moveCursor(1, false)
+      else if (key === Qt.Key_Up || key === Qt.Key_Left || text === "k") root.moveCursor(-1, false)
+      else if (key === Qt.Key_Return || key === Qt.Key_Enter) runAction("open")
+      else if (text === "o" && entry && !entry.dir) runAction("openwith")
+      else if (text === "<") root.stepPage(-1)
+      else if (text === ">") root.stepPage(1)
+      else if (text === "p" && mediaLoader.item) mediaLoader.item.toggle()
+      else return false
+      return true
+    }
+
+    onTextPathChanged: readText()
+    onThumbKeyChanged: if (thumbKey !== "" && entry) root.requestThumbnail({ path: sourcePath, modified: entry.modified }, 512)
+    // The bindings above may not have caught up with a new entry yet, so the
+    // entry itself is read here.
+    onEntryChanged: {
+      folderItems = []
+      if (!entry || !entry.path) return
+      var kindNow = Model.lookKind(entry)
+      var inside = Model.isArchiveLocation(entry.path)
+      if (inside && (kindNow === "image" || kindNow === "pdf" || kindNow === "text" || kindNow === "thumbnail")) root.extractMember(entry, null)
+      else if (kindNow === "archive" && !inside) root.loadArchive(entry.path, entry.modified, false)
+      else if (kindNow === "dir" && !inside) {
+        var seen = root.listingCache[entry.path]
+        if (seen) folderItems = Model.sortEntries(Model.filterEntries(seen, "", root.showHidden), root.sortKey, root.sortDescending)
+      }
+    }
+
+    Process {
+      id: textProc
+      property string target: ""
+      stdout: StdioCollector {
+        waitForEnd: true
+        onStreamFinished: {
+          lookLayer.textBody = text
+          lookLayer.textOf = textProc.target
+        }
+      }
+      // A file asked for while this one was read is read next.
+      onExited: lookLayer.readText()
+    }
+
+    FolderListModel {
+      id: contentsModel
+      folder: lookLayer.kind === "dir" && lookLayer.entry && !Model.isArchiveLocation(lookLayer.entry.path) ? Model.fileUrl(lookLayer.entry.path) : ""
+      showDirsFirst: true
+      showDotAndDotDot: false
+      showHidden: true
+      showOnlyReadable: false
+      caseSensitive: false
+      onStatusChanged: if (status === FolderListModel.Ready) Qt.callLater(lookLayer.snapshotContents)
+      onCountChanged: contentsTimer.restart()
+    }
+
+    Timer {
+      id: contentsTimer
+      interval: 40
+      onTriggered: lookLayer.snapshotContents()
+    }
+
+    Rectangle {
+      anchors.fill: parent
+      color: Qt.rgba(lookLayer.background.r, lookLayer.background.g, lookLayer.background.b, 0.7)
+      MouseArea { anchors.fill: parent; onClicked: root.closeLook() }
+    }
+
+    BorderSurface {
+      id: lookBox
+      anchors.fill: parent
+      anchors.margins: Style.space(14)
+      color: lookLayer.background
+      borderSpec: Border.flat(Color.accent, Style.normalBorderWidth)
+      padding: Style.space(10)
+
+      MouseArea { anchors.fill: parent }
+
+      // The name, where it is in the folder, and the way out.
+      Row {
+        id: lookTop
+        x: lookBox.contentLeftInset
+        y: lookBox.contentTopInset
+        width: lookBox.width - lookBox.contentLeftInset - lookBox.contentRightInset
+        height: Style.spacing.controlHeight
+        spacing: root.iconGap
+
+        Text {
+          anchors.verticalCenter: parent.verticalCenter
+          width: root.iconBox
+          horizontalAlignment: Text.AlignHCenter
+          textFormat: Text.PlainText
+          text: lookLayer.entry ? Model.kindIcon(lookLayer.entry.kind) : ""
+          color: lookLayer.entry && lookLayer.entry.dir ? Color.accent : lookLayer.foreground
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.body
+        }
+
+        Text {
+          anchors.verticalCenter: parent.verticalCenter
+          width: parent.width - root.iconBox - lookPosition.width - Style.spacing.controlHeight - parent.spacing * 3
+          textFormat: Text.PlainText
+          text: lookLayer.entry ? lookLayer.entry.name : ""
+          color: lookLayer.foreground
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.bodySmall
+          font.bold: true
+          elide: Text.ElideMiddle
+        }
+
+        Text {
+          id: lookPosition
+          anchors.verticalCenter: parent.verticalCenter
+          textFormat: Text.PlainText
+          text: (root.cursorIndex + 1) + " of " + root.entries.length
+          color: lookLayer.foreground
+          opacity: 0.5
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.caption
+        }
+
+        IconButton { glyph: "󰅖"; tip: "Close (Space or Esc)"; onClicked: root.closeLook() }
+      }
+
+      // What the entry holds, as large as the card allows.
+      Item {
+        id: lookStage
+        x: lookBox.contentLeftInset
+        y: lookTop.y + lookTop.height + Style.space(8)
+        width: lookTop.width
+        height: lookFoot.y - y - Style.space(8)
+        clip: true
+
+        readonly property real side: Style.space(40)
+
+        Rectangle {
+          anchors.fill: parent
+          color: Qt.rgba(lookLayer.foreground.r, lookLayer.foreground.g, lookLayer.foreground.b, 0.04)
+        }
+
+        Item {
+          id: lookContent
+          anchors.fill: parent
+          anchors.leftMargin: lookStage.side
+          anchors.rightMargin: lookStage.side
+          anchors.topMargin: Style.space(10)
+          anchors.bottomMargin: Style.space(10)
+
+          SizedImage {
+            id: lookPicture
+            anchors.fill: parent
+            visible: lookLayer.kind === "image" && lookLayer.ready
+            url: visible ? Model.fileUrl(lookLayer.sourcePath) : ""
+          }
+
+          Image {
+            id: lookPage
+            anchors.fill: parent
+            visible: status === Image.Ready
+            source: lookLayer.kind === "pdf" && lookLayer.ready ? Model.fileUrl(lookLayer.sourcePath) : ""
+            currentFrame: Math.min(root.previewPage, Math.max(0, frameCount - 1))
+            sourceSize.width: Math.ceil(width * Screen.devicePixelRatio)
+            sourceSize.height: Math.ceil(height * Screen.devicePixelRatio)
+            fillMode: Image.PreserveAspectFit
+            asynchronous: true
+            onFrameCountChanged: if (lookLayer.kind === "pdf") root.previewPages = frameCount
+          }
+
+          SizedImage {
+            id: lookThumb
+            anchors.fill: parent
+            visible: (lookLayer.kind === "thumbnail" || lookLayer.pdfFailed) && lookLayer.thumbPath !== ""
+            url: lookLayer.thumbPath !== "" ? Model.fileUrl(lookLayer.thumbPath) : ""
+          }
+
+          Loader {
+            id: mediaLoader
+            anchors.fill: parent
+            active: lookLayer.playable && lookLayer.ready
+            source: Qt.resolvedUrl("LookMedia.qml")
+            onLoaded: {
+              item.path = Qt.binding(function() { return lookLayer.sourcePath })
+              item.video = Qt.binding(function() { return lookLayer.wanted === "video" })
+              item.still = Qt.binding(function() { return lookLayer.thumbPath })
+              item.name = Qt.binding(function() { return lookLayer.entry ? lookLayer.entry.name : "" })
+              item.foreground = Qt.binding(function() { return lookLayer.foreground })
+              item.fontFamily = Qt.binding(function() { return root.fontFamily })
+            }
+          }
+
+          // Text and code, with line numbers, scrolling a line at a time.
+          ListView {
+            id: textView
+            anchors.fill: parent
+            visible: lookLayer.kind === "text" && lookLayer.textRows.length > 0
+            clip: true
+            interactive: false
+            boundsBehavior: Flickable.StopAtBounds
+            model: visible ? lookLayer.textRows.length : 0
+            reuseItems: true
+
+            readonly property real numberWidth: Style.space(12) + String(lookLayer.textRows.length).length * Style.font.caption * 0.62
+
+            delegate: Row {
+              required property int index
+              width: textView.width
+              spacing: Style.space(10)
+
+              Text {
+                width: textView.numberWidth
+                horizontalAlignment: Text.AlignRight
+                textFormat: Text.PlainText
+                text: String(index + 1)
+                color: lookLayer.foreground
+                opacity: 0.35
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+              }
+
+              Text {
+                width: textView.width - textView.numberWidth - parent.spacing
+                textFormat: Text.PlainText
+                text: lookLayer.textRows[index] || ""
+                color: lookLayer.foreground
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+                wrapMode: Text.WrapAnywhere
+              }
+            }
+          }
+
+          StepScroll { flick: textView; pitch: Style.font.caption * 1.5 }
+
+          // A folder's or an archive's contents, a few columns of rows.
+          Item {
+            anchors.fill: parent
+            visible: lookLayer.kind === "dir" || (lookLayer.kind === "archive" && !lookLayer.member)
+
+            Text {
+              id: contentsHead
+              width: parent.width
+              textFormat: Text.PlainText
+              text: lookLayer.contentsSummary
+              color: lookLayer.foreground
+              opacity: 0.6
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+            }
+
+            GridView {
+              id: contentsView
+              anchors.left: parent.left
+              anchors.right: parent.right
+              anchors.top: contentsHead.bottom
+              anchors.bottom: parent.bottom
+              anchors.topMargin: Style.space(8)
+              clip: true
+              interactive: false
+              boundsBehavior: Flickable.StopAtBounds
+              model: parent.visible ? lookLayer.contents.length : 0
+              reuseItems: true
+              cellWidth: width / Math.max(1, Math.floor(width / Style.space(230)))
+              cellHeight: Style.space(30)
+
+              delegate: Item {
+                id: contentsCell
+                required property int index
+                readonly property var item: lookLayer.contents[index] || root.blankEntry
+                width: contentsView.cellWidth
+                height: contentsView.cellHeight
+
+                Rectangle {
+                  anchors.fill: parent
+                  anchors.rightMargin: Style.space(6)
+                  anchors.bottomMargin: Style.space(4)
+                  color: "transparent"
+                  border.width: 1
+                  border.color: Qt.rgba(lookLayer.foreground.r, lookLayer.foreground.g, lookLayer.foreground.b, 0.12)
+
+                  Row {
+                    anchors.fill: parent
+                    anchors.leftMargin: Style.space(4)
+                    anchors.rightMargin: Style.space(8)
+                    spacing: root.iconGap
+
+                    Text {
+                      anchors.verticalCenter: parent.verticalCenter
+                      width: root.iconBox
+                      horizontalAlignment: Text.AlignHCenter
+                      textFormat: Text.PlainText
+                      text: Model.kindIcon(contentsCell.item.kind)
+                      color: contentsCell.item.dir ? Color.accent : lookLayer.foreground
+                      font.family: root.fontFamily
+                      font.pixelSize: Style.font.bodySmall
+                    }
+
+                    Text {
+                      anchors.verticalCenter: parent.verticalCenter
+                      width: parent.width - root.iconBox - contentsSize.width - parent.spacing * 2
+                      textFormat: Text.PlainText
+                      text: contentsCell.item.name
+                      color: lookLayer.foreground
+                      font.family: root.fontFamily
+                      font.pixelSize: Style.font.caption
+                      font.bold: contentsCell.item.dir
+                      elide: Text.ElideMiddle
+                    }
+
+                    Text {
+                      id: contentsSize
+                      anchors.verticalCenter: parent.verticalCenter
+                      textFormat: Text.PlainText
+                      text: contentsCell.item.dir ? "" : Model.formatSize(contentsCell.item.size)
+                      color: lookLayer.foreground
+                      opacity: 0.5
+                      font.family: root.fontFamily
+                      font.pixelSize: Style.font.caption
+                    }
+                  }
+                }
+              }
+            }
+
+            StepScroll { flick: contentsView; pitch: contentsView.cellHeight; rowsPerNotch: 1 }
+          }
+
+          // Nothing to show yet, or nothing to show at all.
+          Column {
+            anchors.centerIn: parent
+            width: parent.width
+            visible: !lookPicture.visible && !lookPage.visible && !lookThumb.visible && !mediaLoader.item && !textView.visible && !(lookLayer.kind === "dir" || (lookLayer.kind === "archive" && !lookLayer.member))
+            spacing: Style.space(10)
+
+            Text {
+              anchors.horizontalCenter: parent.horizontalCenter
+              textFormat: Text.PlainText
+              text: lookLayer.entry ? Model.kindIcon(lookLayer.entry.kind) : ""
+              color: lookLayer.foreground
+              opacity: 0.6
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.displayLarge
+            }
+
+            Text {
+              width: parent.width
+              horizontalAlignment: Text.AlignHCenter
+              textFormat: Text.PlainText
+              text: {
+                if (lookLayer.member && lookLayer.needsContent && !lookLayer.ready) return "Taking it out of the archive…"
+                if (lookLayer.kind === "text" && lookLayer.textReady && lookLayer.textLines === null) return "Binary file, no text to show"
+                if (lookLayer.kind === "text" && lookLayer.textReady && lookLayer.textLines === "") return "Empty file"
+                if (lookLayer.kind === "text" || lookLayer.kind === "image" || lookLayer.kind === "pdf") return ""
+                if (lookLayer.wantsThumbnail && !(lookLayer.thumbKey in root.thumbnails)) return "Making a preview…"
+                return lookLayer.entry ? "No preview for " + lookLayer.entry.type.toLowerCase() + " files" : ""
+              }
+              color: lookLayer.foreground
+              opacity: 0.6
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+              wrapMode: Text.Wrap
+            }
+          }
+        }
+
+        // Pages of a PDF: ‹ and › here, or < and > from the keyboard.
+        Row {
+          visible: lookLayer.kind === "pdf" && lookPage.visible && lookPage.frameCount > 1
+          anchors.horizontalCenter: parent.horizontalCenter
+          anchors.bottom: parent.bottom
+          anchors.bottomMargin: Style.space(14)
+          spacing: Style.space(8)
+
+          IconButton { glyph: "󰅁"; tip: "Previous page (<)"; enabled: root.previewPage > 0; onClicked: root.stepPage(-1) }
+
+          Text {
+            anchors.verticalCenter: parent.verticalCenter
+            textFormat: Text.PlainText
+            text: "Page " + (lookPage.currentFrame + 1) + " of " + lookPage.frameCount
+            color: lookLayer.foreground
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.caption
+          }
+
+          IconButton { glyph: "󰅂"; tip: "Next page (>)"; enabled: root.previewPage < lookPage.frameCount - 1; onClicked: root.stepPage(1) }
+        }
+
+        // The previous and the next entry, at either side.
+        Repeater {
+          model: [-1, 1]
+
+          Item {
+            id: lookNav
+            required property int modelData
+            readonly property bool back: modelData < 0
+            visible: back ? root.cursorIndex > 0 : root.cursorIndex < root.entries.length - 1
+            x: back ? 0 : lookStage.width - width
+            width: lookStage.side
+            height: lookStage.height
+
+            Text {
+              anchors.centerIn: parent
+              textFormat: Text.PlainText
+              text: lookNav.back ? "󰅁" : "󰅂"
+              color: navMouse.containsMouse ? Color.accent : lookLayer.foreground
+              opacity: navMouse.containsMouse ? 1 : 0.5
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.title
+            }
+
+            MouseArea {
+              id: navMouse
+              anchors.fill: parent
+              hoverEnabled: true
+              cursorShape: Qt.PointingHandCursor
+              onClicked: root.moveCursor(lookNav.modelData, false)
+            }
+          }
+        }
+      }
+
+      // The details, what can be done with it, and the keys.
+      Column {
+        id: lookFoot
+        x: lookBox.contentLeftInset
+        y: lookBox.height - lookBox.contentBottomInset - height
+        width: lookTop.width
+        spacing: Style.space(6)
+
+        Row {
+          width: parent.width
+          spacing: Style.space(10)
+
+          Flow {
+            id: lookFacts
+            anchors.verticalCenter: parent.verticalCenter
+            width: parent.width - lookButtons.width - parent.spacing
+            spacing: Style.space(16)
+
+            Repeater {
+              model: Model.previewFacts(lookLayer.entry, root.home, {
+                items: lookLayer.kind === "dir" ? lookLayer.folderItems.length : undefined,
+                pages: lookLayer.kind === "pdf" ? lookPage.frameCount : 0,
+                length: mediaLoader.item && mediaLoader.item.duration > 0 ? Model.formatDuration(mediaLoader.item.duration) : ""
+              })
+
+              Row {
+                required property var modelData
+                spacing: Style.space(6)
+
+                Text {
+                  textFormat: Text.PlainText
+                  text: modelData[0]
+                  color: lookLayer.foreground
+                  opacity: 0.5
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                }
+
+                Text {
+                  textFormat: Text.PlainText
+                  text: modelData[1]
+                  color: lookLayer.foreground
+                  opacity: 0.9
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                }
+              }
+            }
+          }
+
+          Row {
+            id: lookButtons
+            anchors.verticalCenter: parent.verticalCenter
+            spacing: Style.space(6)
+
+            Repeater {
+              model: Model.previewActions(lookLayer.entry)
+
+              Button {
+                required property var modelData
+                width: Style.space(96)
+                height: Style.spacing.controlHeight
+                text: modelData.label
+                fontSize: Style.font.bodySmall
+                foreground: lookLayer.foreground
+                fontFamily: root.fontFamily
+                bordered: true
+                onClicked: lookLayer.runAction(modelData.id)
+              }
+            }
+          }
+        }
+
+        Text {
+          width: parent.width
+          textFormat: Text.StyledText
+          text: Model.lookHints(lookLayer.kind).map(function(h) { return "<b>" + h.key + "</b> " + h.label }).join("   ")
+          color: lookLayer.foreground
+          opacity: 0.45
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.caption
+          elide: Text.ElideRight
         }
       }
     }
