@@ -1144,6 +1144,25 @@ function parseApps(raw) {
   return out
 }
 
+// files.sh clipboard-get: the files on the clipboard file managers share
+// and whether they were cut. state is "files", "empty" (text or nothing)
+// or "unavailable" (no wl-paste, so only this widget's own clipboard).
+function parseClipboard(raw) {
+  var out = { state: "empty", mode: "copy", paths: [] }
+  var lines = String(raw || "").split("\n")
+  for (var i = 0; i < lines.length; i++) {
+    var parts = lines[i].split("\t")
+    if (parts[0] === "clipboard") {
+      if (parts[1] === "unavailable") out.state = "unavailable"
+      else if (parts[1] === "cut") out.mode = "cut"
+    } else if (parts[0] === "file" && parts.length > 1 && parts[1] !== "") {
+      out.paths.push(parts.slice(1).join("\t"))
+    }
+  }
+  if (out.paths.length > 0) out.state = "files"
+  return out
+}
+
 // files.sh thumbnail: the PNG made for a file, or "" when none could be.
 function parseThumbnail(raw) {
   var lines = String(raw || "").split("\n")

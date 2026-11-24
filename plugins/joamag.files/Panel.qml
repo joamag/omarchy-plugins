@@ -95,8 +95,14 @@ Panel {
   property string pendingSelect: ""
   property string pendingRename: ""
 
-  // { mode: "copy" | "cut", paths }
+  // { mode: "copy" | "cut", paths }: the files on the clipboard file
+  // managers share (copied here, in Nautilus or elsewhere), or members of an
+  // archive copied here, which only this widget can paste.
   property var clipboard: null
+  // Where a paste goes once the shared clipboard has been read, and whether
+  // the move under way is a paste of cut files.
+  property string pasteDest: ""
+  property bool pastingCut: false
   // Paste or drop waiting on its name conflicts: { mode, dest, names, jobs }.
   property var transferJob: null
   // The copy or move in flight: { mode, dest, label, count, first, total, done }.
@@ -535,7 +541,7 @@ Panel {
   function clearOrClose() {
     if (menu) menu = null
     else if (goMenuOpen) goMenuOpen = false
-    else if (clipboard) clipboard = null
+    else if (clipboard) clearClipboard()
     else if (selected.length > 0) selected = []
     else if (filtering || query !== "") clearFilter()
     else if (!detached) root.close()
@@ -655,18 +661,55 @@ Panel {
     if (mode === "cut" && readOnly()) return
     var list = picked().filter(function(e) { return !e.trashName })
     if (list.length === 0) return
-    clipboard = { mode: mode, paths: list.map(function(e) { return e.path }) }
-    showToast((mode === "copy" ? "Copied " : "Cut ") + Model.itemsLabel(list.length, list[0].name) + " · paste with p or Ctrl+V")
+    var paths = list.map(function(e) { return e.path })
+    clipboard = { mode: mode, paths: paths }
+    // Files go on the shared clipboard, so Nautilus pastes them too; members
+    // of an archive are not files yet, so the shared clipboard is emptied
+    // and only this widget can paste them.
+    if (Model.isArchiveLocation(paths[0])) Util.execArgv([root.scriptPath, "clipboard-clear"])
+    else Util.execArgv([root.scriptPath, "clipboard-set", mode].concat(paths))
+    showToast((mode === "copy" ? "Copied " : "Cut ") + Model.itemsLabel(list.length, list[0].name) + " · paste with p or Ctrl+V, here or in Nautilus")
   }
 
+  // Paste reads the shared clipboard first: what was copied or cut in
+  // Nautilus (or any app that copies files) pastes here.
   function paste(dest) {
+    pasteDest = dest || location
+    readClipboard("paste")
+  }
+
+  function readClipboard(purpose) {
+    if (clipboardProc.running) {
+      // A read already on its way pastes when it lands.
+      if (purpose === "paste") clipboardProc.purpose = purpose
+      return
+    }
+    clipboardProc.purpose = purpose
+    clipboardProc.running = true
+  }
+
+  function applyClipboard(raw, purpose) {
+    var shared = Model.parseClipboard(raw)
+    if (shared.state === "files") clipboard = { mode: shared.mode, paths: shared.paths }
+    // Text or nothing on the shared clipboard leaves only an archive's
+    // members, which never go there.
+    else if (shared.state === "empty" && clipboard && !Model.isArchiveLocation(clipboard.paths[0])) clipboard = null
+    if (purpose !== "paste") return
     if (!clipboard) {
       showToast("Nothing to paste: copy or cut first")
       return
     }
-    var target = dest || location
-    if (Model.isArchiveLocation(clipboard.paths[0])) copyOutOfArchive(clipboard.paths, target)
-    else transfer(clipboard.paths, target, clipboard.mode === "cut" ? "move" : "copy")
+    if (Model.isArchiveLocation(clipboard.paths[0])) {
+      copyOutOfArchive(clipboard.paths, pasteDest)
+      return
+    }
+    pastingCut = clipboard.mode === "cut"
+    transfer(clipboard.paths, pasteDest, pastingCut ? "move" : "copy")
+  }
+
+  function clearClipboard() {
+    if (clipboard && !Model.isArchiveLocation(clipboard.paths[0])) Util.execArgv([root.scriptPath, "clipboard-clear"])
+    clipboard = null
   }
 
   // Inside an archive only copying out works; it opens read-only.
@@ -715,12 +758,13 @@ Panel {
   // asked about before anything is written.
   function transfer(paths, dest, mode) {
     if (Model.isVirtual(dest) || !dest) {
+      pastingCut = false
       showToast("Open a folder to paste into")
       return
     }
-    if (!paths || paths.length === 0) return
-    if (busy) {
-      showToast("Wait for the running copy or move to finish")
+    if (!paths || paths.length === 0 || busy) {
+      pastingCut = false
+      if (busy) showToast("Wait for the running copy or move to finish")
       return
     }
     var dirs = {}
@@ -740,12 +784,14 @@ Panel {
     var plan = Model.planTransfer(transferJob.paths, transferJob.dest, transferJob.mode, names, transferJob.dirs)
     if (plan.error !== "") {
       transferJob = null
+      pastingCut = false
       dropStaging()
       showToast(plan.error)
       return
     }
     if (plan.jobs.length === 0) {
       transferJob = null
+      pastingCut = false
       dropStaging()
       return
     }
@@ -774,6 +820,7 @@ Panel {
 
   function cancelConflicts() {
     transferJob = null
+    pastingCut = false
     dropStaging()
     focusRequested("view")
   }
@@ -800,6 +847,8 @@ Panel {
 
   function finishTransfer() {
     var finished = task
+    var wasCut = pastingCut
+    pastingCut = false
     task = null
     taskShown = false
     taskTimer.stop()
@@ -824,7 +873,8 @@ Panel {
       var list = tabs
       for (var i = 0; i < taskMoved.length; i++) list = Model.retargetTabs(list, taskMoved[i].from, taskMoved[i].to)
       if (list !== tabs) setTabs(list, activeTab)
-      if (clipboard && clipboard.mode === "cut") clipboard = null
+      // Cut files pasted once are gone from the clipboard, as in Nautilus.
+      if (wasCut) clearClipboard()
     }
     if (taskCancelled) showToast(finished.mode === "copy" ? "Copy cancelled; nothing was written" : "Move stopped; what moved stays moved")
     else if (taskErrors.length > 0) lastError = taskErrors[taskErrors.length - 1]
@@ -1403,6 +1453,7 @@ Panel {
     windowBuilt = true
     detached = true
     window.visible = true
+    readClipboard("sync")
     if (root.opened) root.close()
     Qt.callLater(function() { root.focusRequested("view") })
   }
@@ -1605,6 +1656,7 @@ Panel {
       keysOpen = false
       refreshPlaces()
       refreshLocation()
+      readClipboard("sync")
     } else {
       if (renamePath !== "") cancelRename()
       editingPath = false
@@ -1795,6 +1847,13 @@ Panel {
         root.advanceExtract()
       }
     }
+  }
+
+  Process {
+    id: clipboardProc
+    property string purpose: ""
+    command: [root.scriptPath, "clipboard-get"]
+    stdout: StdioCollector { waitForEnd: true; onStreamFinished: root.applyClipboard(text, clipboardProc.purpose) }
   }
 
   Process {

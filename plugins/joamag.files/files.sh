@@ -16,6 +16,9 @@
 #   files.sh names DIR              name  NAME   for every entry of DIR
 #   files.sh apps PATH              app   id name default   the apps that open PATH
 #   files.sh launch ID PATH...      open the files with the app ID
+#   files.sh clipboard-set copy|cut PATH...   put files on the clipboard other file managers share
+#   files.sh clipboard-get          clipboard  copy|cut|empty|unavailable, then file  PATH lines
+#   files.sh clipboard-clear        empty the shared clipboard
 #   files.sh thumbnail PATH SIZE    thumbnail  PNG   a preview picture for PATH
 #   files.sh archive-list ARCHIVE   bsdtar's listing of the members, in the C locale
 #   files.sh archive-file ARCHIVE MEMBER   extracted  PATH   one member, cached
@@ -316,6 +319,53 @@ launch() {
   shift
   file=$(desktop_file "$id") || fail "no app named $id"
   gio launch "$file" "$@" >/dev/null 2>"$ERR_FILE" || fail "$(last_error)"
+}
+
+# The clipboard file managers share is x-special/gnome-copied-files: copy
+# or cut on the first line, then a file:// URI a line. Nautilus reads and
+# writes it, and so do Thunar and Dolphin.
+clipboard_set() {
+  local mode="${1:-}" path text
+  shift
+  [[ $mode == copy || $mode == cut ]] || fail "unknown clipboard mode $mode"
+  (( $# > 0 )) || fail "nothing to copy"
+  command -v wl-copy >/dev/null || fail "wl-copy is not installed"
+  text=$mode
+  for path in "$@"; do text+=$'\n'"file://$(urlencode "$path")"; done
+  printf '%s' "$text" | wl-copy --type x-special/gnome-copied-files 2>"$ERR_FILE" || fail "$(last_error)"
+}
+
+# What the clipboard holds: files from a file manager (copied or cut), or
+# from any app that offers a text/uri-list; text is not files and comes
+# back empty. Only local file:// URIs count.
+clipboard_get() {
+  local types mode=copy line path
+  local -a uris=()
+  if ! command -v wl-paste >/dev/null; then
+    printf 'clipboard\tunavailable\n'
+    return 0
+  fi
+  types=$(wl-paste --list-types 2>/dev/null)
+  if grep -qx 'x-special/gnome-copied-files' <<<"$types"; then
+    while IFS= read -r line || [[ -n $line ]]; do uris+=("${line%$'\r'}"); done < <(wl-paste --no-newline --type x-special/gnome-copied-files 2>/dev/null)
+    mode=${uris[0]:-copy}
+    uris=("${uris[@]:1}")
+    [[ $mode == cut ]] || mode=copy
+  elif grep -qx 'text/uri-list' <<<"$types"; then
+    while IFS= read -r line || [[ -n $line ]]; do uris+=("${line%$'\r'}"); done < <(wl-paste --no-newline --type text/uri-list 2>/dev/null)
+  else
+    printf 'clipboard\tempty\n'
+    return 0
+  fi
+  printf 'clipboard\t%s\n' "$mode"
+  for line in "${uris[@]}"; do
+    [[ $line == file://* ]] || continue
+    line=${line#file://}
+    line=${line#localhost}
+    [[ $line == /* ]] || continue
+    urldecode path "$line"
+    printf 'file\t%s\n' "$path"
+  done
 }
 
 # The .thumbnailer file registered for a MIME type, user ones first.
@@ -735,6 +785,17 @@ case "${1:-}" in
   thumbnail)
     thumbnail "${2:-}" "${3:-}"
     ;;
+  clipboard-set)
+    shift
+    clipboard_set "$@"
+    ;;
+  clipboard-get)
+    clipboard_get
+    ;;
+  clipboard-clear)
+    command -v wl-copy >/dev/null || fail "wl-copy is not installed"
+    wl-copy --clear 2>"$ERR_FILE" || fail "$(last_error)"
+    ;;
   archive-list)
     archive_list "${2:-}"
     ;;
@@ -795,7 +856,7 @@ case "${1:-}" in
     unbookmark "${2:-}"
     ;;
   *)
-    echo "Usage: files.sh places | free DIR | recent | trashed | search DIR QUERY [all] | names DIR | apps PATH | launch ID PATH... | thumbnail PATH SIZE | archive-list ARCHIVE | archive-file ARCHIVE MEMBER | extract ARCHIVE DEST STRIP [MEMBER...] | compress DEST PATH... | transfer copy|move SRC TARGET POLICY... | rename PATH NAME | mkdir|touch DIR NAME | trash PATH... | restore NAME... | purge NAME... | delete PATH... | empty-trash | mount DEVICE | eject MOUNTPOINT | bookmark|unbookmark PATH" >&2
+    echo "Usage: files.sh places | free DIR | recent | trashed | search DIR QUERY [all] | names DIR | apps PATH | launch ID PATH... | clipboard-set copy|cut PATH... | clipboard-get | clipboard-clear | thumbnail PATH SIZE | archive-list ARCHIVE | archive-file ARCHIVE MEMBER | extract ARCHIVE DEST STRIP [MEMBER...] | compress DEST PATH... | transfer copy|move SRC TARGET POLICY... | rename PATH NAME | mkdir|touch DIR NAME | trash PATH... | restore NAME... | purge NAME... | delete PATH... | empty-trash | mount DEVICE | eject MOUNTPOINT | bookmark|unbookmark PATH" >&2
     exit 1
     ;;
 esac

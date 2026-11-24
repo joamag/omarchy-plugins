@@ -1235,6 +1235,20 @@ describe("parseApps", () => {
   })
 })
 
+describe("parseClipboard", () => {
+  it("reads the files and whether they were cut", () => {
+    assert.deepEqual(Model.parseClipboard("clipboard\tcut\nfile\t/a b\nfile\t/c\td\nfile\t\n"), { state: "files", mode: "cut", paths: ["/a b", "/c\td"] })
+    assert.deepEqual(Model.parseClipboard("clipboard\tcopy\nfile\t/a\n"), { state: "files", mode: "copy", paths: ["/a"] })
+  })
+
+  it("tells text from a missing wl-paste", () => {
+    assert.deepEqual(Model.parseClipboard("clipboard\tempty\n"), { state: "empty", mode: "copy", paths: [] })
+    assert.deepEqual(Model.parseClipboard("clipboard\tcopy\n"), { state: "empty", mode: "copy", paths: [] })
+    assert.deepEqual(Model.parseClipboard("clipboard\tunavailable\n"), { state: "unavailable", mode: "copy", paths: [] })
+    assert.deepEqual(Model.parseClipboard(null), { state: "empty", mode: "copy", paths: [] })
+  })
+})
+
 describe("parseThumbnail", () => {
   it("reads the picture path, tabs included", () => {
     assert.equal(Model.parseThumbnail("thumbnail\t/c/a\tb.png\n"), "/c/a\tb.png")
@@ -1589,6 +1603,77 @@ esac`)
     assert.equal(s.run(["launch", "ghost.desktop", "/a"]).stdout, "error\tno app named ghost.desktop\n")
     assert.equal(s.run(["launch", "nvim.desktop", "/a"], { FAKE_GIO_FAIL: "1" }).stdout, "error\tgio: refused\n")
     assert.equal(s.run(["launch"]).status, 1)
+  })
+
+  // wl-copy and wl-paste stand-ins holding the clipboard in a file, its
+  // types in another, so no test touches the real clipboard.
+  function clipboard(s) {
+    const clip = path.join(s.dir, "clip")
+    fakeCommand(s.bin, "wl-copy", `
+if [[ $1 == --clear ]]; then rm -f "$FAKE_CLIP" "$FAKE_CLIP.types"; exit 0; fi
+[[ -n \${FAKE_CLIP_FAIL:-} ]] && { echo "wl-copy: no seat" >&2; exit 1; }
+cat > "$FAKE_CLIP"; printf '%s\\n' "$2" > "$FAKE_CLIP.types"`)
+    fakeCommand(s.bin, "wl-paste", `
+case "$1" in
+  --list-types) [[ -f $FAKE_CLIP.types ]] || { echo "Nothing is copied" >&2; exit 1; }; cat "$FAKE_CLIP.types" ;;
+  --no-newline) cat "$FAKE_CLIP" ;;
+esac`)
+    const env = { FAKE_CLIP: clip }
+    const offer = (types, content) => {
+      fs.writeFileSync(`${clip}.types`, types.join("\n") + "\n")
+      fs.writeFileSync(clip, content)
+    }
+    return { clip, env, offer, read: () => fs.readFileSync(clip, "utf8"), types: () => fs.readFileSync(`${clip}.types`, "utf8").trim() }
+  }
+
+  it("puts files on the clipboard Nautilus reads, copied or cut", (t) => {
+    const s = setup(t)
+    const c = clipboard(s)
+    const odd = path.join(s.home, "R&D notes.md")
+    assert.equal(s.run(["clipboard-set", "copy", odd, `${s.home}/b`], c.env).stdout, "")
+    assert.equal(c.types(), "x-special/gnome-copied-files")
+    assert.equal(c.read(), `copy\nfile://${s.home}/R%26D%20notes.md\nfile://${s.home}/b`)
+    assert.deepEqual(Model.parseClipboard(s.run(["clipboard-get"], c.env).stdout), { state: "files", mode: "copy", paths: [odd, `${s.home}/b`] })
+    s.run(["clipboard-set", "cut", odd], c.env)
+    assert.deepEqual(Model.parseClipboard(s.run(["clipboard-get"], c.env).stdout), { state: "files", mode: "cut", paths: [odd] })
+  })
+
+  it("reads what Nautilus and other apps copy", (t) => {
+    const s = setup(t)
+    const c = clipboard(s)
+    // Nautilus offers its own type next to text; the file manager type wins.
+    c.offer(["text/plain", "x-special/gnome-copied-files"], "cut\r\nfile:///srv/a%20b\r\nfile://localhost/srv/c")
+    assert.deepEqual(Model.parseClipboard(s.run(["clipboard-get"], c.env).stdout), { state: "files", mode: "cut", paths: ["/srv/a b", "/srv/c"] })
+    // An unknown first line counts as a copy.
+    c.offer(["x-special/gnome-copied-files"], "link\nfile:///srv/a")
+    assert.equal(Model.parseClipboard(s.run(["clipboard-get"], c.env).stdout).mode, "copy")
+    // A plain list of URIs: comments, other schemes and other hosts are skipped.
+    c.offer(["text/uri-list"], "# from a browser\r\nfile:///srv/x.pdf\r\nhttps://example.com/y\r\nfile://server/share/z\r\n")
+    assert.deepEqual(Model.parseClipboard(s.run(["clipboard-get"], c.env).stdout), { state: "files", mode: "copy", paths: ["/srv/x.pdf"] })
+  })
+
+  it("finds no files in text or in an empty clipboard", (t) => {
+    const s = setup(t)
+    const c = clipboard(s)
+    c.offer(["text/plain;charset=utf-8", "text/plain"], "/srv/looks/like/a/path")
+    assert.equal(s.run(["clipboard-get"], c.env).stdout, "clipboard\tempty\n")
+    assert.equal(s.run(["clipboard-clear"], c.env).stdout, "")
+    assert.ok(!fs.existsSync(c.clip))
+    assert.equal(s.run(["clipboard-get"], c.env).stdout, "clipboard\tempty\n")
+  })
+
+  it("says when the clipboard cannot be used", (t) => {
+    const s = setup(t)
+    const c = clipboard(s)
+    assert.equal(s.run(["clipboard-set", "move", "/a"], c.env).stdout, "error\tunknown clipboard mode move\n")
+    assert.equal(s.run(["clipboard-set", "copy"], c.env).stdout, "error\tnothing to copy\n")
+    assert.equal(s.run(["clipboard-set", "copy", "/a"], { ...c.env, FAKE_CLIP_FAIL: "1" }).stdout, "error\twl-copy: no seat\n")
+    // Without wl-clipboard there is only the widget's own clipboard.
+    const bare = path.join(s.dir, "bare")
+    fs.mkdirSync(bare)
+    assert.equal(runScript("joamag.files", "files.sh", ["clipboard-get"], { path: bare, env: s.env }).stdout, "clipboard\tunavailable\n")
+    assert.equal(runScript("joamag.files", "files.sh", ["clipboard-set", "copy", "/a"], { path: bare, env: s.env }).stdout, "error\twl-copy is not installed\n")
+    assert.equal(runScript("joamag.files", "files.sh", ["clipboard-clear"], { path: bare, env: s.env }).stdout, "error\twl-copy is not installed\n")
   })
 
   it("makes a thumbnail with the registered thumbnailer and keeps it", (t) => {
