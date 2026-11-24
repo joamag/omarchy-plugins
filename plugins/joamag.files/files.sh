@@ -80,7 +80,8 @@ xml_unescape() {
   s=${s//&gt;/>}
   s=${s//&quot;/\"}
   s=${s//&apos;/\'}
-  printf '%s' "${s//&amp;/&}"
+  # A bare & in the replacement would stand for the match (patsub_replacement).
+  printf '%s' "${s//&amp;/\&}"
 }
 
 # First free "name (copy).ext", "name (copy 2).ext" ... in DIR, the way the
