@@ -744,6 +744,15 @@ describe("newsPlaceholder", () => {
     assert.equal(Model.newsPlaceholder(false, "", "AMD"), "No news for AMD")
     assert.equal(Model.newsPlaceholder(false, "", Model.TOP_FEED), "No top stories right now")
   })
+
+  it("says when the source filter took every headline out", () => {
+    assert.equal(Model.newsPlaceholder(false, "", Model.TOP_FEED, 11), "All 11 headlines here are from hidden sources")
+    assert.equal(Model.newsPlaceholder(false, "", "AMD", 1), "All 1 headline here is from hidden sources")
+    // The headlines are there, so a failed feed alongside them is not the story.
+    assert.equal(Model.newsPlaceholder(false, "MarketWatch: fetch failed", Model.TOP_FEED, 3), "All 3 headlines here are from hidden sources")
+    assert.equal(Model.newsPlaceholder(true, "", "AMD", 3), "Loading AMD news…")
+    assert.equal(Model.newsPlaceholder(false, "", "AMD", 0), "No news for AMD")
+  })
 })
 
 describe("browserCommand", () => {
@@ -764,6 +773,111 @@ describe("browserCommand", () => {
     for (const url of ["javascript:alert(1)", "file:///etc/passwd", "ftp://x", "https://a b", "https://", "", undefined]) {
       assert.equal(Model.browserCommand(url), "", String(url))
     }
+  })
+})
+
+describe("sourceKey", () => {
+  it("ignores case and spaces at the ends", () => {
+    assert.equal(Model.sourceKey("  Motley Fool "), "motley fool")
+    assert.equal(Model.sourceKey("TIKR"), Model.sourceKey("tikr"))
+    assert.equal(Model.sourceKey(null), "")
+    assert.equal(Model.sourceKey(undefined), "")
+  })
+})
+
+describe("parseHiddenSources", () => {
+  it("reads the list the popup writes, dropping blanks and repeats", () => {
+    assert.deepEqual(Model.parseHiddenSources([" Motley Fool", "TIKR", "", null, "motley fool ", "GuruFocus.com"]), ["Motley Fool", "TIKR", "GuruFocus.com"])
+  })
+
+  it("reads a comma separated string written by hand", () => {
+    assert.deepEqual(Model.parseHiddenSources("TIKR, Trefis,,tikr"), ["TIKR", "Trefis"])
+  })
+
+  it("hides nothing without a setting", () => {
+    assert.deepEqual(Model.parseHiddenSources(undefined), [])
+    assert.deepEqual(Model.parseHiddenSources(null), [])
+    assert.deepEqual(Model.parseHiddenSources(""), [])
+    assert.deepEqual(Model.parseHiddenSources([]), [])
+  })
+})
+
+describe("filterNews", () => {
+  const items = [
+    { title: "a", publisher: "Yahoo Finance" },
+    { title: "b", publisher: "Motley Fool" },
+    { title: "c", publisher: "motley fool " },
+    { title: "d", publisher: "" },
+    { title: "e" },
+  ]
+
+  it("takes out the hidden publishers, whatever their case, and counts them", () => {
+    const result = Model.filterNews(items, ["MOTLEY FOOL"])
+    assert.deepEqual(result.items.map((i) => i.title), ["a", "d", "e"])
+    assert.equal(result.hidden, 2)
+  })
+
+  it("always shows headlines without a publisher, even with a blank on the list", () => {
+    const result = Model.filterNews(items, ["", "Yahoo Finance", "Motley Fool"])
+    assert.deepEqual(result.items.map((i) => i.title), ["d", "e"])
+    assert.equal(result.hidden, 3)
+  })
+
+  it("leaves the feed alone with nothing hidden", () => {
+    assert.deepEqual(Model.filterNews(items, []), { items, hidden: 0 })
+    assert.deepEqual(Model.filterNews([], ["TIKR"]), { items: [], hidden: 0 })
+  })
+})
+
+describe("newsSources", () => {
+  it("lists the feed's publishers with counts and every hidden one, A to Z", () => {
+    const items = [
+      { publisher: "Yahoo Finance" }, { publisher: "TIKR" }, { publisher: "yahoo finance" },
+      { publisher: "24/7 Wall St." }, { publisher: "" }, {},
+    ]
+    assert.deepEqual(Model.newsSources(items, ["tikr", "GuruFocus.com", " "]), [
+      { name: "24/7 Wall St.", count: 1, hidden: false },
+      { name: "GuruFocus.com", count: 0, hidden: true },
+      { name: "TIKR", count: 1, hidden: true },
+      { name: "Yahoo Finance", count: 2, hidden: false },
+    ])
+  })
+
+  it("is empty for an empty feed with nothing hidden", () => {
+    assert.deepEqual(Model.newsSources([], []), [])
+  })
+})
+
+describe("toggleSource", () => {
+  it("hides a shown publisher under the feed's spelling", () => {
+    assert.deepEqual(Model.toggleSource(["TIKR"], " Motley Fool "), ["TIKR", "Motley Fool"])
+  })
+
+  it("brings a hidden publisher back, whatever its case", () => {
+    assert.deepEqual(Model.toggleSource(["TIKR", "Motley Fool"], "tikr"), ["Motley Fool"])
+  })
+
+  it("ignores a blank name and never touches the list it was given", () => {
+    const hidden = ["TIKR"]
+    assert.deepEqual(Model.toggleSource(hidden, "  "), ["TIKR"])
+    Model.toggleSource(hidden, "Trefis")
+    assert.deepEqual(hidden, ["TIKR"])
+  })
+})
+
+describe("sourceCount", () => {
+  it("counts headlines, or says the publisher is not in this feed", () => {
+    assert.equal(Model.sourceCount(1), "1 headline")
+    assert.equal(Model.sourceCount(3), "3 headlines")
+    assert.equal(Model.sourceCount(0), "not in this feed")
+    assert.equal(Model.sourceCount(undefined), "not in this feed")
+  })
+})
+
+describe("sourcesLabel", () => {
+  it("adds the hidden count while the filter takes anything out", () => {
+    assert.equal(Model.sourcesLabel(0), "Sources")
+    assert.equal(Model.sourcesLabel(4), "Sources · 4 hidden")
   })
 })
 

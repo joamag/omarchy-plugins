@@ -13,11 +13,17 @@ The popup has two tabs, Markets and News; it always opens on Markets, and `n` or
 
 Each row is the title, the publisher and how long ago it came out. Click a headline or press Enter on it to open it in the browser. A feed is kept for five minutes; Refresh (or `r`) on the News tab fetches it again. The list scrolls inside the height the Markets view has, so switching tabs never resizes the popup.
 
+### Sources
+
+The Sources button beside the two feeds (or `s`) swaps the headlines for a checklist of publishers: every one in the feed on screen with its headline count, plus every one you have hidden, so it can always be brought back. Switch a publisher off to hide its headlines in every feed (Motley Fool in all symbols' news, CNBC in Top stories); Space or a click toggles the row under the cursor, Show all clears the list, `s` or Esc goes back to the headlines. Everything shows until you hide it, so a new publisher appears on its own. While the filter takes headlines out of the feed on screen the button reads `Sources · 4 hidden`.
+
+Each switch is saved at once as `hiddenSources` on the widget's `shell.json` entry, matched by publisher name ignoring case. It can be edited by hand as a list (`["Motley Fool", "TIKR"]`) or a comma separated string.
+
 ## Interactions
 
 - Hover the big chart for a crosshair: the bubble shows time, price and change at that point, and the hero price and change follow the pointer until it leaves the chart.
 - Left click on the bar: open the popup. Right click: pin the next watchlist symbol to the bar. Scroll: walk the watchlist. Middle click: refresh.
-- In the popup, arrow keys or `j`/`k` move over the watchlist and footer actions, `h`/`l` (or left/right) change the chart range, Enter selects the row for the big chart, `o` opens the selected symbol on Yahoo Finance, `p` pins it to the bar, `a` adds a symbol, `x` asks to remove the cursor row, `J`/`K` reorder, `n` switches between Markets and News, Esc closes.
+- In the popup, arrow keys or `j`/`k` move over the watchlist and footer actions, `h`/`l` (or left/right) change the chart range, Enter selects the row for the big chart, `o` opens the selected symbol on Yahoo Finance, `p` pins it to the bar, `a` adds a symbol, `x` asks to remove the cursor row, `J`/`K` reorder, `n` switches between Markets and News, `s` opens the news Sources list, Esc closes (or leaves Sources first).
 - Click a row to chart it, right click a row to open it in the browser, drag a row up or down to reorder the watchlist.
 - While quotes or a chart are loading, a thin line sweeps between the price and the chart and the Refresh icon turns. Switching range or symbol keeps the previous chart on screen, dimmed, until the new one arrives; rows still waiting for their first quote pulse, and the add field hint turns while a search or check runs. The bar stays still on timed refreshes, and every animation holds still under the shell's reduced motion setting.
 
@@ -41,6 +47,7 @@ Inline on the widget entry in `~/.config/omarchy/shell.json`:
 | `showChange` | `true` | Show the daily change in the bar |
 | `range` | `"1d"` | Default chart range: `1d`, `5d`, `1mo`, `6mo`, `1y`, `5y` |
 | `refreshIntervalSec` | `60` | Refresh cadence for quotes |
+| `hiddenSources` | `[]` | Publishers whose headlines the News tab hides, set from its Sources list |
 
 Multiple instances are allowed, so two widgets can pin two different symbols.
 

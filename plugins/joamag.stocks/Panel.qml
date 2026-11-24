@@ -58,6 +58,8 @@ Panel {
   property var newsCache: ({})
   property bool newsLoading: false
   property string newsQuery: ""
+  // Sources checklist shown in the headlines' place.
+  property bool sourcesOpen: false
   // Symbol the remove dialog is asking about ("" = no dialog).
   property string removalSymbol: ""
 
@@ -79,6 +81,8 @@ Panel {
   }
   readonly property bool showPrice: setting("showPrice", false) === true
   readonly property bool showChange: setting("showChange", true) !== false
+  // Publishers whose headlines the News tab leaves out, in every feed.
+  readonly property var hiddenSources: Model.parseHiddenSources(setting("hiddenSources", []))
   readonly property int refreshIntervalSec: Math.max(15, Math.round(Number(setting("refreshIntervalSec", 60)) || 60))
   readonly property string scriptPath: String(Qt.resolvedUrl("quotes.sh")).replace(/^file:\/\//, "")
 
@@ -111,7 +115,10 @@ Panel {
   readonly property var chartSeries: Model.chartSeries(activeSeries, heldSeries, chartLoading)
   readonly property bool chartHeld: chartSeries !== null && chartSeries !== activeSeries
   readonly property string newsFeed: newsScope === "top" ? Model.TOP_FEED : activeSymbol
-  readonly property var newsItems: newsCache[newsFeed] ? newsCache[newsFeed].items : []
+  // The feed on screen after the source filter, and its Sources checklist.
+  readonly property var newsFilter: Model.filterNews(newsCache[newsFeed] ? newsCache[newsFeed].items : [], hiddenSources)
+  readonly property var newsItems: newsFilter.items
+  readonly property var sourceRows: Model.newsSources(newsCache[newsFeed] ? newsCache[newsFeed].items : [], hiddenSources)
 
   readonly property var actions: [
     { label: "Refresh", icon: "󰑐", tooltip: root.tab === "news" ? "Refresh headlines" : "Refresh quotes", spins: true, run: function() { root.refreshView() } },
@@ -121,8 +128,8 @@ Panel {
   ]
 
   // Keyboard cursor walks the list first (the watchlist rows, or the headlines
-  // on the news tab), then the footer actions.
-  readonly property int listCount: tab === "news" ? newsItems.length : symbols.length
+  // or the sources on the news tab), then the footer actions.
+  readonly property int listCount: tab === "news" ? (sourcesOpen ? sourceRows.length : newsItems.length) : symbols.length
   readonly property int cursorCount: listCount + actions.length
 
   function trendColor(value) {
@@ -222,6 +229,7 @@ Panel {
     if (next === tab) return
     if (editing) cancelAdding()
     tab = next
+    sourcesOpen = false
     cursorActive = false
     cursorIndex = next === "markets" ? Math.max(0, symbols.indexOf(activeSymbol)) : 0
     ensureNews()
@@ -230,6 +238,23 @@ Panel {
   function setNewsScope(scope) {
     newsScope = scope === "top" ? "top" : "symbol"
     cursorIndex = 0
+  }
+
+  function setSourcesOpen(open) {
+    sourcesOpen = open
+    cursorIndex = 0
+  }
+
+  // Every switch is saved at once, on this widget's shell.json entry, the
+  // way the chart range is.
+  function toggleSource(name) {
+    persistSetting("hiddenSources", Model.toggleSource(hiddenSources, name))
+    if (cursorIndex >= cursorCount) cursorIndex = Math.max(0, cursorCount - 1)
+  }
+
+  function showAllSources() {
+    persistSetting("hiddenSources", [])
+    if (cursorIndex >= cursorCount) cursorIndex = Math.max(0, cursorCount - 1)
   }
 
   // Headline links come from outside feeds, so the command is built by
@@ -496,8 +521,9 @@ Panel {
   function activateCursor() {
     if (!cursorActive) return
     if (cursorIndex < listCount) {
-      if (tab === "news") openHeadline(newsItems[cursorIndex])
-      else selectSymbol(symbols[cursorIndex])
+      if (tab !== "news") selectSymbol(symbols[cursorIndex])
+      else if (sourcesOpen) toggleSource(sourceRows[cursorIndex].name)
+      else openHeadline(newsItems[cursorIndex])
       return
     }
     var action = actions[cursorIndex - listCount]
@@ -516,12 +542,13 @@ Panel {
     function cycleSymbol(): void { root.cycleSymbol(1) }
     function addSymbol(symbol: string): string { return root.addSymbol(symbol) ? "ok" : "exists" }
     function removeSymbol(symbol: string): string { return root.removeSymbol(String(symbol || "").trim().toUpperCase()) ? "ok" : "unknown" }
-    function version(): string { return "0.6.0" }
+    function version(): string { return "0.7.0" }
   }
 
   onOpenedChanged: {
     if (opened) {
       tab = "markets"
+      sourcesOpen = false
       selectedSymbol = barSymbol
       cursorActive = false
       cursorIndex = Math.max(0, symbols.indexOf(barSymbol))
@@ -641,7 +668,11 @@ Panel {
         else root.stepRange(dx)
       }
       onActivateRequested: root.activateCursor()
-      onCloseRequested: root.close()
+      // Esc steps back out of the Sources checklist before it closes.
+      onCloseRequested: {
+        if (root.sourcesOpen) root.setSourcesOpen(false)
+        else root.close()
+      }
       onTabRequested: function(direction) { root.switchPanel(direction) }
       onTextKey: function(text) {
         if (text === "o") root.openInBrowser(root.activeSymbol)
@@ -649,6 +680,7 @@ Panel {
         else if (text === "r") root.refreshView()
         else if (text === "a") root.startAdding()
         else if (text === "n") root.setTab(root.tab === "news" ? "markets" : "news")
+        else if (text === "s" && root.tab === "news") root.setSourcesOpen(!root.sourcesOpen)
         else if (text === "J" && root.tab === "markets") root.moveSymbol(root.cursorSymbol(), 1)
         else if (text === "K" && root.tab === "markets") root.moveSymbol(root.cursorSymbol(), -1)
       }
@@ -1281,7 +1313,7 @@ Panel {
           width: parent.width
           spacing: Style.space(6)
 
-          readonly property real cellWidth: (width - spacing) / 2
+          readonly property real cellWidth: (width - spacing * 2) / 3
 
           Repeater {
             model: [
@@ -1304,6 +1336,20 @@ Panel {
               onClicked: root.setNewsScope(modelData.key)
             }
           }
+
+          Button {
+            width: scopeRow.cellWidth
+            height: Style.spacing.controlHeight
+            text: Model.sourcesLabel(root.newsFilter.hidden)
+            fontSize: Style.font.caption
+            foreground: root.foreground
+            fontFamily: root.fontFamily
+            horizontalPadding: Style.spacing.sm
+            verticalPadding: Style.spacing.xs
+            bordered: true
+            active: root.sourcesOpen
+            onClicked: root.setSourcesOpen(!root.sourcesOpen)
+          }
         }
 
         ActivityLine {
@@ -1322,6 +1368,7 @@ Panel {
           anchors.topMargin: Style.space(12)
           anchors.bottom: newsHint.top
           anchors.bottomMargin: Style.space(4)
+          visible: !root.sourcesOpen
           clip: true
           spacing: Style.space(2)
           boundsBehavior: Flickable.StopAtBounds
@@ -1388,25 +1435,177 @@ Panel {
           }
         }
 
-        Row {
-          anchors.centerIn: newsList
-          visible: root.newsItems.length === 0
-          spacing: Style.space(6)
+        // Sources checklist, in the headlines' place: every publisher in this
+        // feed plus every hidden one, each with a switch that is on while its
+        // headlines show. A switch saves to shell.json at once.
+        Item {
+          anchors.fill: newsList
+          visible: root.sourcesOpen
 
-          Spinner {
-            visible: root.newsLoading
-            spinning: root.newsLoading
-            opacity: 0.5
-            anchors.verticalCenter: parent.verticalCenter
+          Column {
+            id: sourcesHead
+            anchors.left: parent.left
+            anchors.right: parent.right
+            spacing: Style.space(2)
+
+            Item {
+              width: parent.width
+              implicitHeight: sourcesTitle.implicitHeight
+
+              PanelSectionHeader {
+                id: sourcesTitle
+                text: "SOURCES"
+                foreground: root.foreground
+                fontFamily: root.fontFamily
+              }
+
+              Text {
+                anchors.right: parent.right
+                anchors.verticalCenter: parent.verticalCenter
+                visible: root.hiddenSources.length > 0
+                textFormat: Text.PlainText
+                text: "Show all"
+                color: Color.accent
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+
+                MouseArea {
+                  anchors.fill: parent
+                  cursorShape: Qt.PointingHandCursor
+                  onClicked: root.showAllSources()
+                }
+              }
+            }
+
+            Text {
+              textFormat: Text.PlainText
+              text: "Switch a publisher off to hide its headlines in every feed."
+              color: root.foreground
+              opacity: 0.5
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+              elide: Text.ElideRight
+              width: parent.width
+            }
+          }
+
+          ListView {
+            id: sourceList
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.top: sourcesHead.bottom
+            anchors.topMargin: Style.space(6)
+            anchors.bottom: parent.bottom
+            clip: true
+            spacing: Style.space(2)
+            boundsBehavior: Flickable.StopAtBounds
+            model: root.sourceRows
+            currentIndex: root.cursorActive && root.cursorIndex < root.sourceRows.length ? root.cursorIndex : -1
+            onCurrentIndexChanged: if (currentIndex >= 0) positionViewAtIndex(currentIndex, ListView.Contain)
+
+            // One publisher: its name, how many headlines it has in this
+            // feed, and the switch. The row owns the click, as in the home
+            // widget's rows.
+            delegate: CursorSurface {
+              id: source
+              required property var modelData
+              required property int index
+
+              width: sourceList.width
+              implicitHeight: Math.max(sourceName.implicitHeight, sourceSwitch.height) + Style.spacing.lg
+              hasCursor: root.cursorActive && root.cursorIndex === index
+              foreground: root.foreground
+
+              Row {
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.verticalCenter: parent.verticalCenter
+                anchors.leftMargin: Style.space(8)
+                anchors.rightMargin: Style.space(8)
+                spacing: Style.space(10)
+
+                Text {
+                  id: sourceName
+                  textFormat: Text.PlainText
+                  text: source.modelData.name
+                  color: root.foreground
+                  opacity: source.modelData.hidden ? 0.45 : 1
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.body
+                  elide: Text.ElideRight
+                  width: parent.width - sourceHeadlines.width - sourceSwitch.width - parent.spacing * 2
+                  anchors.verticalCenter: parent.verticalCenter
+                }
+
+                Text {
+                  id: sourceHeadlines
+                  textFormat: Text.PlainText
+                  text: Model.sourceCount(source.modelData.count)
+                  color: root.foreground
+                  opacity: 0.5
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                  anchors.verticalCenter: parent.verticalCenter
+                }
+
+                ToggleSwitch {
+                  id: sourceSwitch
+                  checked: !source.modelData.hidden
+                  interactive: false
+                  foreground: root.foreground
+                  anchors.verticalCenter: parent.verticalCenter
+                }
+              }
+
+              MouseArea {
+                anchors.fill: parent
+                hoverEnabled: true
+                cursorShape: Qt.PointingHandCursor
+                onContainsMouseChanged: if (containsMouse) {
+                  root.cursorActive = true
+                  root.cursorIndex = source.index
+                }
+                onClicked: root.toggleSource(source.modelData.name)
+              }
+            }
+          }
+        }
+
+        Column {
+          anchors.centerIn: newsList
+          visible: root.newsItems.length === 0 && !root.sourcesOpen
+          spacing: Style.space(4)
+
+          Row {
+            anchors.horizontalCenter: parent.horizontalCenter
+            spacing: Style.space(6)
+
+            Spinner {
+              visible: root.newsLoading
+              spinning: root.newsLoading
+              opacity: 0.5
+              anchors.verticalCenter: parent.verticalCenter
+            }
+
+            Text {
+              text: Model.newsPlaceholder(root.newsLoading, root.newsCache[root.newsFeed] ? root.newsCache[root.newsFeed].error : "", root.newsFeed, root.newsFilter.hidden)
+              color: root.foreground
+              opacity: 0.5
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.bodySmall
+              anchors.verticalCenter: parent.verticalCenter
+            }
           }
 
           Text {
-            text: Model.newsPlaceholder(root.newsLoading, root.newsCache[root.newsFeed] ? root.newsCache[root.newsFeed].error : "", root.newsFeed)
+            anchors.horizontalCenter: parent.horizontalCenter
+            visible: !root.newsLoading && root.newsFilter.hidden > 0
+            textFormat: Text.PlainText
+            text: "s or Sources to choose again"
             color: root.foreground
-            opacity: 0.5
+            opacity: 0.35
             font.family: root.fontFamily
-            font.pixelSize: Style.font.bodySmall
-            anchors.verticalCenter: parent.verticalCenter
+            font.pixelSize: Style.font.caption
           }
         }
 
@@ -1416,7 +1615,7 @@ Panel {
           anchors.right: parent.right
           anchors.bottom: parent.bottom
           textFormat: Text.PlainText
-          text: "h / l switch feed · Enter opens · n back to Markets"
+          text: root.sourcesOpen ? "Space shows or hides · s or Esc back to headlines" : "h / l switch feed · s sources · Enter opens · n back to Markets"
           color: root.foreground
           opacity: 0.35
           font.family: root.fontFamily

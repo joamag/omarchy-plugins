@@ -626,10 +626,12 @@ function newsMeta(item, nowMs) {
   return parts.join(" · ")
 }
 
-// Text in the news list while it has nothing to show, naming the feed.
-function newsPlaceholder(loading, error, feed) {
+// Text in the news list while it has nothing to show, naming the feed, or
+// saying the source filter took every headline out (`hidden` of them).
+function newsPlaceholder(loading, error, feed, hidden) {
   var top = feed === TOP_FEED
   if (loading) return "Loading " + (top ? "top stories" : shortLabel(feed) + " news") + "…"
+  if (hidden > 0) return "All " + hidden + (hidden === 1 ? " headline here is" : " headlines here are") + " from hidden sources"
   if (error) return String(error)
   return top ? "No top stories right now" : "No news for " + shortLabel(feed)
 }
@@ -641,4 +643,92 @@ function browserCommand(url) {
   var link = String(url || "").trim()
   if (!/^https?:\/\/\S+$/i.test(link)) return ""
   return "omarchy-launch-browser '" + link.replace(/'/g, "'\\''") + "'"
+}
+
+// Source filter: a publisher is matched by name, ignoring case and spaces at
+// the ends.
+function sourceKey(name) {
+  return String(name === undefined || name === null ? "" : name).trim().toLowerCase()
+}
+
+// hiddenSources setting: a list of publisher names (what the popup writes) or
+// a comma separated string (handier by hand). Blanks and repeats are dropped,
+// the spelling of the first one kept.
+function parseHiddenSources(value) {
+  var list = Array.isArray(value) ? value : String(value === undefined || value === null ? "" : value).split(",")
+  var out = []
+  var seen = {}
+  for (var i = 0; i < list.length; i++) {
+    var key = sourceKey(list[i])
+    if (key === "" || seen["k:" + key]) continue
+    seen["k:" + key] = true
+    out.push(String(list[i]).trim())
+  }
+  return out
+}
+
+// A feed's headlines without the hidden publishers, and how many that took
+// out. Headlines without a publisher always show.
+function filterNews(items, hidden) {
+  var keys = {}
+  for (var i = 0; i < hidden.length; i++) keys["k:" + sourceKey(hidden[i])] = true
+  var out = []
+  for (var j = 0; j < items.length; j++) {
+    var key = sourceKey(items[j].publisher)
+    if (key === "" || !keys["k:" + key]) out.push(items[j])
+  }
+  return { items: out, hidden: items.length - out.length }
+}
+
+// Sources checklist for a feed: every publisher in it with its headline
+// count, plus every hidden one so it can be brought back, A to Z.
+function newsSources(items, hidden) {
+  var names = []
+  for (var i = 0; i < items.length; i++) names.push({ name: items[i].publisher, hidden: false })
+  for (var j = 0; j < hidden.length; j++) names.push({ name: hidden[j], hidden: true })
+  var byKey = {}
+  var out = []
+  for (var k = 0; k < names.length; k++) {
+    var key = sourceKey(names[k].name)
+    if (key === "") continue
+    var entry = byKey["k:" + key]
+    if (!entry) {
+      entry = { name: String(names[k].name).trim(), count: 0, hidden: false }
+      byKey["k:" + key] = entry
+      out.push(entry)
+    }
+    if (names[k].hidden) entry.hidden = true
+    else entry.count++
+  }
+  // Rows are one per name already, so two never compare equal.
+  out.sort(function(a, b) {
+    return sourceKey(a.name) < sourceKey(b.name) ? -1 : 1
+  })
+  return out
+}
+
+// Hidden list after switching one publisher: a hidden one comes back, a
+// shown one joins the list under the name the feed spells it with.
+function toggleSource(hidden, name) {
+  var key = sourceKey(name)
+  var out = []
+  var found = false
+  for (var i = 0; i < hidden.length; i++) {
+    if (sourceKey(hidden[i]) === key) found = true
+    else out.push(hidden[i])
+  }
+  if (!found && key !== "") out.push(String(name).trim())
+  return out
+}
+
+// Right-hand side of a Sources row.
+function sourceCount(count) {
+  if (!(count > 0)) return "not in this feed"
+  return count + (count === 1 ? " headline" : " headlines")
+}
+
+// Sources button: says how many headlines the filter takes out of the feed
+// on screen, so a shorter list never looks like a broken feed.
+function sourcesLabel(hidden) {
+  return hidden > 0 ? "Sources · " + hidden + " hidden" : "Sources"
 }

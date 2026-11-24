@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "joamag.stocks",
   "name": "Stocks",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "author": "João Magalhães",
   "license": "Apache-2.0",
   "description": "Market watchlist: one index or stock in the bar, popup with an intraday chart, range switching, sparklines for every symbol and a news tab.",
@@ -24,7 +24,8 @@
       "showPrice": false,
       "showChange": true,
       "range": "1d",
-      "refreshIntervalSec": 60
+      "refreshIntervalSec": 60,
+      "hiddenSources": []
     },
     "schema": [
       {
@@ -66,6 +67,15 @@
         "max": 3600,
         "step": 15,
         "defaultValue": 60
+      },
+      {
+        "key": "hiddenSources",
+        "type": "multiselect",
+        "label": "News sources to hide",
+        "description": "Publishers whose headlines the News tab leaves out, switched from its Sources list.",
+        "noSelectionText": "None hidden",
+        "options": [],
+        "defaultValue": []
       }
     ]
   }
