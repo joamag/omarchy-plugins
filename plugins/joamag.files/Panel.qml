@@ -3530,10 +3530,19 @@ Panel {
 
     // A click outside the field being typed in (the name, the filter, the
     // path) gives the keyboard back to the folder, so its keys work again;
-    // the click itself still reaches what is under it.
+    // the click itself still reaches what is under it. The mouse's back and
+    // forward buttons go back and forward, as the header's ‹ and › do.
     Item {
       anchors.fill: parent
       z: 100
+
+      TapHandler {
+        acceptedButtons: Qt.BackButton | Qt.ForwardButton
+        onTapped: function(eventPoint, button) {
+          if (button === Qt.BackButton) root.back()
+          else root.forward()
+        }
+      }
 
       PointHandler {
         acceptedButtons: Qt.AllButtons
