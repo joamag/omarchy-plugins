@@ -3616,6 +3616,17 @@ exit 0`)
     assert.equal(s.run(["launcher", "off"], m.env).stdout, "")
   })
 
+  it("says which file it cannot write", (t) => {
+    const s = setup(t)
+    const m = manager(s)
+    // A folder where the file goes cannot be written over.
+    fs.mkdirSync(m.files.launcher, { recursive: true })
+    assert.equal(s.run(["launcher", "on"], m.env).stdout, `error\tcannot write ${m.files.launcher}\n`)
+    fs.mkdirSync(m.files.chooserService, { recursive: true })
+    assert.equal(s.run(["chooser", "on"], m.env).stdout, `error\tcannot write ${m.files.chooserService}\n`)
+    assert.deepEqual(s.log(), [])
+  })
+
   it("quotes and escapes a plugin folder with odd characters in the Exec line", (t) => {
     const { spawnSync } = require("node:child_process")
     const s = setup(t)

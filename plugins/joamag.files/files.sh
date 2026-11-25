@@ -896,11 +896,11 @@ show() {
   if [[ -n $target ]]; then launch "$id" "$target"; else launch "$id"; fi
 }
 
-# Writes FILE only when it would change; true when it did.
+# Writes FILE only when it would change; true when it did. A file that
+# cannot be written ends the command with an error.
 write_changed() {
   [[ -f $1 && $(cat "$1") == "$2" ]] && return 1
-  mkdir -p "$(dirname "$1")"
-  printf '%s\n' "$2" >"$1"
+  { mkdir -p "$(dirname "$1")" && printf '%s\n' "$2" >"$1"; } 2>/dev/null || fail "cannot write $1"
 }
 
 # files.sh as the first word of an Exec line, quoted only for a plugin
@@ -1059,16 +1059,10 @@ set_portal() {
     fi
     grep -qxF "$PORTAL_LINE" "$PORTALS_FILE" && return 1
     line=$(grep -m 1 -E "$CHOOSER_KEY" "$PORTALS_FILE")
-    if [[ -n $line ]]; then
-      mkdir -p "$(dirname "$PREVIOUS_CHOOSER")"
-      printf '%s\n' "$line" >"$PREVIOUS_CHOOSER"
-    fi
+    [[ -n $line ]] && write_changed "$PREVIOUS_CHOOSER" "$line"
     kept=$(grep -vE "$CHOOSER_KEY" "$PORTALS_FILE")
-    with_preference "$kept" "$PORTAL_LINE" >"$PORTALS_FILE"
-    if [[ -n $made ]]; then
-      mkdir -p "$(dirname "$PORTALS_MADE")"
-      cp -- "$PORTALS_FILE" "$PORTALS_MADE"
-    fi
+    write_changed "$PORTALS_FILE" "$(with_preference "$kept" "$PORTAL_LINE")"
+    [[ -n $made ]] && write_changed "$PORTALS_MADE" "$(cat "$PORTALS_FILE")"
     return 0
   fi
   if [[ -f $PORTALS_MADE && -f $PORTALS_FILE && $(cat "$PORTALS_FILE") == "$(cat "$PORTALS_MADE")" ]]; then
@@ -1079,10 +1073,10 @@ set_portal() {
   [[ -f $PORTALS_FILE ]] && grep -qxF "$PORTAL_LINE" "$PORTALS_FILE" || return 1
   kept=$(grep -vxF "$PORTAL_LINE" "$PORTALS_FILE")
   if [[ -f $PREVIOUS_CHOOSER ]]; then
-    with_preference "$kept" "$(cat "$PREVIOUS_CHOOSER")" >"$PORTALS_FILE"
+    write_changed "$PORTALS_FILE" "$(with_preference "$kept" "$(cat "$PREVIOUS_CHOOSER")")"
     rm -f "$PREVIOUS_CHOOSER"
   else
-    printf '%s\n' "$kept" >"$PORTALS_FILE"
+    write_changed "$PORTALS_FILE" "$kept"
   fi
   return 0
 }
