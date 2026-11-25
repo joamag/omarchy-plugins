@@ -2800,6 +2800,10 @@ exit \${FAKE_PY_STATUS:-0}`)
     write(path.join(dest, "mine.txt"), "mine")
     const run = background(t, s, ["extract", a.zip, dest, "0"])
     await run.progressed
+    // The first progress can come before the stand-in has written; what
+    // landed must be there before the extraction is stopped.
+    const partial = path.join(dest, "partial")
+    for (let i = 0; i < 500 && !fs.existsSync(partial); i++) await new Promise((r) => setTimeout(r, 10))
     run.child.kill("SIGTERM")
     await run.closed
     const r = Model.parseResult(run.stdout)
