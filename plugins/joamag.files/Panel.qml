@@ -3480,18 +3480,49 @@ Panel {
       itemRect: viewRoot.cursorRect
     }
 
-    ConfirmDialog {
-      id: confirmDialog
+    // The confirmation fades in growing to its size and fades out
+    // shrinking, like the other cards, over a backdrop that only fades; what
+    // it asks stays while it goes.
+    Item {
+      id: confirmLayer
       anchors.fill: parent
       z: 10
-      opened: root.confirm !== null
-      message: root.confirm ? root.confirm.message : ""
-      confirmText: root.confirm ? root.confirm.confirmText : ""
-      background: viewRoot.background
-      foreground: viewRoot.foreground
-      fontFamily: root.fontFamily
-      onCanceled: root.confirm = null
-      onConfirmed: root.confirmed()
+      visible: confirmShown > 0
+
+      property var lastConfirm: null
+      readonly property var shownConfirm: root.confirm || lastConfirm
+      property real confirmShown: root.confirm !== null ? 1 : 0
+      Behavior on confirmShown {
+        id: confirmShowing
+        NumberAnimation { duration: Style.duration(confirmShowing.targetValue > 0 ? 220 : 190); easing.type: Easing.Bezier; easing.bezierCurve: Style.easeOut }
+      }
+
+      Connections {
+        target: root
+        function onConfirmChanged() { if (root.confirm) confirmLayer.lastConfirm = root.confirm }
+      }
+
+      Rectangle {
+        anchors.fill: parent
+        color: Qt.rgba(viewRoot.background.r, viewRoot.background.g, viewRoot.background.b, 0.7)
+        opacity: confirmLayer.confirmShown
+      }
+
+      ConfirmDialog {
+        id: confirmDialog
+        anchors.fill: parent
+        opened: confirmLayer.visible
+        scrim: "transparent"
+        opacity: confirmLayer.confirmShown
+        transform: Scale { origin.x: confirmDialog.width / 2; origin.y: confirmDialog.height / 2; xScale: 0.92 + 0.08 * confirmLayer.confirmShown; yScale: xScale }
+        message: confirmLayer.shownConfirm ? confirmLayer.shownConfirm.message : ""
+        confirmText: confirmLayer.shownConfirm ? confirmLayer.shownConfirm.confirmText : ""
+        background: viewRoot.background
+        foreground: viewRoot.foreground
+        fontFamily: root.fontFamily
+        onCanceled: root.confirm = null
+        onConfirmed: root.confirmed()
+      }
     }
 
     // A click outside the field being typed in (the name, the filter, the
@@ -6091,13 +6122,23 @@ Panel {
     id: sheet
     required property color foreground
     required property color background
-    visible: root.keysOpen
+    visible: keysShown > 0
     z: 30
     color: background
     borderSpec: Border.flat(Color.accent, Style.normalBorderWidth)
     padding: Style.space(14)
 
-    MouseArea { anchors.fill: parent; onClicked: root.keysOpen = false }
+    // It fades in growing to its size and fades out shrinking, on the large
+    // preview's curve and times.
+    property real keysShown: root.keysOpen ? 1 : 0
+    Behavior on keysShown {
+      id: keysShowing
+      NumberAnimation { duration: Style.duration(keysShowing.targetValue > 0 ? 220 : 190); easing.type: Easing.Bezier; easing.bezierCurve: Style.easeOut }
+    }
+    opacity: keysShown
+    transform: Scale { origin.x: sheet.width / 2; origin.y: sheet.height / 2; xScale: 0.92 + 0.08 * sheet.keysShown; yScale: xScale }
+
+    MouseArea { anchors.fill: parent; enabled: root.keysOpen; onClicked: root.keysOpen = false }
 
     PanelSectionHeader {
       id: sheetTitle
@@ -6154,8 +6195,23 @@ Panel {
     id: promptLayer
     required property color foreground
     required property color background
-    visible: root.prompt !== null
+    visible: promptShown > 0
     z: 16
+
+    // It fades in growing to its size and fades out shrinking, on the large
+    // preview's curve and times; what it asks stays while it goes.
+    property var lastPrompt: null
+    readonly property var shownPrompt: root.prompt || lastPrompt
+    property real promptShown: root.prompt !== null ? 1 : 0
+    Behavior on promptShown {
+      id: promptShowing
+      NumberAnimation { duration: Style.duration(promptShowing.targetValue > 0 ? 220 : 190); easing.type: Easing.Bezier; easing.bezierCurve: Style.easeOut }
+    }
+
+    Connections {
+      target: root
+      function onPromptChanged() { if (root.prompt) promptLayer.lastPrompt = root.prompt }
+    }
 
     function focusField() {
       if (!root.prompt) return
@@ -6168,12 +6224,15 @@ Panel {
     Rectangle {
       anchors.fill: parent
       color: Qt.rgba(promptLayer.background.r, promptLayer.background.g, promptLayer.background.b, 0.7)
-      MouseArea { anchors.fill: parent; onClicked: root.cancelPrompt() }
+      opacity: promptLayer.promptShown
+      MouseArea { anchors.fill: parent; enabled: root.prompt !== null; onClicked: root.cancelPrompt() }
     }
 
     BorderSurface {
       id: promptBox
       anchors.centerIn: parent
+      opacity: promptLayer.promptShown
+      transform: Scale { origin.x: promptBox.width / 2; origin.y: promptBox.height / 2; xScale: 0.92 + 0.08 * promptLayer.promptShown; yScale: xScale }
       width: Math.min(parent.width - Style.space(32), Style.space(440))
       height: promptColumn.implicitHeight + promptBox.contentTopInset + promptBox.contentBottomInset
       color: promptLayer.background
@@ -6192,7 +6251,7 @@ Panel {
         Text {
           width: parent.width
           textFormat: Text.PlainText
-          text: root.prompt ? root.prompt.title : ""
+          text: promptLayer.shownPrompt ? promptLayer.shownPrompt.title : ""
           color: promptLayer.foreground
           font.family: root.fontFamily
           font.pixelSize: Style.font.title
@@ -6217,10 +6276,10 @@ Panel {
         }
 
         Text {
-          visible: root.prompt !== null && root.prompt.error !== ""
+          visible: promptLayer.shownPrompt !== null && promptLayer.shownPrompt.error !== ""
           width: parent.width
           textFormat: Text.PlainText
-          text: root.prompt ? root.prompt.error : ""
+          text: promptLayer.shownPrompt ? promptLayer.shownPrompt.error : ""
           color: Color.urgent
           font.family: root.fontFamily
           font.pixelSize: Style.font.caption
@@ -6245,7 +6304,7 @@ Panel {
           Button {
             width: Style.space(96)
             height: Style.spacing.controlHeight
-            text: root.prompt ? root.prompt.confirm : ""
+            text: promptLayer.shownPrompt ? promptLayer.shownPrompt.confirm : ""
             fontSize: Style.font.bodySmall
             foreground: promptLayer.foreground
             fontFamily: root.fontFamily
@@ -7149,19 +7208,44 @@ Panel {
     id: conflict
     required property color foreground
     required property color background
-    visible: root.conflictJob !== null || root.chooserClash !== null
+    visible: conflictShown > 0
     z: 15
 
     property int choice: 1
     property bool all: false
 
+    readonly property bool asking: root.conflictJob !== null || root.chooserClash !== null
+    // It fades in growing to its size and fades out shrinking, on the large
+    // preview's curve and times; what it says stays while it goes.
+    property real conflictShown: asking ? 1 : 0
+    Behavior on conflictShown {
+      id: conflictShowing
+      NumberAnimation { duration: Style.duration(conflictShowing.targetValue > 0 ? 220 : 190); easing.type: Easing.Bezier; easing.bezierCurve: Style.easeOut }
+    }
+    property bool forChooser: false
+    property string heading: ""
+
+    function keepCard() {
+      if (!asking) return
+      forChooser = root.chooserClash !== null
+      heading = forChooser ? Model.itemsLabel(root.chooserClash.files.length, root.chooserClash.files[0]) + (root.chooserClash.files.length === 1 ? " already exists in " : " already exist in ") + Model.placeLabel(root.location, root.home, root.places, root.drives)
+        : root.conflictJob.name + " already exists in " + Model.placeLabel(root.transferJob.dest, root.home, root.places, root.drives)
+    }
+
+    Connections {
+      target: root
+      function onConflictJobChanged() { conflict.keepCard() }
+      function onChooserClashChanged() { conflict.keepCard() }
+    }
+
     readonly property var choices: [
-      { how: "skip", label: root.chooserClash ? "Back" : "Skip" },
+      { how: "skip", label: forChooser ? "Back" : "Skip" },
       { how: "keep", label: "Keep both" },
       { how: "replace", label: "Replace" }
     ]
 
     function decide(index) {
+      if (!asking) return
       var how = choices[index].how
       var rest = all
       choice = 1
@@ -7192,12 +7276,15 @@ Panel {
     Rectangle {
       anchors.fill: parent
       color: Qt.rgba(conflict.background.r, conflict.background.g, conflict.background.b, 0.7)
-      MouseArea { anchors.fill: parent; onClicked: conflict.back() }
+      opacity: conflict.conflictShown
+      MouseArea { anchors.fill: parent; enabled: conflict.asking; onClicked: conflict.back() }
     }
 
     BorderSurface {
       id: conflictBox
       anchors.centerIn: parent
+      opacity: conflict.conflictShown
+      transform: Scale { origin.x: conflictBox.width / 2; origin.y: conflictBox.height / 2; xScale: 0.92 + 0.08 * conflict.conflictShown; yScale: xScale }
       width: Math.min(parent.width - Style.space(32), Style.space(420))
       height: conflictColumn.implicitHeight + conflictBox.contentTopInset + conflictBox.contentBottomInset
       color: conflict.background
@@ -7216,8 +7303,7 @@ Panel {
         Text {
           width: parent.width
           textFormat: Text.PlainText
-          text: root.chooserClash ? Model.itemsLabel(root.chooserClash.files.length, root.chooserClash.files[0]) + (root.chooserClash.files.length === 1 ? " already exists in " : " already exist in ") + Model.placeLabel(root.location, root.home, root.places, root.drives)
-            : root.conflictJob ? root.conflictJob.name + " already exists in " + Model.placeLabel(root.transferJob.dest, root.home, root.places, root.drives) : ""
+          text: conflict.heading
           color: conflict.foreground
           font.family: root.fontFamily
           font.pixelSize: Style.font.title
@@ -7227,7 +7313,7 @@ Panel {
         Text {
           width: parent.width
           textFormat: Text.PlainText
-          text: root.chooserClash ? "Go back, keep both (the new one gets another name), or replace what is there."
+          text: conflict.forChooser ? "Go back, keep both (the new one gets another name), or replace what is there."
             : "Skip this one, keep both (the new one is renamed), or replace it (the old one goes to the Trash)."
           color: conflict.foreground
           opacity: 0.6
@@ -7237,7 +7323,7 @@ Panel {
         }
 
         Item {
-          visible: !root.chooserClash
+          visible: !conflict.forChooser
           width: allRow.implicitWidth
           height: allRow.implicitHeight
 
