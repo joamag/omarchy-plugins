@@ -479,7 +479,8 @@ thumbnail() {
     esac
   done
   if timeout 20 "${argv[@]}" >/dev/null 2>"$ERR_FILE" && [[ -s $tmp ]]; then
-    rm -f -- "$THUMB_DIR/$key"-*.png
+    # Older versions of the file go; this one's other sizes stay in use.
+    find "$THUMB_DIR" -maxdepth 1 -name "$key-*.png" ! -name "$key-$mtime-*.png" -delete 2>/dev/null
     mv -f -- "$tmp" "$out"
     find "$THUMB_DIR" -name '*.png' -mtime +90 -delete 2>/dev/null
     printf 'thumbnail\t%s\n' "$out"
@@ -708,7 +709,7 @@ create() {
   if [[ $kind == mkdir ]]; then
     mkdir -- "$target" 2>"$ERR_FILE" || fail "$(last_error)"
   else
-    : >"$target" 2>"$ERR_FILE" || fail "$(last_error)"
+    touch -- "$target" 2>"$ERR_FILE" || fail "$(last_error)"
   fi
   printf 'created\t%s\n' "$target"
 }
@@ -854,7 +855,8 @@ previous_manager() {
 # the widget (go, or reveal for an item to pick in its folder), which shows
 # it in the popup or its window; with none, the popup opens or closes.
 # Without the widget (not in the bar, or the shell is down), and for a
-# location it cannot browse, the previous file manager opens it.
+# location it cannot browse or that is not there, the previous file manager
+# opens it.
 show() {
   local how="$1" target="${2:-}" path="" id
   if [[ -z $target ]]; then
@@ -862,7 +864,7 @@ show() {
   else
     local_path path "$target"
     [[ $how == go && -e $path && ! -d $path ]] && how=reveal
-    [[ -n $path ]] && omarchy-shell joamag.files "$how" "$path" >/dev/null 2>&1 && return 0
+    [[ -n $path && -e $path ]] && omarchy-shell joamag.files "$how" "$path" >/dev/null 2>&1 && return 0
   fi
   id=$(previous_manager) || fail "no other file manager${target:+ to open $target}"
   if [[ -n $target ]]; then launch "$id" "$target"; else launch "$id"; fi

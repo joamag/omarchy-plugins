@@ -2426,11 +2426,16 @@ exit \${FAKE_PY_STATUS:-0}`)
     const before = s.log().length
     assert.equal(Model.parseThumbnail(s.run(["thumbnail", file, "256"], { XDG_CACHE_HOME: cache }).stdout), made)
     assert.equal(s.log().length, before)
-    // A new version of the file replaces the old picture.
+    // Another size of the same version leaves this one in place.
+    const large = Model.parseThumbnail(s.run(["thumbnail", file, "512"], { XDG_CACHE_HOME: cache }).stdout)
+    assert.notEqual(large, made)
+    assert.ok(fs.existsSync(made))
+    // A new version of the file replaces the old pictures, every size.
     fs.utimesSync(file, new Date(2030, 0, 1), new Date(2030, 0, 1))
     const newer = Model.parseThumbnail(s.run(["thumbnail", file, "256"], { XDG_CACHE_HOME: cache }).stdout)
     assert.notEqual(newer, made)
     assert.ok(!fs.existsSync(made))
+    assert.ok(!fs.existsSync(large))
   })
 
   it("says when there is no thumbnail to make", (t) => {
@@ -2726,6 +2731,8 @@ exit \${FAKE_PY_STATUS:-0}`)
     assert.equal(s.run(["touch", music, "New file"]).stdout, "error\tNew file already exists here\n")
     assert.equal(s.run(["mkdir", music, ""]).stdout, "error\ta name cannot be empty\n")
     assert.equal(s.run(["mkdir", path.join(s.home, "none"), "x"]).stdout, `error\tno folder at ${s.home}/none\n`)
+    // What stops a new file is said, not left blank.
+    assert.match(s.run(["touch", "/proc", "joamag-files-test"]).stdout, /^error\ttouch: cannot touch .*joamag-files-test.*\n$/)
     assert.equal(s.run(["mkdir"]).status, 1)
   })
 
@@ -2880,7 +2887,8 @@ esac`)
     const m = manager(s)
     const report = path.join(s.home, "Downloads", "Q4 report.pdf")
     write(report, "%PDF")
-    for (const args of [["open", path.join(s.home, "Downloads")], ["open", `file://${s.home}/Down%20loads/R%26D`], ["open", `file://localhost${s.home}/Music`], ["open", report], ["open", "Music"], ["reveal", path.join(s.home, "Music")], ["open"], ["open-cwd"]]) {
+    fs.mkdirSync(path.join(s.home, "Down loads", "R&D"), { recursive: true })
+    for (const args of [["open", path.join(s.home, "Downloads")], ["open", `file://${s.home}/Down%20loads/R%26D`], ["open", `file://localhost${s.home}/Music`], ["open", report], ["open", "test"], ["reveal", path.join(s.home, "Music")], ["open"], ["open-cwd"]]) {
       assert.equal(s.run(args, m.env).stdout, "")
     }
     assert.deepEqual(s.log(), [
@@ -2890,7 +2898,7 @@ esac`)
       // A file shows in its folder, picked.
       `shell joamag.files reveal ${report}`,
       // A relative path is taken from where it was asked.
-      `shell joamag.files go ${process.cwd()}/Music`,
+      `shell joamag.files go ${process.cwd()}/test`,
       `shell joamag.files reveal ${s.home}/Music`,
       "shell joamag.files summon",
       `shell joamag.files go ${s.home}/Music`,
@@ -2917,7 +2925,7 @@ esac`)
       "shell joamag.files summon",
       "shell joamag.files go /srv",
       `launch ${apps}/org.gnome.Nautilus.desktop /srv`,
-      "shell joamag.files reveal /srv/notes.md",
+      // Not there, so not the widget's to show.
       `launch ${apps}/folio.desktop /srv/notes.md`,
       "shell joamag.files summon",
       `launch ${apps}/folio.desktop`,
