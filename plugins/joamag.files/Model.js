@@ -17,6 +17,8 @@ var ARCHIVE_SUFFIXES = [".tar.gz", ".tar.xz", ".tar.zst", ".tar.bz2", ".tar.lz4"
 // Names bsdtar writes from the suffix alone.
 var COMPRESS_SUFFIXES = [".zip", ".7z", ".tar", ".tar.gz", ".tgz", ".tar.xz", ".txz", ".tar.zst", ".tzst", ".tar.bz2", ".tbz2"]
 var MAX_TABS = 12
+// files.sh lists no more matches than this for a search below a folder.
+var SEARCH_LIMIT = 200
 
 var VIEWS = [
   { key: "list", label: "List", icon: "󰉹" },
@@ -1604,7 +1606,7 @@ function parseResult(raw) {
 function statusText(list, selected, deep, where) {
   var n = (list || []).length
   var text = plural(n, "item")
-  if (deep) text += " found below " + where
+  if (deep) text += " found below " + where + (n >= SEARCH_LIMIT ? " (a search stops at " + SEARCH_LIMIT + ")" : "")
   var picked = pickedEntries(list, selected, -1)
   if (picked.length > 0) {
     var bytes = 0

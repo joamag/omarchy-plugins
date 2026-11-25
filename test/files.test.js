@@ -1872,6 +1872,10 @@ describe("statusText", () => {
     assert.equal(Model.statusText(LISTING, [], false, ""), "6 items")
     assert.equal(Model.statusText(LISTING, [LISTING[2].path, LISTING[3].path, LISTING[0].path], false, ""), "6 items · 3 selected, 310 bytes")
     assert.equal(Model.statusText(LISTING.slice(0, 1), [LISTING[0].path], true, "~/Downloads"), "1 item found below ~/Downloads · 1 selected")
+    // A search cut short says so.
+    const many = Array.from({ length: Model.SEARCH_LIMIT }, (_, i) => entry(`m${i}`))
+    assert.equal(Model.statusText(many, [], true, "~"), "200 items found below ~ (a search stops at 200)")
+    assert.equal(Model.statusText(many.slice(1), [], true, "~"), "199 items found below ~")
     assert.equal(Model.statusText(null, null, false, ""), "0 items")
   })
 })
