@@ -1895,6 +1895,10 @@ Panel {
     }
     windowBuilt = true
     detached = true
+    // Once Hyprland has closed it (Super+W), Quickshell shows the window
+    // again only after it is hidden once more; still hidden, that changes
+    // nothing else.
+    if (!window.visible) window.visible = false
     window.visible = true
     readClipboard("sync")
     if (root.opened) root.close()
