@@ -4760,8 +4760,14 @@ Panel {
     readonly property var listing: kind === "archive" && !member ? root.archives[entry.path] || null : null
     readonly property var summary: listing && listing.members ? Model.archiveSummary(listing.members, 40) : null
     readonly property bool textual: kind === "text"
+    // The first 32 kB of a text file, read with head so a huge log costs no
+    // more than a small one: room for the 8192 characters looked at, however
+    // many bytes each takes.
+    readonly property string textPath: textual && ready ? sourcePath : ""
+    property string textBody: ""
+    property string textOf: ""
     // null once the file turns out to be binary.
-    readonly property var lines: textual ? Model.previewText(previewFile.text(), 40) : ""
+    readonly property var lines: textual ? Model.previewText(textOf === textPath ? textBody : "", 40) : ""
     // Qt draws pictures and PDF pages itself; a PDF falls back to its cover
     // from a system thumbnailer when Qt's PDF reader is not installed, and
     // video, audio, documents and fonts always come from one.
@@ -4772,6 +4778,15 @@ Panel {
     readonly property bool media: kind === "image" || kind === "pdf" || kind === "thumbnail"
 
     onThumbKeyChanged: if (thumbKey !== "") root.requestThumbnail({ path: sourcePath, modified: entry.modified }, 512)
+    onTextPathChanged: readText()
+
+    function readText() {
+      if (textPath === "" || textPath === textOf || paneTextProc.running) return
+      paneTextProc.target = textPath
+      paneTextProc.command = ["head", "-c", "32768", "--", textPath]
+      paneTextProc.running = true
+    }
+
     // The bindings above may not have caught up with a new entry yet, so the
     // entry itself is read here.
     onEntryChanged: {
@@ -4783,11 +4798,18 @@ Panel {
       else if (kindNow === "archive" && !inside) root.loadArchive(entry.path, entry.modified, false)
     }
 
-    FileView {
-      id: previewFile
-      path: previewRoot.textual && previewRoot.ready ? previewRoot.sourcePath : ""
-      printErrors: false
-      blockLoading: false
+    Process {
+      id: paneTextProc
+      property string target: ""
+      stdout: StdioCollector {
+        waitForEnd: true
+        onStreamFinished: {
+          previewRoot.textBody = text
+          previewRoot.textOf = paneTextProc.target
+        }
+      }
+      // A file asked for while this one was read is read next.
+      onExited: previewRoot.readText()
     }
 
     FolderListModel {
