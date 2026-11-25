@@ -24,6 +24,9 @@
       "sortKey": "name",
       "sortDescending": false,
       "columnWidth": 190,
+      "sidebarWidth": 210,
+      "previewWidth": 240,
+      "windowPreviewWidth": 290,
       "defaultFileManager": false,
       "tabs": [],
       "activeTab": 0,
@@ -63,6 +66,33 @@
         "max": 480,
         "step": 10,
         "defaultValue": 190
+      },
+      {
+        "key": "sidebarWidth",
+        "type": "integer",
+        "label": "Sidebar width in the window",
+        "min": 150,
+        "max": 360,
+        "step": 10,
+        "defaultValue": 210
+      },
+      {
+        "key": "previewWidth",
+        "type": "integer",
+        "label": "Preview width in the popup",
+        "min": 180,
+        "max": 560,
+        "step": 10,
+        "defaultValue": 240
+      },
+      {
+        "key": "windowPreviewWidth",
+        "type": "integer",
+        "label": "Preview width in the window",
+        "min": 180,
+        "max": 560,
+        "step": 10,
+        "defaultValue": 290
       },
       {
         "key": "defaultFileManager",

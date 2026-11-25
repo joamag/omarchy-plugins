@@ -56,6 +56,10 @@ Panel {
   property var listingCache: ({})
   // A column width while a divider is being dragged, 0 otherwise.
   property int columnDrag: 0
+  // The sidebar's or the preview's width while its edge is being dragged,
+  // 0 otherwise.
+  property int sidebarDrag: 0
+  property int previewDrag: 0
   // The folder changed while nothing showed it; read it again on show.
   property bool folderDirty: false
   // Search results stream in and are added a batch at a time.
@@ -161,6 +165,9 @@ Panel {
   readonly property string sortKey: Model.normalizeSortKey(setting("sortKey", "name"))
   readonly property bool sortDescending: setting("sortDescending", false) === true
   readonly property int columnWidth: Model.columnWidth(setting("columnWidth", Model.COLUMN_WIDTH))
+  readonly property int sidebarWidth: Model.sidebarWidth(setting("sidebarWidth", Model.SIDEBAR_WIDTH))
+  readonly property int previewWidth: Model.previewWidth(setting("previewWidth", Model.PREVIEW_WIDTH))
+  readonly property int windowPreviewWidth: Model.previewWidth(setting("windowPreviewWidth", Model.PREVIEW_WINDOW_WIDTH), Model.PREVIEW_WINDOW_WIDTH)
   readonly property bool defaultManager: setting("defaultFileManager", false) === true
   readonly property string scriptPath: String(Qt.resolvedUrl("files.sh")).replace(/^file:\/\//, "")
 
@@ -449,6 +456,38 @@ Panel {
 
   function setColumnWidth(units) {
     persistSettings({ columnWidth: Model.columnWidth(units) })
+  }
+
+  // The sidebar's edge and the preview's size them the same way, and a
+  // double click puts the default width back. The preview keeps one width
+  // in the popup and another in the window.
+  function resizeSidebar(units) {
+    sidebarDrag = Model.sidebarWidth(units)
+  }
+
+  function keepSidebarWidth() {
+    if (sidebarDrag <= 0) return
+    setSidebarWidth(sidebarDrag)
+    sidebarDrag = 0
+  }
+
+  function setSidebarWidth(units) {
+    persistSettings({ sidebarWidth: Model.sidebarWidth(units) })
+  }
+
+  function resizePreview(units) {
+    previewDrag = Model.previewWidth(units)
+  }
+
+  function keepPreviewWidth(windowed) {
+    if (previewDrag <= 0) return
+    setPreviewWidth(previewDrag, windowed)
+    previewDrag = 0
+  }
+
+  function setPreviewWidth(units, windowed) {
+    if (windowed) persistSettings({ windowPreviewWidth: Model.previewWidth(units, Model.PREVIEW_WINDOW_WIDTH) })
+    else persistSettings({ previewWidth: Model.previewWidth(units) })
   }
 
   // ---- Settings ---------------------------------------------------------
@@ -2414,6 +2453,10 @@ Panel {
 
     readonly property bool typing: pathField.activeFocus || filterField.activeFocus || root.renamePath !== "" || root.prompt !== null || root.jumpOpen
     readonly property real rowHeight: Style.space(26)
+    // The widest the sidebar and the preview may be on screen, so the files
+    // always keep some room.
+    readonly property real sidebarRoom: Math.round(width / 3)
+    readonly property real previewRoom: Math.max(0, body.width - 2 - Style.space(220))
 
     focus: true
     Keys.onPressed: function(event) {
@@ -2489,9 +2532,19 @@ Panel {
       Sidebar {
         id: sidebar
         visible: viewRoot.windowed
-        width: viewRoot.windowed ? Style.space(210) : 0
+        width: viewRoot.windowed ? Math.min(Style.space(root.sidebarDrag || root.sidebarWidth), viewRoot.sidebarRoom) : 0
         height: parent.height
         foreground: viewRoot.foreground
+
+        // Its edge fills the gap before the files.
+        PaneEdge {
+          anchors.left: parent.right
+          width: Style.space(10)
+          height: parent.height
+          sizes: "sidebar"
+          windowed: viewRoot.windowed
+          limit: viewRoot.sidebarRoom
+        }
       }
 
       Column {
@@ -2818,9 +2871,17 @@ Panel {
             anchors.top: parent.top
             anchors.bottom: parent.bottom
             anchors.margins: 1
-            width: viewRoot.windowed ? Style.space(290) : Style.space(240)
+            width: Math.min(Style.space(root.previewDrag || (viewRoot.windowed ? root.windowPreviewWidth : root.previewWidth)), viewRoot.previewRoom)
             foreground: viewRoot.foreground
             entry: root.showPreview ? root.previewEntry : null
+
+            PaneEdge {
+              anchors.horizontalCenter: parent.left
+              height: parent.height
+              sizes: "preview"
+              windowed: viewRoot.windowed
+              limit: viewRoot.previewRoom
+            }
           }
         }
 
@@ -4642,6 +4703,60 @@ Panel {
           widest = Math.max(widest, nameMetrics.advanceWidth)
         }
         if (widest > 0) root.setColumnWidth(Math.ceil(widest / Style.spaceReal(1)) + Model.COLUMN_CHROME)
+      }
+    }
+  }
+
+  // The edge of the sidebar or of the preview, as SIZES says. Dragged, it
+  // sizes that pane, up to LIMIT on screen; double clicked, it puts the
+  // pane's default width back. It shows only while pointed at.
+  component PaneEdge: Item {
+    id: edge
+    required property string sizes
+    required property bool windowed
+    required property real limit
+    property real startX: 0
+    property real startWidth: 0
+    width: Style.space(7)
+
+    readonly property bool active: edgeMouse.containsMouse || edgeMouse.pressed
+    // The preview grows as its edge is dragged to the left.
+    readonly property int grows: sizes === "preview" ? -1 : 1
+
+    Rectangle {
+      anchors.horizontalCenter: parent.horizontalCenter
+      visible: edge.active
+      width: 2
+      height: parent.height
+      color: Color.accent
+    }
+
+    MouseArea {
+      id: edgeMouse
+      anchors.fill: parent
+      hoverEnabled: true
+      preventStealing: true
+      cursorShape: Qt.SplitHCursor
+      // Measured on the window, since the edge moves as the pane resizes,
+      // and from the width on screen, which LIMIT may hold below the
+      // setting.
+      onPressed: function(mouse) {
+        edge.startX = mapToItem(null, mouse.x, 0).x
+        edge.startWidth = edge.parent.width / Style.spaceReal(1)
+      }
+      onPositionChanged: function(mouse) {
+        if (!pressed) return
+        var units = Math.min(edge.startWidth + edge.grows * (mapToItem(null, mouse.x, 0).x - edge.startX) / Style.spaceReal(1), edge.limit / Style.spaceReal(1))
+        if (edge.sizes === "preview") root.resizePreview(units)
+        else root.resizeSidebar(units)
+      }
+      onReleased: {
+        if (edge.sizes === "preview") root.keepPreviewWidth(edge.windowed)
+        else root.keepSidebarWidth()
+      }
+      onDoubleClicked: {
+        if (edge.sizes === "preview") root.setPreviewWidth(edge.windowed ? Model.PREVIEW_WINDOW_WIDTH : Model.PREVIEW_WIDTH, edge.windowed)
+        else root.setSidebarWidth(Model.SIDEBAR_WIDTH)
       }
     }
   }
