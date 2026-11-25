@@ -4009,14 +4009,14 @@ Panel {
         target: root
         function onListingWillChange() { list.keptY = list.contentY; list.keeping = true }
         function onListingChanged() { list.contentY = list.keptY; list.keeping = false }
-        function onCursorIndexChanged() { Qt.callLater(list.showCursor) }
+        function onCursorIndexChanged() { if (!list.keeping) Qt.callLater(list.showCursor) }
       }
 
       // The cursor in view, followed from the widget's own: a listing of
       // another size sends the view to its top and its current index back
       // to 0. It waits for the view to lay the rows out again, since asked
       // in the middle the view moves them off the cursor's mark; a refresh
-      // keeps the scroll it had.
+      // keeps the scroll it had, the cursor's file moved or not.
       function showCursor() { if (root.cursorIndex >= 0 && root.cursorIndex < count) positionViewAtIndex(root.cursorIndex, ListView.Contain) }
       onCountChanged: if (!keeping) Qt.callLater(list.showCursor)
 
@@ -4482,7 +4482,7 @@ Panel {
         target: root
         function onListingWillChange() { grid.keptY = grid.contentY; grid.keeping = true }
         function onListingChanged() { grid.contentY = grid.keptY; grid.keeping = false }
-        function onCursorIndexChanged() { Qt.callLater(grid.showCursor) }
+        function onCursorIndexChanged() { if (!grid.keeping) Qt.callLater(grid.showCursor) }
       }
 
       // The cursor in view, as the list keeps it.
