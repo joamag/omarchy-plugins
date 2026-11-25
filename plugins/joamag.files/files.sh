@@ -542,8 +542,13 @@ extract() {
 
   stop_extract() {
     [[ -n $child ]] && kill "$child" 2>/dev/null && wait "$child" 2>/dev/null
-    (( made )) && rm -rf -- "$dest"
-    printf 'cancelled\n'
+    if (( made )); then
+      rm -rf -- "$dest"
+      printf 'cancelled\n'
+    else
+      # In a folder that was there already, what landed stays.
+      printf 'cancelled\tkept\n'
+    fi
     exit 0
   }
   trap stop_extract TERM INT

@@ -136,6 +136,9 @@ Panel {
   property var taskErrors: []
   property string taskCreated: ""
   property bool taskCancelled: false
+  // A cancelled extraction into a folder that was there already keeps what
+  // it wrote.
+  property bool taskKept: false
 
   property string renamePath: ""
   property string renameError: ""
@@ -982,6 +985,7 @@ Panel {
     taskErrors = []
     taskCreated = ""
     taskCancelled = false
+    taskKept = false
     taskShown = false
     taskTimer.restart()
     transferProc.command = [root.scriptPath].concat(args)
@@ -1077,6 +1081,7 @@ Panel {
     if (r.created.length > 0) taskCreated = r.created[0]
     if (r.errors.length > 0) taskErrors = taskErrors.concat(r.errors)
     if (r.cancelled) taskCancelled = true
+    if (r.kept) taskKept = true
     task = next
   }
 
@@ -1329,7 +1334,7 @@ Panel {
       Qt.callLater(function() { root.transfer(staged, root.stagingDest, "move") })
       return
     }
-    if (taskCancelled) showToast(finished.mode === "extract" ? "Extraction cancelled; what it made is gone" : "Compression cancelled; nothing was written")
+    if (taskCancelled) showToast(finished.mode !== "extract" ? "Compression cancelled; nothing was written" : taskKept ? "Extraction cancelled; what it extracted so far stays" : "Extraction cancelled; what it made is gone")
     else if (taskErrors.length > 0) lastError = taskErrors[taskErrors.length - 1]
     else if (finished.mode === "extract" && taskMoved.length > 0) {
       var into = taskMoved[0].to

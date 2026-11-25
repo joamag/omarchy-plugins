@@ -1854,6 +1854,8 @@ describe("parseResult", () => {
     assert.deepEqual(r.created, ["/h/New folder"])
     assert.equal(r.mounted, "/run/media/u/T7")
     assert.equal(r.cancelled, true)
+    assert.equal(r.kept, false)
+    assert.equal(Model.parseResult("cancelled\tkept").kept, true)
   })
 
   it("starts empty", () => {
@@ -2562,6 +2564,23 @@ exit \${FAKE_PY_STATUS:-0}`)
     await run.closed
     assert.equal(Model.parseResult(run.stdout).cancelled, true)
     assert.ok(!fs.existsSync(dest))
+  })
+
+  it("cancels an extraction into a folder that was there, keeping what landed", async (t) => {
+    const s = setup(t)
+    const a = archives(s)
+    fakeCommand(s.bin, "bsdtar", 'if [[ $1 == -xkf ]]; then mkdir -p "$4"; echo x > "$4/partial"; exec sleep 30; fi; exec /usr/bin/bsdtar "$@"')
+    const dest = path.join(s.home, "Music")
+    write(path.join(dest, "mine.txt"), "mine")
+    const run = background(t, s, ["extract", a.zip, dest, "0"])
+    await run.progressed
+    run.child.kill("SIGTERM")
+    await run.closed
+    const r = Model.parseResult(run.stdout)
+    assert.equal(r.cancelled, true)
+    assert.equal(r.kept, true)
+    assert.equal(fs.readFileSync(path.join(dest, "mine.txt"), "utf8"), "mine")
+    assert.ok(fs.existsSync(path.join(dest, "partial")))
   })
 
   it("compresses into the format its name asks for", (t) => {

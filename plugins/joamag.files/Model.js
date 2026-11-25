@@ -1577,10 +1577,10 @@ function parseFree(raw) {
 }
 
 // Everything an action prints, line by line: errors, finished transfers and
-// renames, trashed and restored items, created files, mounts, and the
-// progress figures of a long copy.
+// renames, trashed and restored items, created files, mounts, the progress
+// figures of a long copy, and a cancel that kept what it wrote.
 function parseResult(raw) {
-  var out = { errors: [], done: [], trashed: [], restored: [], created: [], mounted: "", total: NaN, progress: NaN, cancelled: false }
+  var out = { errors: [], done: [], trashed: [], restored: [], created: [], mounted: "", total: NaN, progress: NaN, cancelled: false, kept: false }
   var lines = String(raw || "").split("\n")
   for (var i = 0; i < lines.length; i++) {
     var parts = lines[i].split("\t")
@@ -1593,7 +1593,7 @@ function parseResult(raw) {
     case "mounted": out.mounted = parts[1] || ""; break
     case "total": out.total = num(parts[1]); break
     case "progress": out.progress = num(parts[1]); break
-    case "cancelled": out.cancelled = true; break
+    case "cancelled": out.cancelled = true; out.kept = parts[1] === "kept"; break
     }
   }
   return out
