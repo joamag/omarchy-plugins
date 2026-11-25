@@ -3490,6 +3490,27 @@ Panel {
       onCanceled: root.confirm = null
       onConfirmed: root.confirmed()
     }
+
+    // A click outside the field being typed in (the name, the filter, the
+    // path) gives the keyboard back to the folder, so its keys work again;
+    // the click itself still reaches what is under it.
+    Item {
+      anchors.fill: parent
+      z: 100
+
+      PointHandler {
+        acceptedButtons: Qt.AllButtons
+        onActiveChanged: {
+          if (!active) return
+          var fields = [chooserField, filterField, pathField]
+          for (var i = 0; i < fields.length; i++) {
+            if (!fields[i].activeFocus) continue
+            if (!fields[i].contains(fields[i].mapFromItem(null, point.scenePosition.x, point.scenePosition.y))) viewRoot.forceActiveFocus()
+            return
+          }
+        }
+      }
+    }
   }
 
   // Discrete wheel scrolling: a notch moves the view a whole number of rows
