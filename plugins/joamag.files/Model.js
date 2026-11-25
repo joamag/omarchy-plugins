@@ -411,6 +411,18 @@ function stripCount(inner) {
   return inner ? String(inner).split("/").length : 0
 }
 
+// EXTRACTED, the copies taken out of archives by their location inside
+// one, without those of ARCHIVE: a new version of it was read, so its
+// members are taken out again when next asked for.
+function withoutMembers(extracted, archive) {
+  var out = {}
+  for (var location in extracted || {}) {
+    var at = splitArchive(location)
+    if (!at || at.archive !== archive) out[location] = extracted[location]
+  }
+  return out
+}
+
 // The name offered for a new archive: the file's or folder's own name for
 // one item, "Archive" for several, as a free .zip in that folder.
 function compressName(entries, names) {

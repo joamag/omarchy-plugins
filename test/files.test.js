@@ -341,6 +341,29 @@ describe("stripCount", () => {
   })
 })
 
+describe("withoutMembers", () => {
+  it("drops the copies of one archive's members and keeps the rest", () => {
+    const extracted = {
+      [Model.archiveLocation("/d/photos.zip", "a.jpg")]: "/cache/1/a.jpg",
+      [Model.archiveLocation("/d/photos.zip", "trip/b.jpg")]: "/cache/1/trip/b.jpg",
+      [Model.archiveLocation("/d/photos.zip.old", "a.jpg")]: "/cache/2/a.jpg",
+      [Model.archiveLocation("/e/docs.tar", "c.md")]: "/cache/3/c.md",
+    }
+    assert.deepEqual(Model.withoutMembers(extracted, "/d/photos.zip"), {
+      [Model.archiveLocation("/d/photos.zip.old", "a.jpg")]: "/cache/2/a.jpg",
+      [Model.archiveLocation("/e/docs.tar", "c.md")]: "/cache/3/c.md",
+    })
+    // The map itself is left as it was, for the bindings to see a new one.
+    assert.equal(Object.keys(extracted).length, 4)
+  })
+
+  it("keeps everything for another archive, and copes with nothing held", () => {
+    const extracted = { [Model.archiveLocation("/e/docs.tar", "c.md")]: "/cache/3/c.md", "/not/a/member": "/x" }
+    assert.deepEqual(Model.withoutMembers(extracted, "/d/photos.zip"), extracted)
+    assert.deepEqual(Model.withoutMembers(null, "/d/photos.zip"), {})
+  })
+})
+
 describe("compressName", () => {
   it("offers a free .zip named after the item, or Archive for several", () => {
     assert.equal(Model.compressName([entry("notes.md")], []), "notes.zip")

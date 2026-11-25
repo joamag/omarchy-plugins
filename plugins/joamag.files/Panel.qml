@@ -1125,9 +1125,11 @@ Panel {
   // ---- Archives ---------------------------------------------------------
 
   // Reads an archive's listing, unless the one held is of the same version.
+  // Members taken out of the version before are taken out again when asked.
   function loadArchive(path, modified, force) {
     var held = archives[path]
     if (held && !force && (held.loading || modified === undefined || held.modified === modified)) return
+    extracted = Model.withoutMembers(extracted, path)
     var next = Object.assign({}, archives)
     next[path] = { members: held ? held.members : null, modified: modified, error: "", loading: true }
     archives = next
