@@ -2047,6 +2047,33 @@ describe("folderMenu", () => {
     assert.deepEqual(Model.folderMenu(Model.RECENT, true, false, "name", false).map((i) => i.id), ["selectall", "hidden", "sort:name", "sort:modified", "sort:size", "sort:type"])
     assert.deepEqual(Model.folderMenu(Model.TRASH, true, false, "name", false).map((i) => i.id), ["emptytrash"])
   })
+
+  it("ends with Settings when it is offered, in the Trash too", () => {
+    assert.equal(Model.folderMenu(HOME, false, false, "name", false, true).at(-1).id, "settings")
+    assert.deepEqual(Model.folderMenu(Model.TRASH, false, false, "name", false, true).map((i) => i.id), ["emptytrash", "settings"])
+    assert.ok(!Model.folderMenu(HOME, false, false, "name", false, false).some((i) => i.id === "settings"))
+  })
+})
+
+describe("settingsMenu", () => {
+  it("lists the integrations, checked while on, the tick apart from the label", () => {
+    const menu = Model.settingsMenu({ defaultFileManager: true, fileChooser: false })
+    assert.deepEqual(menu.map((i) => i.id), ["setting:defaultFileManager", "setting:fileChooser", "setting:launcherEntry"])
+    assert.deepEqual(menu.map((i) => i.checked), [true, false, false])
+    assert.ok(!menu.some((i) => i.label.includes("✓")))
+    assert.ok(menu.every((i) => i.icon !== ""))
+  })
+
+  it("checks nothing without settings, nor for a value that is not true", () => {
+    assert.ok(!Model.settingsMenu(null).some((i) => i.checked))
+    assert.ok(!Model.settingsMenu({ launcherEntry: "true" }).some((i) => i.checked))
+  })
+
+  it("labels each one as the manifest does", () => {
+    const manifest = JSON.parse(fs.readFileSync(path.join(pluginDir("joamag.files"), "manifest.json"), "utf8"))
+    const labels = Object.fromEntries(manifest.barWidget.schema.map((f) => [f.key, f.label]))
+    for (const item of Model.settingsMenu({})) assert.equal(item.label, labels[item.id.slice("setting:".length)])
+  })
 })
 
 describe("chooserApp", () => {

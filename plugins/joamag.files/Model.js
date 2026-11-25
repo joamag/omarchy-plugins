@@ -1741,9 +1741,11 @@ function itemMenu(entry, count, clipboard, bookmarked) {
   return items
 }
 
-// Right click on empty space, and the header's ⋮ button.
-function folderMenu(path, clipboard, showHidden, sortKey, bookmarked) {
-  if (path === TRASH) return [{ id: "emptytrash", label: "Empty Trash", icon: "󰆴", danger: true }]
+// Right click on empty space, and the header's ⋮ button; with SETTINGS,
+// the widget's Settings last, which a dialog on screen leaves out.
+function folderMenu(path, clipboard, showHidden, sortKey, bookmarked, settings) {
+  var tail = settings ? [{ id: "settings", label: "Settings", icon: "󰒓" }] : []
+  if (path === TRASH) return [{ id: "emptytrash", label: "Empty Trash", icon: "󰆴", danger: true }].concat(tail)
   var items = []
   if (isArchiveLocation(path)) items.push({ id: "extractall", label: "Extract the archive here", icon: "󰇚", shortcut: "E" })
   if (!isVirtual(path)) {
@@ -1758,7 +1760,24 @@ function folderMenu(path, clipboard, showHidden, sortKey, bookmarked) {
     items.push({ id: "bookmark", label: bookmarked ? "Remove bookmark" : "Bookmark this folder", icon: "󰃀", shortcut: "Ctrl+D" })
     items.push({ id: "nautilus", label: "Open in Nautilus", icon: "󰏌", shortcut: "N" })
   }
-  return items
+  return items.concat(tail)
+}
+
+// What the Settings item turns on and off: the integrations, by their
+// settings' names, labelled the way the manifest has them.
+var INTEGRATION_SETTINGS = [
+  { key: "defaultFileManager", label: "Use as the default file manager", icon: "󰉋" },
+  { key: "fileChooser", label: "Show apps' Open and Save dialogs in Files", icon: "󰈔" },
+  { key: "launcherEntry", label: "Show Files in the app launcher", icon: "󰀻" }
+]
+
+// The Settings menu: each integration, checked while ON (by setting name)
+// has it on. The tick goes where a shortcut would, so a long label cut
+// short never takes it along.
+function settingsMenu(on) {
+  return INTEGRATION_SETTINGS.map(function(s) {
+    return { id: "setting:" + s.key, label: s.label, icon: s.icon, checked: !!on && on[s.key] === true }
+  })
 }
 
 // ---------- File chooser ----------
