@@ -3075,7 +3075,7 @@ case "$1" in
     printf '%s\\ninode/directory=%s\\n' "$kept" "$2" > "$list"
     printf 'xdg-mime %s\\n' "$*" >> "$FAKE_LOG" ;;
 esac`)
-    for (const name of ["hyprctl", "gdbus", "setsid", "pkill"]) fakeCommand(s.bin, name, `printf '${name} %s\\n' "$*" >> "$FAKE_LOG"`)
+    for (const name of ["hyprctl", "gdbus", "setsid", "pkill", "systemctl"]) fakeCommand(s.bin, name, `printf '${name} %s\\n' "$*" >> "$FAKE_LOG"`)
     fakeCommand(s.bin, "pgrep", 'printf "pgrep %s\\n" "$*" >> "$FAKE_LOG"; [[ -n ${FAKE_RUNNING:-} ]]')
     const apps = path.join(s.data, "applications")
     const installed = (id) => fs.writeFileSync(path.join(apps, id), `[Desktop Entry]\nName=${id}\nMimeType=inode/directory;\n`)
@@ -3086,6 +3086,13 @@ esac`)
       previous: path.join(s.home, ".local", "state", "joamag-files", "previous-file-manager"),
       previousService: path.join(s.home, ".local", "state", "joamag-files", "previous-file-manager.service"),
       mimeapps: path.join(s.config, "mimeapps.list"),
+      chooserService: path.join(s.data, "dbus-1", "services", "org.freedesktop.impl.portal.desktop.joamag.files.service"),
+      chooserPortal: path.join(s.data, "xdg-desktop-portal", "portals", "joamag-files.portal"),
+      portals: path.join(s.config, "xdg-desktop-portal", "hyprland-portals.conf"),
+      previousChooser: path.join(s.home, ".local", "state", "joamag-files", "previous-file-chooser"),
+      portalsMade: path.join(s.home, ".local", "state", "joamag-files", "portals-made"),
+      hyprland: path.join(s.config, "hypr", "hyprland.lua"),
+      launcher: path.join(apps, "joamag-files-window.desktop"),
     }
     // The service's whole command line, as files.sh looks for it.
     const service = `(.*/)?python3 ${pluginDir("joamag.files").replace(/[\][\\.*^$+?(){}|]/g, "\\$&")}/filemanager1\\.py`
@@ -3322,6 +3329,123 @@ esac`)
     assert.equal(s.run(["default", "on"], { ...m.env, FAKE_MIME_FAIL: "1" }).stdout, "error\txdg-mime: cannot write\n")
   })
 
+  it("shows the window, or the previous file manager without the widget", (t) => {
+    const s = setup(t)
+    const m = manager(s)
+    const apps = path.join(s.data, "applications")
+    assert.equal(s.run(["window"], m.env).stdout, "")
+    m.installed("org.gnome.Nautilus.desktop")
+    s.run(["window"], { ...m.env, FAKE_SHELL_STATUS: "1" })
+    assert.deepEqual(s.log(), ["shell joamag.files window", "shell joamag.files window", `launch ${apps}/org.gnome.Nautilus.desktop`])
+  })
+
+  it("shows apps' Open and Save dialogs in the widget, and hands everything back", (t) => {
+    const s = setup(t)
+    const m = manager(s)
+    const here = pluginDir("joamag.files")
+    const portals = "[preferred]\ndefault=hyprland;gtk\norg.freedesktop.impl.portal.Secret=gnome-keyring\n"
+    const mine = "-- My config\nrequire(\"hypr.bindings\")\n"
+    write(m.files.portals, portals)
+    write(m.files.hyprland, mine)
+    assert.equal(s.run(["chooser", "on"], m.env).stdout, "")
+    assert.equal(fs.readFileSync(m.files.chooserService, "utf8"), `[D-BUS Service]\nName=org.freedesktop.impl.portal.desktop.joamag.files\nExec=${here}/filechooser.py\n`)
+    assert.equal(fs.readFileSync(m.files.chooserPortal, "utf8"), "[portal]\nDBusName=org.freedesktop.impl.portal.desktop.joamag.files\nInterfaces=org.freedesktop.impl.portal.FileChooser;\n")
+    assert.equal(fs.readFileSync(m.files.portals, "utf8"), "[preferred]\norg.freedesktop.impl.portal.FileChooser=joamag-files\ndefault=hyprland;gtk\norg.freedesktop.impl.portal.Secret=gnome-keyring\n")
+    assert.equal(fs.readFileSync(m.files.hyprland, "utf8"), mine + [
+      "",
+      "-- joamag.files: the Files chooser floats over the app that asked (its File chooser setting adds and removes these lines)",
+      'o.window({ class = "^org.quickshell$", title = "^Files chooser · " }, { tag = "+floating-window" })',
+      "-- joamag.files: end",
+      "",
+    ].join("\n"))
+    assert.deepEqual(s.log(), [
+      "gdbus call --session --dest org.freedesktop.DBus --object-path /org/freedesktop/DBus --method org.freedesktop.DBus.ReloadConfig",
+      "systemctl --user try-restart xdg-desktop-portal.service",
+      "hyprctl reload",
+    ])
+
+    // Again, at the next start: nothing to change.
+    fs.writeFileSync(s.env.FAKE_LOG, "")
+    s.run(["chooser", "on"], m.env)
+    assert.equal(fs.readFileSync(s.env.FAKE_LOG, "utf8"), "")
+
+    // Off: every file as it was, the service stopped.
+    assert.equal(s.run(["chooser", "off"], m.env).stdout, "")
+    assert.equal(fs.readFileSync(m.files.portals, "utf8"), portals)
+    assert.equal(fs.readFileSync(m.files.hyprland, "utf8"), mine)
+    for (const file of [m.files.chooserService, m.files.chooserPortal, m.files.portalsMade]) assert.ok(!fs.existsSync(file), file)
+    const pattern = m.service.replace("filemanager1", "filechooser")
+    assert.deepEqual(s.log(), [
+      "gdbus call --session --dest org.freedesktop.DBus --object-path /org/freedesktop/DBus --method org.freedesktop.DBus.ReloadConfig",
+      "systemctl --user try-restart xdg-desktop-portal.service",
+      "hyprctl reload",
+      `pkill -f -x -- ${pattern}`,
+    ])
+
+    // Off again, and off for someone who never turned it on, change nothing.
+    fs.writeFileSync(s.env.FAKE_LOG, "")
+    s.run(["chooser", "off"], m.env)
+    fs.rmSync(m.files.hyprland)
+    s.run(["chooser", "off"], m.env)
+    assert.deepEqual(s.log(), [`pkill -f -x -- ${pattern}`, `pkill -f -x -- ${pattern}`])
+    assert.ok(!fs.existsSync(m.files.hyprland))
+  })
+
+  it("sets the user's own file chooser aside, and makes preferences only when there are none", (t) => {
+    const s = setup(t)
+    const m = manager(s)
+    // The user's own choice of dialog comes back where it was.
+    const theirs = "[preferred]\norg.freedesktop.impl.portal.FileChooser=kde\ndefault=gtk\n"
+    write(m.files.portals, theirs)
+    s.run(["chooser", "on"], m.env)
+    assert.equal(fs.readFileSync(m.files.portals, "utf8"), "[preferred]\norg.freedesktop.impl.portal.FileChooser=joamag-files\ndefault=gtk\n")
+    assert.equal(fs.readFileSync(m.files.previousChooser, "utf8"), "org.freedesktop.impl.portal.FileChooser=kde\n")
+    s.run(["chooser", "off"], m.env)
+    assert.equal(fs.readFileSync(m.files.portals, "utf8"), theirs)
+    assert.ok(!fs.existsSync(path.dirname(m.files.previousChooser)))
+    // Preferences without a [preferred] section get one.
+    write(m.files.portals, "# empty\n")
+    s.run(["chooser", "on"], m.env)
+    assert.equal(fs.readFileSync(m.files.portals, "utf8"), "# empty\n[preferred]\norg.freedesktop.impl.portal.FileChooser=joamag-files\n")
+    s.run(["chooser", "off"], m.env)
+    assert.equal(fs.readFileSync(m.files.portals, "utf8"), "# empty\n[preferred]\n")
+    // None of the user's own: a copy of the system's, which goes again.
+    fs.rmSync(m.files.portals)
+    const system = path.join(s.dir, "system")
+    write(path.join(system, "xdg-desktop-portal", "hyprland-portals.conf"), "[preferred]\ndefault=gtk\n")
+    s.run(["chooser", "on"], { ...m.env, XDG_DATA_DIRS: `${path.join(s.dir, "none")}:${system}` })
+    assert.equal(fs.readFileSync(m.files.portals, "utf8"), "[preferred]\norg.freedesktop.impl.portal.FileChooser=joamag-files\ndefault=gtk\n")
+    s.run(["chooser", "off"], m.env)
+    assert.ok(!fs.existsSync(m.files.portals))
+    assert.ok(!fs.existsSync(m.files.portalsMade))
+    // Not even the system's: Omarchy's.
+    s.run(["chooser", "on"], m.env)
+    assert.equal(fs.readFileSync(m.files.portals, "utf8"), "[preferred]\norg.freedesktop.impl.portal.FileChooser=joamag-files\ndefault=hyprland;gtk\n")
+  })
+
+  it("passes the widget's answer on to the chooser service", (t) => {
+    const s = setup(t)
+    const away = { DBUS_SESSION_BUS_ADDRESS: `unix:path=${path.join(s.dir, "no-bus")}` }
+    assert.match(s.run(["chosen", "1", "0", "0", "/a"], away).stdout, /^error\t\S/)
+    assert.equal(s.run(["chosen", "1"], away).stdout, "error\tanswer needs an id, a response and a filter\n")
+  })
+
+  it("lists the window in the app launcher, and takes it out", (t) => {
+    const s = setup(t)
+    const m = manager(s)
+    const here = pluginDir("joamag.files")
+    assert.equal(s.run(["launcher", "on"], m.env).stdout, "")
+    assert.equal(fs.readFileSync(m.files.launcher, "utf8"), [
+      "[Desktop Entry]", "Type=Application", "Name=Files", "GenericName=File Manager",
+      "Comment=Browse, copy and move files in the Files window of the bar", "Icon=system-file-manager",
+      `Exec=${here}/files.sh window`, "Categories=System;FileTools;FileManager;", "Keywords=folders;explorer;", "StartupNotify=false", "",
+    ].join("\n"))
+    assert.equal(s.run(["launcher", "on"], m.env).stdout, "")
+    assert.equal(s.run(["launcher", "off"], m.env).stdout, "")
+    assert.ok(!fs.existsSync(m.files.launcher))
+    assert.equal(s.run(["launcher", "off"], m.env).stdout, "")
+  })
+
   it("rejects bad invocations", (t) => {
     const s = setup(t)
     assert.equal(s.run(["bogus"]).status, 1)
@@ -3329,6 +3453,8 @@ esac`)
     assert.equal(s.run(["free"]).status, 1)
     assert.equal(s.run(["reveal"]).status, 1)
     assert.equal(s.run(["default"]).stdout, "error\tdefault takes on or off\n")
+    assert.equal(s.run(["chooser", "maybe"]).stdout, "error\tchooser takes on or off\n")
+    assert.equal(s.run(["launcher"]).stdout, "error\tlauncher takes on or off\n")
   })
 })
 

@@ -42,6 +42,11 @@
 #   files.sh reveal PATH            show the folder holding PATH, with PATH picked
 #   files.sh default on|off         make the widget the default file manager, or hand back to the
 #                                   previous one
+#   files.sh window                 show the widget's window, or bring it to the front
+#   files.sh chooser on|off         show apps' Open and Save dialogs in the widget, or hand them back
+#                                   to the GTK dialog
+#   files.sh chosen ID RESPONSE FILTER [PATH...]   the widget's answer to one of those dialogs
+#   files.sh launcher on|off        list the widget's window in the app launcher, or take it out
 #
 # Actions print "error<TAB>message" when one item fails and carry on with the
 # rest; the popup reports the last one. Replacing a file sends the old one to
@@ -66,6 +71,22 @@ PREVIOUS_FILE=${XDG_STATE_HOME:-$HOME/.local/state}/joamag-files/previous-file-m
 PREVIOUS_SERVICE=${XDG_STATE_HOME:-$HOME/.local/state}/joamag-files/previous-file-manager.service
 KEYS_BEGIN="-- joamag.files: the file manager keys open the Files widget (its Default file manager setting adds and removes these lines)"
 KEYS_END="-- joamag.files: end"
+# What shows apps' Open and Save dialogs in the widget: the file chooser
+# service, the portal file the desktop portal finds it by, the user's
+# preference for it, and a rule in the user's Hyprland config that floats
+# the dialog.
+CHOOSER_NAME=org.freedesktop.impl.portal.desktop.joamag.files
+CHOOSER_SERVICE=${XDG_DATA_HOME:-$HOME/.local/share}/dbus-1/services/$CHOOSER_NAME.service
+CHOOSER_PORTAL=${XDG_DATA_HOME:-$HOME/.local/share}/xdg-desktop-portal/portals/joamag-files.portal
+PORTALS_FILE=${XDG_CONFIG_HOME:-$HOME/.config}/xdg-desktop-portal/hyprland-portals.conf
+PORTAL_LINE=org.freedesktop.impl.portal.FileChooser=joamag-files
+PREVIOUS_CHOOSER=${XDG_STATE_HOME:-$HOME/.local/state}/joamag-files/previous-file-chooser
+PORTALS_MADE=${XDG_STATE_HOME:-$HOME/.local/state}/joamag-files/portals-made
+HYPRLAND_FILE=${XDG_CONFIG_HOME:-$HOME/.config}/hypr/hyprland.lua
+RULE_BEGIN="-- joamag.files: the Files chooser floats over the app that asked (its File chooser setting adds and removes these lines)"
+RULE_END="-- joamag.files: end"
+# The widget's window in the app launcher.
+LAUNCHER_FILE=${XDG_DATA_HOME:-$HOME/.local/share}/applications/joamag-files-window.desktop
 # Where apps and thumbnailers are registered, the spec's default when unset.
 DATA_DIRS=${XDG_DATA_DIRS:-/usr/local/share:/usr/share}
 SEARCH_LIMIT=200
@@ -853,14 +874,16 @@ previous_manager() {
 
 # A folder from another app, Show in folder or the file manager keys goes to
 # the widget (go, or reveal for an item to pick in its folder), which shows
-# it in the popup or its window; with none, the popup opens or closes.
+# it in the popup or its window; with none, the popup opens or closes, or
+# with window, the window shows.
 # Without the widget (not in the bar, or the shell is down), and for a
 # location it cannot browse or that is not there, the previous file manager
 # opens it.
 show() {
   local how="$1" target="${2:-}" path="" id
   if [[ -z $target ]]; then
-    omarchy-shell joamag.files summon >/dev/null 2>&1 && return 0
+    [[ $how == window ]] || how=summon
+    omarchy-shell joamag.files "$how" >/dev/null 2>&1 && return 0
   else
     local_path path "$target"
     [[ $how == go && -e $path && ! -d $path ]] && how=reveal
@@ -877,15 +900,28 @@ write_changed() {
   printf '%s\n' "$2" >"$1"
 }
 
-# The app that opens folders, hidden from the launcher. Exec is quoted only
-# for a plugin folder that needs it: xdg-mime checks the app is there by the
-# first word of Exec, quotes and all, and passes over it otherwise.
-desktop_entry() {
+# files.sh as the first word of an Exec line, quoted only for a plugin
+# folder that needs it: xdg-mime checks the app is there by the first word
+# of Exec, quotes and all, and passes over it otherwise.
+exec_word() {
   local exec="$HERE/files.sh"
   [[ $exec == *[^A-Za-z0-9/._+-]* ]] && exec="\"$exec\""
+  printf '%s' "$exec"
+}
+
+# The app that opens folders, hidden from the launcher.
+desktop_entry() {
   printf '%s\n' "[Desktop Entry]" "Type=Application" "Name=Files widget" \
     "Comment=Open folders in the Files widget of the bar" "Icon=system-file-manager" \
-    "Exec=$exec open %U" "MimeType=inode/directory;" "NoDisplay=true" "StartupNotify=false"
+    "Exec=$(exec_word) open %U" "MimeType=inode/directory;" "NoDisplay=true" "StartupNotify=false"
+}
+
+# Files in the app launcher: the widget's window.
+launcher_entry() {
+  printf '%s\n' "[Desktop Entry]" "Type=Application" "Name=Files" "GenericName=File Manager" \
+    "Comment=Browse, copy and move files in the Files window of the bar" "Icon=system-file-manager" \
+    "Exec=$(exec_word) window" "Categories=System;FileTools;FileManager;" "Keywords=folders;explorer;" \
+    "StartupNotify=false"
 }
 
 dbus_service() {
@@ -898,12 +934,26 @@ dbus_reload() {
     --method org.freedesktop.DBus.ReloadConfig >/dev/null 2>&1 || true
 }
 
-# The FileManager1 service's whole command line, for pgrep and pkill: an
-# editor or a pager on the script names it too, and is not it.
+# A service's whole command line, the python script SCRIPT of the plugin,
+# for pgrep and pkill: an editor or a pager on the script names it too, and
+# is not it.
 service_pattern() {
   local here
   here=$(printf '%s' "$HERE" | sed 's/[][\.*^$+?(){}|]/\\&/g')
-  printf '(.*/)?python3 %s/filemanager1\\.py' "$here"
+  printf '(.*/)?python3 %s/%s' "$here" "${1//./\\.}"
+}
+
+chooser_service() {
+  printf '%s\n' "[D-BUS Service]" "Name=$CHOOSER_NAME" "Exec=$HERE/filechooser.py"
+}
+
+chooser_portal() {
+  printf '%s\n' "[portal]" "DBusName=$CHOOSER_NAME" "Interfaces=org.freedesktop.impl.portal.FileChooser;"
+}
+
+# The portal reads its preferences only when it starts.
+restart_portal() {
+  systemctl --user try-restart xdg-desktop-portal.service >/dev/null 2>&1 || true
 }
 
 # The lines of the user's Hyprland bindings that point the file manager keys
@@ -919,30 +969,93 @@ keys_block() {
     "$KEYS_END"
 }
 
-# The user's bindings without that block, nor the blank lines it leaves at
-# the end.
-bindings_without_keys() {
-  awk -v begin="$KEYS_BEGIN" -v end="$KEYS_END" '
+# The rule that floats the file chooser over the app that asked, the way
+# the portal's own dialogs float, between two markers in the user's
+# Hyprland config so it can be taken out again.
+rule_block() {
+  printf '%s\n' "$RULE_BEGIN" \
+    'o.window({ class = "^org.quickshell$", title = "^Files chooser · " }, { tag = "+floating-window" })' \
+    "$RULE_END"
+}
+
+# FILE without the block between BEGIN and END, nor the blank lines it
+# leaves at the end.
+without_block() {
+  awk -v begin="$2" -v end="$3" '
     $0 == begin { skip = 1; next }
     skip { if ($0 == end) skip = 0; next }
     /^$/ { blank++; next }
     { while (blank > 0) { print ""; blank-- } print }
-  ' "$BINDINGS_FILE"
+  ' "$1"
 }
 
-# Adds the block (on) or takes it out (off), and has Hyprland read the
-# bindings again when that changed them.
-set_keys() {
-  local kept="" next
-  if [[ -f $BINDINGS_FILE ]]; then
-    kept=$(bindings_without_keys)
-  elif [[ $1 == off ]]; then
+# Adds BLOCK to the end of FILE, between BEGIN and END (on), or takes it
+# out (off), and has Hyprland read its config again when that changed it.
+set_block() {
+  local file=$1 begin=$2 end=$3 kept="" next
+  if [[ -f $file ]]; then
+    kept=$(without_block "$file" "$begin" "$end")
+  elif [[ $4 == off ]]; then
     return 0
   fi
   next=$kept
-  [[ $1 == on ]] && next="${kept:+$kept$'\n\n'}$(keys_block)"
-  write_changed "$BINDINGS_FILE" "$next" || return 0
+  [[ $4 == on ]] && next="${kept:+$kept$'\n\n'}$5"
+  write_changed "$file" "$next" || return 0
   hyprctl reload >/dev/null 2>&1 || true
+}
+
+set_keys() {
+  set_block "$BINDINGS_FILE" "$KEYS_BEGIN" "$KEYS_END" "$1" "$(keys_block)"
+}
+
+# LINE right under the [preferred] header of TEXT, or under a new one.
+with_preference() {
+  printf '%s\n' "$1" | awk -v line="$2" '
+    { print }
+    $0 == "[preferred]" && !done { print line; done = 1 }
+    END { if (!done) { print "[preferred]"; print line } }
+  '
+}
+
+# The user's portal preferences, with the widget for file chooser dialogs
+# (on) or without it (off); true when that changed them. A file chooser of
+# the user's own is set aside and comes back; with no preferences of the
+# user's own, a copy of the system's is made, and goes again.
+set_portal() {
+  local kept line dir
+  if [[ $1 == on ]]; then
+    if [[ ! -f $PORTALS_FILE ]]; then
+      kept=$'[preferred]\ndefault=hyprland;gtk'
+      for dir in ${DATA_DIRS//:/ }; do
+        [[ -f $dir/xdg-desktop-portal/${PORTALS_FILE##*/} ]] && { kept=$(cat "$dir/xdg-desktop-portal/${PORTALS_FILE##*/}"); break; }
+      done
+      mkdir -p "$(dirname "$PORTALS_MADE")"
+      : >"$PORTALS_MADE"
+      write_changed "$PORTALS_FILE" "$kept"
+    fi
+    grep -qxF "$PORTAL_LINE" "$PORTALS_FILE" && return 1
+    line=$(grep -m 1 '^org\.freedesktop\.impl\.portal\.FileChooser=' "$PORTALS_FILE")
+    if [[ -n $line ]]; then
+      mkdir -p "$(dirname "$PREVIOUS_CHOOSER")"
+      printf '%s\n' "$line" >"$PREVIOUS_CHOOSER"
+    fi
+    kept=$(grep -v '^org\.freedesktop\.impl\.portal\.FileChooser=' "$PORTALS_FILE")
+    with_preference "$kept" "$PORTAL_LINE" >"$PORTALS_FILE"
+    return 0
+  fi
+  if [[ -f $PORTALS_MADE ]]; then
+    rm -f "$PORTALS_FILE" "$PORTALS_MADE" "$PREVIOUS_CHOOSER"
+    return 0
+  fi
+  [[ -f $PORTALS_FILE ]] && grep -qxF "$PORTAL_LINE" "$PORTALS_FILE" || return 1
+  kept=$(grep -vxF "$PORTAL_LINE" "$PORTALS_FILE")
+  if [[ -f $PREVIOUS_CHOOSER ]]; then
+    with_preference "$kept" "$(cat "$PREVIOUS_CHOOSER")" >"$PORTALS_FILE"
+    rm -f "$PREVIOUS_CHOOSER"
+  else
+    printf '%s\n' "$kept" >"$PORTALS_FILE"
+  fi
+  return 0
 }
 
 # Folders from other apps, Show in folder and the file manager keys come to
@@ -966,7 +1079,7 @@ default_on() {
   fi
   write_changed "$DBUS_FILE" "$(dbus_service)" && dbus_reload
   set_keys on
-  pgrep -f -x -- "$(service_pattern)" >/dev/null && return 0
+  pgrep -f -x -- "$(service_pattern filemanager1.py)" >/dev/null && return 0
   setsid -f "$HERE/filemanager1.py" >/dev/null 2>&1 </dev/null
 }
 
@@ -994,7 +1107,33 @@ default_off() {
   fi
   rmdir "$(dirname "$PREVIOUS_FILE")" 2>/dev/null
   set_keys off
-  pkill -f -x -- "$(service_pattern)" >/dev/null 2>&1 || true
+  pkill -f -x -- "$(service_pattern filemanager1.py)" >/dev/null 2>&1 || true
+}
+
+# Apps' Open and Save dialogs show in the widget: the desktop portal finds
+# its file chooser service by the portal file and starts it through the
+# D-Bus service file once the user's preferences say so, and the dialog
+# floats like the portal's own.
+chooser_on() {
+  write_changed "$CHOOSER_SERVICE" "$(chooser_service)" && dbus_reload
+  write_changed "$CHOOSER_PORTAL" "$(chooser_portal)"
+  set_portal on && restart_portal
+  set_block "$HYPRLAND_FILE" "$RULE_BEGIN" "$RULE_END" on "$(rule_block)"
+}
+
+# All of it back to the GTK dialog, and the service stopped.
+chooser_off() {
+  local changed=""
+  set_portal off && changed=1
+  if [[ -f $CHOOSER_PORTAL || -f $CHOOSER_SERVICE ]]; then
+    rm -f "$CHOOSER_PORTAL" "$CHOOSER_SERVICE"
+    dbus_reload
+    changed=1
+  fi
+  [[ -n $changed ]] && restart_portal
+  rmdir "$(dirname "$PREVIOUS_CHOOSER")" 2>/dev/null
+  set_block "$HYPRLAND_FILE" "$RULE_BEGIN" "$RULE_END" off
+  pkill -f -x -- "$(service_pattern filechooser.py)" >/dev/null 2>&1 || true
 }
 
 case "${1:-}" in
@@ -1114,6 +1253,27 @@ case "${1:-}" in
       on) default_on ;;
       off) default_off ;;
       *) fail "default takes on or off" ;;
+    esac
+    ;;
+  window)
+    show window ""
+    ;;
+  chooser)
+    case "${2:-}" in
+      on) chooser_on ;;
+      off) chooser_off ;;
+      *) fail "chooser takes on or off" ;;
+    esac
+    ;;
+  chosen)
+    shift
+    "$HERE/filechooser.py" answer "$@"
+    ;;
+  launcher)
+    case "${2:-}" in
+      on) write_changed "$LAUNCHER_FILE" "$(launcher_entry)" || true ;;
+      off) rm -f "$LAUNCHER_FILE" ;;
+      *) fail "launcher takes on or off" ;;
     esac
     ;;
   *)
