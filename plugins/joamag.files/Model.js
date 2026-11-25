@@ -1255,6 +1255,16 @@ function pickedEntries(list, selected, cursor) {
   return out
 }
 
+// What a command from a menu or a preview applies to: PICKED, the
+// selection, when ENTRY is part of it, else ENTRY alone, the one a preview
+// shows once the cursor has left the selection. Without ENTRY, PICKED.
+function entriesFor(picked, entry) {
+  var list = picked || []
+  if (!entry || !entry.path) return list
+  for (var i = 0; i < list.length; i++) if (list[i].path === entry.path) return list
+  return [entry]
+}
+
 // Drop selected paths that are no longer listed, after a refresh.
 function keepSelected(selected, list) {
   var out = []

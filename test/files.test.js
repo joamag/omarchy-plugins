@@ -1426,6 +1426,22 @@ describe("pickedEntries", () => {
   })
 })
 
+describe("entriesFor", () => {
+  const picked = [LISTING[0], LISTING[3]]
+
+  it("is the selection for an entry inside it, or for no entry", () => {
+    assert.equal(Model.entriesFor(picked, LISTING[3]), picked)
+    assert.equal(Model.entriesFor(picked, null), picked)
+    assert.equal(Model.entriesFor(picked, { path: "" }), picked)
+  })
+
+  it("is the entry alone when the cursor left the selection for it", () => {
+    assert.deepEqual(Model.entriesFor(picked, LISTING[2]), [LISTING[2]])
+    assert.deepEqual(Model.entriesFor(null, LISTING[2]), [LISTING[2]])
+    assert.deepEqual(Model.entriesFor(null, null), [])
+  })
+})
+
 describe("keepSelected", () => {
   it("drops paths that are no longer listed", () => {
     assert.deepEqual(Model.keepSelected([LISTING[0].path, "/gone"], LISTING), [LISTING[0].path])

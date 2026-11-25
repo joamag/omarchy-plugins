@@ -790,8 +790,8 @@ Panel {
 
   // Enter on a selection: a folder opens in place, several files each open
   // in their own app.
-  function openPicked() {
-    var list = picked()
+  function openPicked(chosen) {
+    var list = chosen || picked()
     if (list.length === 0) return
     if (list[0].trashName) {
       restore(list)
@@ -878,9 +878,9 @@ Panel {
 
   // ---- Clipboard, copy and move -----------------------------------------
 
-  function setClipboard(mode) {
+  function setClipboard(mode, chosen) {
     if (mode === "cut" && readOnly()) return
-    var list = picked().filter(function(e) { return !e.trashName })
+    var list = (chosen || picked()).filter(function(e) { return !e.trashName })
     if (list.length === 0) return
     var paths = list.map(function(e) { return e.path })
     clipboard = { mode: mode, paths: paths }
@@ -1424,9 +1424,9 @@ Panel {
     act("restore", ["restore"].concat(items.map(function(e) { return e.trashName })), { entries: items })
   }
 
-  function askPurge() {
+  function askPurge(chosen) {
     if (readOnly()) return
-    var list = picked()
+    var list = chosen || picked()
     if (list.length === 0) return
     confirm = {
       kind: "purge",
@@ -1766,20 +1766,23 @@ Panel {
       launchApp(id.slice(4), appsPath)
       return
     }
+    // A preview's buttons act on the entry it shows, which the cursor may
+    // have left the selection for; menus and keys act on the selection.
+    var chosen = Model.entriesFor(picked(), entry)
     switch (id) {
-    case "open": openPicked(); break
+    case "open": openPicked(chosen); break
     case "opentab": openInNewTab(target); break
     case "openwith": openWith(target); break
-    case "copy": setClipboard("copy"); break
-    case "cut": setClipboard("cut"); break
+    case "copy": setClipboard("copy", chosen); break
+    case "cut": setClipboard("cut", chosen); break
     case "copypath": copyPaths(); break
     case "paste": paste(location); break
     case "pasteinto": if (target && target.dir) paste(target.path); break
     case "rename": startRename(target ? target.path : ""); break
     case "bookmark": toggleBookmark(target && target.dir && entry ? target.path : location); break
     case "trash": trashPicked(); break
-    case "purge": askPurge(); break
-    case "restore": restore(); break
+    case "purge": askPurge(chosen); break
+    case "restore": restore(chosen); break
     case "emptytrash": askEmptyTrash(); break
     case "newfolder": newItem("mkdir"); break
     case "newfile": newItem("touch"); break
