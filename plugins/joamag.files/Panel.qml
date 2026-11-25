@@ -242,6 +242,59 @@ Panel {
   // Around a refresh of the folder on screen, so views keep their scroll.
   signal listingWillChange()
   signal listingChanged()
+  // A move into a folder (1) or back out to one (-1), for the views to
+  // slide the new folder in from that side.
+  signal moved(int direction)
+  // Another tab on screen, its folder fading in.
+  signal tabShown()
+  // A new tab, growing in at INDEX.
+  signal tabAdded(int index)
+
+  // ---- Motion -------------------------------------------------------------
+  // Every animation runs Style.duration(ms) on Style.easeOut, the shell's:
+  // Hyprland's own easeOutQuint, and 0 ms when Hyprland's animations are off.
+
+  // The cursor glides from item to item; a new folder, tab or search puts
+  // it in place at once.
+  property bool cursorGlides: true
+  // Entries that came or went in the folder on screen: the rest settle
+  // from where they were (places moved, by path) and the new ones fade in,
+  // as settle runs from 1 down to 0.
+  property var settleShifts: ({})
+  property var arrived: ({})
+  property real settle: 0
+  // Entries on their way out (to the Trash, deleted, restored) fade while
+  // the action runs; only just after they are marked does the fade animate.
+  property var leaving: ({})
+  property bool leavingFades: false
+  // The tab shrinking away before it closes, and the moment it goes.
+  property int closingTab: -1
+  property bool tabsSnap: false
+
+  // The next cursor change lands at once rather than gliding.
+  function holdCursorGlide() {
+    cursorGlides = false
+    Qt.callLater(function() { root.cursorGlides = true })
+  }
+
+  // What changed between the listing BEFORE and the one on screen now
+  // settles into place.
+  function settleFrom(before) {
+    var moves = Style.duration(140) > 0 ? Model.settleMoves(before, entries) : null
+    if (!moves) return
+    settleShifts = moves.shifts
+    arrived = moves.arrived
+    settleRun.restart()
+  }
+
+  function markLeaving(list) {
+    var out = {}
+    for (var i = 0; i < list.length; i++) out[list[i].path] = true
+    leavingFades = true
+    leaving = out
+    leavingFadeTimer.restart()
+    leavingClearTimer.stop()
+  }
 
   // ---- Tabs and navigation ----------------------------------------------
 
@@ -261,6 +314,7 @@ Panel {
   // Whatever belonged to the folder on screen (cursor, selection, filter,
   // rename) stays behind when the tab moves on.
   function resetFolderState() {
+    holdCursorGlide()
     cursorIndex = 0
     anchorIndex = 0
     selected = []
@@ -287,11 +341,13 @@ Panel {
       refreshLocation()
       return
     }
+    var direction = Model.moveDirection(location, target)
     updateTab(Model.navigateTab(tab, target))
     visited = Model.addVisited(visited, target, Model.VISITED_MAX)
     resetFolderState()
     refreshLocation()
     focusRequested("view")
+    moved(direction)
   }
 
   function back() {
@@ -300,6 +356,7 @@ Panel {
     updateTab(Model.tabBack(tab))
     resetFolderState()
     refreshLocation()
+    moved(-1)
   }
 
   function forward() {
@@ -307,6 +364,7 @@ Panel {
     updateTab(Model.tabForward(tab))
     resetFolderState()
     refreshLocation()
+    moved(1)
   }
 
   function up() {
@@ -329,19 +387,36 @@ Panel {
     visited = Model.addVisited(visited, path || location, Model.VISITED_MAX)
     resetFolderState()
     refreshLocation()
+    tabAdded(result.active)
+    tabShown()
   }
 
+  // The tab shrinks away first, then goes.
   function closeTab(index) {
     if (tabs.length <= 1) {
       showToast("The last tab stays open")
       return
     }
+    if (closingTab >= 0) return
+    if (Style.duration(160) <= 0) {
+      removeTab(index)
+      return
+    }
+    closingTab = index
+    closeTabTimer.restart()
+  }
+
+  function removeTab(index) {
+    closingTab = -1
+    tabsSnap = true
+    Qt.callLater(function() { root.tabsSnap = false })
     var wasActive = index === activeTab
     var result = Model.closeTab(tabs, index, activeTab)
     setTabs(result.tabs, result.active)
     if (wasActive) {
       resetFolderState()
       refreshLocation()
+      tabShown()
     }
   }
 
@@ -353,6 +428,7 @@ Panel {
     saveTabsTimer.restart()
     resetFolderState()
     refreshLocation()
+    tabShown()
   }
 
   function setView(key) {
@@ -424,6 +500,7 @@ Panel {
 
   function toggleHidden() {
     persistSetting("showHidden", !showHidden)
+    holdCursorGlide()
     cursorIndex = Model.clampIndex(cursorIndex, entries.length)
   }
 
@@ -519,6 +596,7 @@ Panel {
   // views scrolled where they were.
   function keepPlace(apply) {
     var path = cursorEntry ? cursorEntry.path : ""
+    var before = entries
     listingWillChange()
     apply()
     if (path !== "" && pendingSelect === "") {
@@ -528,12 +606,14 @@ Panel {
         cursorIndex = idx
       }
     }
+    settleFrom(before)
     listingChanged()
   }
 
   function search() {
     if (!inFolder || query === "") return
     deep = true
+    holdCursorGlide()
     cursorIndex = 0
     selected = []
     searchEntries = []
@@ -566,6 +646,7 @@ Panel {
     if (pendingSelect === "") return
     var idx = Model.indexOfPath(entries, pendingSelect)
     if (idx < 0) return
+    holdCursorGlide()
     cursorIndex = idx
     anchorIndex = idx
     pendingSelect = ""
@@ -1249,6 +1330,7 @@ Panel {
     if (actionProc.running) return false
     lastError = ""
     pending = { kind: kind, context: context || {} }
+    if (Model.LEAVES.indexOf(kind) >= 0 && context && context.entries) markLeaving(context.entries)
     actionProc.command = [root.scriptPath].concat(args)
     actionProc.running = true
     return true
@@ -1381,6 +1463,12 @@ Panel {
     var ctx = job.context
     var failed = r.errors.length > 0
     if (failed && job.kind !== "rename") lastError = r.errors[r.errors.length - 1]
+    // What stayed fades back in; what left is gone once the folder is read
+    // again, by when the marks go too.
+    if (Model.LEAVES.indexOf(job.kind) >= 0) {
+      if (failed) markLeaving([])
+      else leavingClearTimer.restart()
+    }
     var list = tabs
     var i
     switch (job.kind) {
@@ -1461,6 +1549,7 @@ Panel {
     deep = false
     stopSearch()
     searchEntries = []
+    holdCursorGlide()
     cursorIndex = 0
     selected = []
   }
@@ -1997,6 +2086,36 @@ Panel {
     onTriggered: root.saveTabs()
   }
 
+  NumberAnimation {
+    id: settleRun
+    target: root
+    property: "settle"
+    from: 1
+    to: 0
+    duration: Style.duration(140)
+    easing.type: Easing.Bezier
+    easing.bezierCurve: Style.easeOut
+  }
+
+  Timer {
+    id: leavingFadeTimer
+    interval: 250
+    onTriggered: root.leavingFades = false
+  }
+
+  // Past the read that takes the entries out of the listing.
+  Timer {
+    id: leavingClearTimer
+    interval: snapshotTimer.interval + 600
+    onTriggered: root.leaving = ({})
+  }
+
+  Timer {
+    id: closeTabTimer
+    interval: Style.duration(160)
+    onTriggered: root.removeTab(root.closingTab)
+  }
+
   Timer {
     id: freeTimer
     interval: 400
@@ -2338,6 +2457,26 @@ Panel {
         goMenu.x = Math.max(0, Math.min(viewRoot.width - goMenu.width, at.x))
         goMenu.y = below.y
       }
+
+      function onMoved(direction) { viewRoot.slideIn(direction) }
+      function onTabShown() { viewRoot.slideIn(0) }
+    }
+
+    // A new folder slides in from the side it comes from and fades in, or,
+    // with another tab, only fades in. The columns slide on their own.
+    function slideIn(direction) {
+      if (!active || (direction !== 0 && views.shownKey === "columns")) return
+      arriveShift.from = Style.space(24) * direction
+      arriveShift.duration = Style.duration(170)
+      arriveFade.duration = Style.duration(direction === 0 ? 120 : 170)
+      arriveRun.restart()
+    }
+
+    // The item under the cursor, where the large preview grows from.
+    function cursorRect() {
+      if (views.shownKey === "grid") return gridView.cursorRect(viewRoot)
+      if (views.shownKey === "columns") return columnsView.cursorRect(viewRoot)
+      return listView.cursorRect(viewRoot)
     }
 
     onActiveChanged: if (active) Qt.callLater(function() { viewRoot.forceActiveFocus() })
@@ -2480,31 +2619,76 @@ Panel {
         }
 
         // ---------- Tabs ----------
-        Row {
-          id: tabStrip
+        Item {
           width: parent.width
           height: Style.spacing.controlHeight
-          spacing: Style.space(4)
 
-          readonly property real addWidth: Style.spacing.controlHeight
-          readonly property real tabWidth: Math.min(Style.space(200), (width - addWidth - spacing * root.tabs.length) / Math.max(1, root.tabs.length))
-
-          // Counted rather than handed the list, so stepping through
-          // folders updates the chips instead of building them again.
-          Repeater {
-            model: root.tabs.length
-
-            TabChip {
-              required property int index
-              width: tabStrip.tabWidth
-              height: tabStrip.height
-              tabData: root.tabs[index] || root.tab
-              tabIndex: index
-              foreground: viewRoot.foreground
-            }
+          // The active tab's fill, gliding from tab to tab.
+          CursorSurface {
+            x: root.activeTab * (tabStrip.tabWidth + tabStrip.spacing)
+            width: tabStrip.tabWidth
+            height: parent.height
+            foreground: viewRoot.foreground
+            current: true
+            opacity: root.closingTab === root.activeTab ? 0 : 1
+            Behavior on x { NumberAnimation { duration: Style.duration(180); easing.type: Easing.Bezier; easing.bezierCurve: Style.easeOut } }
+            Behavior on width { NumberAnimation { duration: Style.duration(180); easing.type: Easing.Bezier; easing.bezierCurve: Style.easeOut } }
+            Behavior on opacity { NumberAnimation { duration: Style.duration(160) } }
           }
 
-          IconButton { glyph: "󰐕"; tip: "New tab (Ctrl+T)"; onClicked: root.newTab("") }
+          Row {
+            id: tabStrip
+            anchors.fill: parent
+            spacing: Style.space(4)
+
+            readonly property real addWidth: Style.spacing.controlHeight
+            readonly property real tabWidth: Math.min(Style.space(200), (width - addWidth - spacing * root.tabs.length) / Math.max(1, root.tabs.length))
+
+            // Counted rather than handed the list, so stepping through
+            // folders updates the chips instead of building them again. A
+            // new tab grows in, a closing one shrinks away, and the rest
+            // make room.
+            Repeater {
+              model: root.tabs.length
+
+              TabChip {
+                id: tabChip
+                required property int index
+                property real grown: 1
+                width: index === root.closingTab ? 0 : tabStrip.tabWidth * grown
+                height: tabStrip.height
+                clip: true
+                tabData: root.tabs[index] || root.tab
+                tabIndex: index
+                foreground: viewRoot.foreground
+
+                // As a tab goes the chips are counted again, each showing
+                // the tab after it, so their widths land at once then.
+                Behavior on width {
+                  enabled: !growRun.running && !root.tabsSnap
+                  NumberAnimation { duration: Style.duration(180); easing.type: Easing.Bezier; easing.bezierCurve: Style.easeOut }
+                }
+
+                NumberAnimation {
+                  id: growRun
+                  target: tabChip
+                  property: "grown"
+                  from: 0
+                  to: 1
+                  duration: Style.duration(200)
+                  easing.type: Easing.Bezier
+                  easing.bezierCurve: Style.easeOut
+                }
+
+                Connections {
+                  target: root
+                  function onTabAdded(at) { if (at === tabChip.index) growRun.restart() }
+                }
+              }
+            }
+
+            IconButton { glyph: "󰐕"; tip: "New tab (Ctrl+T)"; onClicked: root.newTab("") }
+          }
         }
 
         // ---------- Body: the folder and the preview ----------
@@ -2529,28 +2713,78 @@ Panel {
             width: parent.width - 2 - (root.showPreview ? preview.width : 0)
             clip: true
 
-            ListPane {
+            Item {
+              id: views
               anchors.fill: parent
-              visible: root.view === "list" || (root.view === "columns" && (!root.inFolder || root.deep))
-              foreground: viewRoot.foreground
-              rowHeight: viewRoot.rowHeight
-              shown: visible && viewRoot.active
-            }
+              transform: Translate { id: viewsShift }
 
-            GridPane {
-              anchors.fill: parent
-              visible: root.view === "grid"
-              foreground: viewRoot.foreground
-              shown: visible && viewRoot.active
-            }
+              // The view on screen: the list stands in for the columns
+              // outside folders and in search results.
+              readonly property string shownKey: root.view === "grid" ? "grid" : (root.columnsShown ? "columns" : "list")
+              // The view going away fades out over the one coming in.
+              property string goneKey: ""
+              property string lastKey: ""
+              property real incoming: 1
+              property real outgoing: 0
 
-            ColumnsPane {
-              anchors.fill: parent
-              visible: root.columnsShown
-              foreground: viewRoot.foreground
-              background: viewRoot.background
-              rowHeight: viewRoot.rowHeight
-              shown: visible && viewRoot.active
+              function alpha(key) {
+                return key === shownKey ? incoming : (key === goneKey ? outgoing : 0)
+              }
+
+              onShownKeyChanged: {
+                if (lastKey !== "" && viewRoot.active) {
+                  goneKey = lastKey
+                  swapRun.restart()
+                }
+                lastKey = shownKey
+              }
+              Component.onCompleted: lastKey = shownKey
+
+              ParallelAnimation {
+                id: swapRun
+                NumberAnimation { target: views; property: "incoming"; from: 0; to: 1; duration: Style.duration(160); easing.type: Easing.Bezier; easing.bezierCurve: Style.easeOut }
+                NumberAnimation { target: views; property: "outgoing"; from: 1; to: 0; duration: Style.duration(120) }
+                onFinished: views.goneKey = ""
+              }
+
+              ParallelAnimation {
+                id: arriveRun
+                NumberAnimation { id: arriveShift; target: viewsShift; property: "x"; to: 0; easing.type: Easing.Bezier; easing.bezierCurve: Style.easeOut }
+                NumberAnimation { id: arriveFade; target: views; property: "opacity"; from: 0; to: 1; easing.type: Easing.Bezier; easing.bezierCurve: Style.easeOut }
+              }
+
+              ListPane {
+                id: listView
+                anchors.fill: parent
+                visible: views.shownKey === "list" || views.goneKey === "list"
+                opacity: views.alpha("list")
+                enabled: views.shownKey === "list"
+                foreground: viewRoot.foreground
+                rowHeight: viewRoot.rowHeight
+                shown: visible && viewRoot.active
+              }
+
+              GridPane {
+                id: gridView
+                anchors.fill: parent
+                visible: views.shownKey === "grid" || views.goneKey === "grid"
+                opacity: views.alpha("grid")
+                enabled: views.shownKey === "grid"
+                foreground: viewRoot.foreground
+                shown: visible && viewRoot.active
+              }
+
+              ColumnsPane {
+                id: columnsView
+                anchors.fill: parent
+                visible: views.shownKey === "columns" || views.goneKey === "columns"
+                opacity: views.alpha("columns")
+                enabled: views.shownKey === "columns"
+                foreground: viewRoot.foreground
+                background: viewRoot.background
+                rowHeight: viewRoot.rowHeight
+                shown: visible && viewRoot.active
+              }
             }
 
             // Drops from other apps land in the folder on screen.
@@ -2794,6 +3028,7 @@ Panel {
       anchors.fill: parent
       foreground: viewRoot.foreground
       background: viewRoot.background
+      itemRect: viewRoot.cursorRect
     }
 
     ConfirmDialog {
@@ -2931,10 +3166,10 @@ Panel {
             anchors.verticalCenter: parent.verticalCenter
           }
 
+          // At its own width: the path bar has no column of icons to line up
+          // with, so only the gap stands between the icon and the name.
           Text {
             visible: crumb.index === 0
-            width: root.iconBox
-            horizontalAlignment: Text.AlignHCenter
             textFormat: Text.PlainText
             text: Model.placeIcon(crumb.modelData.path, root.home, root.places, root.drives)
             color: crumbsRoot.foreground
@@ -2988,9 +3223,9 @@ Panel {
 
     readonly property bool isActive: tabIndex === root.activeTab
 
-    current: isActive
-    hasCursor: chipMouse.containsMouse || chipDrop.containsDrag
-    bordered: true
+    // The active tab's fill and border glide under it from the tab strip.
+    hasCursor: !isActive && (chipMouse.containsMouse || chipDrop.containsDrag)
+    bordered: !isActive
 
     Row {
       anchors.left: parent.left
@@ -3165,7 +3400,22 @@ Panel {
       onCurrentIndexChanged: if (currentIndex >= 0) positionViewAtIndex(currentIndex, ListView.Contain)
       onCountChanged: if (currentIndex >= 0) positionViewAtIndex(currentIndex, ListView.Contain)
 
+      // The cursor: one mark gliding from row to row, under them.
+      CursorSurface {
+        visible: list.count > 0
+        y: root.cursorIndex * listPane.rowHeight
+        width: list.width
+        height: listPane.rowHeight
+        foreground: listPane.foreground
+        hasCursor: true
+        Behavior on y {
+          enabled: root.cursorGlides
+          NumberAnimation { duration: Style.duration(80); easing.type: Easing.Bezier; easing.bezierCurve: Style.easeOut }
+        }
+      }
+
       delegate: EntryRow {
+        id: listRow
         required property int index
         width: list.width
         height: listPane.rowHeight
@@ -3177,6 +3427,16 @@ Panel {
         typeWidth: listPane.typeWidth
         sizeWidth: listPane.sizeWidth
         dateWidth: listPane.dateWidth
+
+        // Coming and going: settling from where it was, fading in when
+        // new, and out on its way out.
+        property real stay: root.leaving[listRow.entry.path] === true ? 0 : 1
+        Behavior on stay {
+          enabled: root.leavingFades
+          NumberAnimation { duration: Style.duration(110) }
+        }
+        opacity: stay * (root.settle > 0 && root.arrived[listRow.entry.path] === true ? 1 - root.settle : 1)
+        transform: Translate { y: root.settle > 0 ? (root.settleShifts[listRow.entry.path] || 0) * root.settle * listPane.rowHeight : 0 }
       }
 
       // Empty space below the rows: click clears the selection, right
@@ -3199,6 +3459,12 @@ Panel {
     }
 
     StepScroll { flick: list; pitch: listPane.rowHeight }
+
+    // The row under the cursor, in TARGET's terms.
+    function cursorRect(target) {
+      var item = list.itemAtIndex(root.cursorIndex)
+      return item ? item.mapToItem(target, 0, 0, item.width, item.height) : null
+    }
   }
 
   component SortHead: Item {
@@ -3315,12 +3581,12 @@ Panel {
     readonly property bool isCut: root.clipboard !== null && root.clipboard.mode === "cut" && root.clipboard.paths.indexOf(entry.path) >= 0
     readonly property bool renaming: root.renamePath === entry.path
 
+    // The cursor is the list's own mark, gliding under the rows.
     CursorSurface {
       anchors.fill: parent
       foreground: row.foreground
-      current: row.isSelected
-      hasCursor: row.isCursor || mouse.containsMouse || drop.containsDrag
-      outline: row.isCursor
+      current: row.isSelected && !row.isCursor
+      hasCursor: !row.isCursor && (mouse.containsMouse || drop.containsDrag)
     }
 
     Row {
@@ -3525,12 +3791,45 @@ Panel {
       onWidthChanged: if (gridPane.shown) root.gridColumns = Math.max(1, Math.floor(width / cellWidth))
       onVisibleChanged: if (visible) root.gridColumns = Math.max(1, Math.floor(width / cellWidth))
 
+      // The cursor: one mark gliding from tile to tile, under them.
+      CursorSurface {
+        visible: grid.count > 0
+        x: (root.cursorIndex % root.gridColumns) * grid.cellWidth + Style.space(3)
+        y: Math.floor(root.cursorIndex / root.gridColumns) * grid.cellHeight + Style.space(3)
+        width: grid.cellWidth - Style.space(6)
+        height: grid.cellHeight - Style.space(6)
+        foreground: gridPane.foreground
+        hasCursor: true
+        Behavior on x {
+          enabled: root.cursorGlides
+          NumberAnimation { duration: Style.duration(80); easing.type: Easing.Bezier; easing.bezierCurve: Style.easeOut }
+        }
+        Behavior on y {
+          enabled: root.cursorGlides
+          NumberAnimation { duration: Style.duration(80); easing.type: Easing.Bezier; easing.bezierCurve: Style.easeOut }
+        }
+      }
+
       delegate: Item {
         id: tile
         required property int index
         readonly property var entry: root.entries[index] || root.blankEntry
         width: grid.cellWidth
         height: grid.cellHeight
+
+        // Coming and going: settling from where it was, fading in when
+        // new, and out on its way out.
+        readonly property var slot: root.settle > 0 && root.settleShifts[entry.path] ? Model.slotOffset(index, root.settleShifts[entry.path], root.gridColumns) : null
+        property real stay: root.leaving[entry.path] === true ? 0 : 1
+        Behavior on stay {
+          enabled: root.leavingFades
+          NumberAnimation { duration: Style.duration(110) }
+        }
+        opacity: stay * (root.settle > 0 && root.arrived[entry.path] === true ? 1 - root.settle : 1)
+        transform: Translate {
+          x: tile.slot ? tile.slot.x * grid.cellWidth * root.settle : 0
+          y: tile.slot ? tile.slot.y * grid.cellHeight * root.settle : 0
+        }
 
         readonly property bool isSelected: root.selected.indexOf(entry.path) >= 0
         readonly property bool isCursor: root.cursorIndex === index
@@ -3546,13 +3845,13 @@ Panel {
 
         onThumbKeyChanged: if (thumbKey !== "") root.requestThumbnail(entry, 256)
 
+        // The cursor is the grid's own mark, gliding under the tiles.
         CursorSurface {
           anchors.fill: parent
           anchors.margins: Style.space(3)
           foreground: gridPane.foreground
-          current: tile.isSelected
-          hasCursor: tile.isCursor || tileMouse.containsMouse || tileDrop.containsDrag
-          outline: tile.isCursor
+          current: tile.isSelected && !tile.isCursor
+          hasCursor: !tile.isCursor && (tileMouse.containsMouse || tileDrop.containsDrag)
         }
 
         Column {
@@ -3569,6 +3868,9 @@ Panel {
               id: thumb
               anchors.fill: parent
               visible: status === Image.Ready
+              // A picture fades in as it is read; one read before shows at once.
+              opacity: status === Image.Ready ? 1 : 0
+              Behavior on opacity { NumberAnimation { duration: Style.duration(160); easing.type: Easing.Bezier; easing.bezierCurve: Style.easeOut } }
               source: tile.kind === "image" || tile.kind === "pdf" ? Model.fileUrl(tile.entry.path) : ""
               currentFrame: 0
               sourceSize.width: Style.space(220)
@@ -3582,6 +3884,8 @@ Panel {
               id: tileThumb
               anchors.fill: parent
               visible: tile.wantsThumbnail && status === Image.Ready
+              opacity: status === Image.Ready ? 1 : 0
+              Behavior on opacity { NumberAnimation { duration: Style.duration(160); easing.type: Easing.Bezier; easing.bezierCurve: Style.easeOut } }
               source: tile.thumbPath !== "" ? Model.fileUrl(tile.thumbPath) : ""
               fillMode: Image.PreserveAspectFit
               asynchronous: true
@@ -3684,6 +3988,12 @@ Panel {
     }
 
     StepScroll { flick: grid; pitch: grid.cellHeight; rowsPerNotch: 1 }
+
+    // The tile under the cursor, in TARGET's terms.
+    function cursorRect(target) {
+      var item = grid.itemAtIndex(root.cursorIndex)
+      return item ? item.mapToItem(target, 0, 0, item.width, item.height) : null
+    }
   }
 
   // The columns view: one column per folder from the root of the path down
@@ -3768,10 +4078,16 @@ Panel {
       slideTo(Model.steppedScroll(columnsFlick.contentX, count, columnWidth, contentEnd(), width))
     }
 
+    // The row under the cursor, in TARGET's terms.
+    function cursorRect(target) {
+      var item = currentColumn.itemAtIndex(root.cursorIndex)
+      return item ? item.mapToItem(target, 0, 0, item.width, item.height) : null
+    }
+
     ParallelAnimation {
       id: slide
-      NumberAnimation { id: slideX; target: columnsFlick; property: "contentX"; duration: 120; easing.type: Easing.OutCubic }
-      NumberAnimation { id: fadeIn; target: columnsPane; property: "trailOpacity"; to: 1; duration: 120 }
+      NumberAnimation { id: slideX; target: columnsFlick; property: "contentX"; duration: Style.duration(120); easing.type: Easing.Bezier; easing.bezierCurve: Style.easeOut }
+      NumberAnimation { id: fadeIn; target: columnsPane; property: "trailOpacity"; to: 1; duration: Style.duration(120) }
     }
 
     // The folders above the one on screen, a column each. Only the columns
@@ -3861,6 +4177,19 @@ Panel {
             highlightFollowsCurrentItem: false
             onCurrentIndexChanged: if (currentIndex >= 0) positionViewAtIndex(currentIndex, ListView.Contain)
 
+            // The cursor: one mark gliding from row to row, under them.
+            CursorSurface {
+              visible: currentColumn.count > 0
+              y: root.cursorIndex * columnsPane.rowHeight
+              width: currentColumn.width
+              height: columnsPane.rowHeight
+              foreground: columnsPane.foreground
+              hasCursor: true
+              Behavior on y {
+                enabled: root.cursorGlides
+                NumberAnimation { duration: Style.duration(80); easing.type: Easing.Bezier; easing.bezierCurve: Style.easeOut }
+              }
+            }
 
             delegate: Item {
               id: cell
@@ -3870,13 +4199,24 @@ Panel {
               height: columnsPane.rowHeight
 
               readonly property bool renaming: root.renamePath === entry.path
+              readonly property bool isCursor: root.cursorIndex === index
 
+              // Coming and going: settling from where it was, fading in when
+              // new, and out on its way out.
+              property real stay: root.leaving[entry.path] === true ? 0 : 1
+              Behavior on stay {
+                enabled: root.leavingFades
+                NumberAnimation { duration: Style.duration(110) }
+              }
+              opacity: stay * (root.settle > 0 && root.arrived[entry.path] === true ? 1 - root.settle : 1)
+              transform: Translate { y: root.settle > 0 ? (root.settleShifts[cell.entry.path] || 0) * root.settle * columnsPane.rowHeight : 0 }
+
+              // The cursor is the column's own mark, gliding under the rows.
               CursorSurface {
                 anchors.fill: parent
                 foreground: columnsPane.foreground
-                current: root.selected.indexOf(cell.entry.path) >= 0
-                hasCursor: root.cursorIndex === cell.index || cellMouse.containsMouse || cellDrop.containsDrag
-                outline: root.cursorIndex === cell.index
+                current: !cell.isCursor && root.selected.indexOf(cell.entry.path) >= 0
+                hasCursor: !cell.isCursor && (cellMouse.containsMouse || cellDrop.containsDrag)
               }
 
               Row {
@@ -4340,6 +4680,7 @@ Panel {
     // entry itself is read here.
     onEntryChanged: {
       if (!entry || !entry.path) return
+      previewFade.restart()
       var kindNow = Model.previewKind(entry)
       var inside = Model.isArchiveLocation(entry.path)
       if (inside && (kindNow === "image" || kindNow === "pdf" || kindNow === "text" || kindNow === "thumbnail")) root.extractMember(entry, null)
@@ -4365,6 +4706,18 @@ Panel {
       width: 1
       height: parent.height
       color: Qt.rgba(previewRoot.foreground.r, previewRoot.foreground.g, previewRoot.foreground.b, 0.12)
+    }
+
+    // A new entry fades in as the cursor moves on.
+    NumberAnimation {
+      id: previewFade
+      target: previewFlick
+      property: "opacity"
+      from: 0.2
+      to: 1
+      duration: Style.duration(110)
+      easing.type: Easing.Bezier
+      easing.bezierCurve: Style.easeOut
     }
 
     Flickable {
@@ -4404,6 +4757,9 @@ Panel {
             id: pageImage
             anchors.fill: parent
             visible: status === Image.Ready
+            // A picture fades in as it is read; one read before shows at once.
+            opacity: status === Image.Ready ? 1 : 0
+            Behavior on opacity { NumberAnimation { duration: Style.duration(160); easing.type: Easing.Bezier; easing.bezierCurve: Style.easeOut } }
             source: previewRoot.ready && (previewRoot.kind === "image" || previewRoot.kind === "pdf") ? Model.fileUrl(previewRoot.sourcePath) : ""
             currentFrame: previewRoot.kind === "pdf" ? Math.min(root.previewPage, Math.max(0, frameCount - 1)) : 0
             sourceSize.width: Math.round(mediaBox.width)
@@ -4417,6 +4773,8 @@ Panel {
             id: thumbImage
             anchors.fill: parent
             visible: previewRoot.wantsThumbnail && status === Image.Ready
+            opacity: status === Image.Ready ? 1 : 0
+            Behavior on opacity { NumberAnimation { duration: Style.duration(160); easing.type: Easing.Bezier; easing.bezierCurve: Style.easeOut } }
             source: previewRoot.thumbPath !== "" ? Model.fileUrl(previewRoot.thumbPath) : ""
             fillMode: Image.PreserveAspectFit
             asynchronous: true
@@ -4816,7 +5174,7 @@ Panel {
           height: parent.height
           width: parent.width * progress.fraction
           color: Color.accent
-          Behavior on width { NumberAnimation { duration: 200 } }
+          Behavior on width { NumberAnimation { duration: Style.duration(200) } }
         }
       }
 
@@ -4891,8 +5249,25 @@ Panel {
     id: toastCard
     required property color foreground
     required property color background
-    visible: root.toast !== null
+    visible: toastShown > 0
     z: 20
+
+    // The note on screen, kept while it fades out.
+    property var lastToast: null
+    readonly property var shownToast: root.toast || lastToast
+    // It rises into place as it comes, and sinks a little as it goes.
+    property real toastShown: root.toast !== null ? 1 : 0
+    Behavior on toastShown {
+      id: toastShowing
+      NumberAnimation { duration: Style.duration(toastShowing.targetValue > 0 ? 180 : 140); easing.type: Easing.Bezier; easing.bezierCurve: Style.easeOut }
+    }
+    opacity: toastShown
+    transform: Translate { y: Style.space(toastShowing.targetValue > 0 ? 12 : 6) * (1 - toastCard.toastShown) }
+
+    Connections {
+      target: root
+      function onToastChanged() { if (root.toast) toastCard.lastToast = root.toast }
+    }
     color: background
     borderSpec: Border.flat(Color.accent, Style.normalBorderWidth)
     padding: Style.space(8)
@@ -4908,7 +5283,7 @@ Panel {
         anchors.verticalCenter: parent.verticalCenter
         width: Math.min(implicitWidth, toastCard.parent.width - Style.space(160))
         textFormat: Text.PlainText
-        text: root.toast ? root.toast.text : ""
+        text: toastCard.shownToast ? toastCard.shownToast.text : ""
         color: toastCard.foreground
         font.family: root.fontFamily
         font.pixelSize: Style.font.caption
@@ -4916,7 +5291,8 @@ Panel {
       }
 
       Button {
-        visible: root.toast !== null && root.toast.undo !== null
+        visible: toastCard.shownToast !== null && toastCard.shownToast.undo !== null
+        enabled: root.toast !== null
         anchors.verticalCenter: parent.verticalCenter
         height: Style.space(22)
         width: Style.space(70)
@@ -4936,8 +5312,20 @@ Panel {
     id: goCard
     required property color foreground
     required property color background
-    visible: root.goMenuOpen
+    visible: goShown > 0
     z: 20
+
+    // It grows out of the button it hangs from, and fades as it goes.
+    property real goShown: root.goMenuOpen ? 1 : 0
+    Behavior on goShown {
+      id: goShowing
+      NumberAnimation { duration: Style.duration(goShowing.targetValue > 0 ? 120 : 80); easing.type: Easing.Bezier; easing.bezierCurve: Style.easeOut }
+    }
+    opacity: goShown
+    transform: Scale {
+      xScale: 0.96 + 0.04 * goCard.goShown
+      yScale: 0.96 + 0.04 * goCard.goShown
+    }
     color: background
     borderSpec: Border.flat(Color.accent, Style.normalBorderWidth)
     padding: Style.space(10)
@@ -5044,14 +5432,29 @@ Panel {
     id: menuLayer
     required property color foreground
     required property color background
-    visible: root.menu !== null
+    visible: menuShown > 0
     z: 25
 
     readonly property real cardWidth: Style.space(250)
     readonly property real itemHeight: Style.space(26)
+    // The menu on screen, kept while it fades out.
+    property var lastMenu: null
+    readonly property var shownMenu: root.menu || lastMenu
+    // It grows out of the pointer as it opens, and fades as it goes.
+    property real menuShown: root.menu !== null ? 1 : 0
+    Behavior on menuShown {
+      id: menuShowing
+      NumberAnimation { duration: Style.duration(menuShowing.targetValue > 0 ? 120 : 80); easing.type: Easing.Bezier; easing.bezierCurve: Style.easeOut }
+    }
+
+    Connections {
+      target: root
+      function onMenuChanged() { if (root.menu) menuLayer.lastMenu = root.menu }
+    }
 
     MouseArea {
       anchors.fill: parent
+      enabled: root.menu !== null
       acceptedButtons: Qt.LeftButton | Qt.RightButton
       onClicked: root.menu = null
     }
@@ -5062,16 +5465,24 @@ Panel {
       borderSpec: Border.flat(Color.accent, Style.normalBorderWidth)
       padding: Style.space(4)
       width: menuLayer.cardWidth
-      height: (root.menu ? root.menu.items.length : 0) * menuLayer.itemHeight + menuCard.contentTopInset + menuCard.contentBottomInset
+      height: (menuLayer.shownMenu ? menuLayer.shownMenu.items.length : 0) * menuLayer.itemHeight + menuCard.contentTopInset + menuCard.contentBottomInset
+      // Where the pointer was, or the middle for a menu from the keyboard.
+      readonly property point pointer: !menuLayer.shownMenu || menuLayer.shownMenu.x < 0 ? Qt.point(-1, -1) : menuLayer.mapFromItem(null, menuLayer.shownMenu.x, menuLayer.shownMenu.y)
       readonly property var place: {
-        if (!root.menu || root.menu.x < 0) return { x: (menuLayer.width - width) / 2, y: (menuLayer.height - height) / 2 }
-        var p = menuLayer.mapFromItem(null, root.menu.x, root.menu.y)
-        return Model.menuPosition(p.x, p.y, width, height, menuLayer.width, menuLayer.height, root.menu.alignRight)
+        if (pointer.x < 0) return { x: (menuLayer.width - width) / 2, y: (menuLayer.height - height) / 2 }
+        return Model.menuPosition(pointer.x, pointer.y, width, height, menuLayer.width, menuLayer.height, menuLayer.shownMenu.alignRight)
       }
       x: place.x
       y: place.y
+      opacity: menuLayer.menuShown
+      transform: Scale {
+        origin.x: menuCard.pointer.x < 0 ? menuCard.width / 2 : menuCard.pointer.x - menuCard.x
+        origin.y: menuCard.pointer.y < 0 ? menuCard.height / 2 : menuCard.pointer.y - menuCard.y
+        xScale: 0.96 + 0.04 * menuLayer.menuShown
+        yScale: 0.96 + 0.04 * menuLayer.menuShown
+      }
 
-      MouseArea { anchors.fill: parent }
+      MouseArea { anchors.fill: parent; enabled: root.menu !== null }
 
       Column {
         x: menuCard.contentLeftInset
@@ -5079,7 +5490,7 @@ Panel {
         width: menuCard.width - menuCard.contentLeftInset - menuCard.contentRightInset
 
         Repeater {
-          model: root.menu ? root.menu.items : []
+          model: menuLayer.shownMenu ? menuLayer.shownMenu.items : []
 
           CursorSurface {
             id: menuItem
@@ -5134,7 +5545,7 @@ Panel {
             MouseArea {
               anchors.fill: parent
               hoverEnabled: true
-              enabled: !menuItem.modelData.disabled
+              enabled: !menuItem.modelData.disabled && root.menu !== null
               cursorShape: Qt.PointingHandCursor
               onContainsMouseChanged: if (containsMouse) root.menuIndex = menuItem.index
               onClicked: root.run(menuItem.modelData.id, root.menu ? root.menu.entry : null)
@@ -5324,8 +5735,16 @@ Panel {
     id: jumpLayer
     required property color foreground
     required property color background
-    visible: root.jumpOpen
+    visible: jumpShown > 0
     z: 17
+
+    // It drops into place as it opens, and fades as it goes.
+    property real jumpShown: root.jumpOpen ? 1 : 0
+    Behavior on jumpShown {
+      id: jumpShowing
+      NumberAnimation { duration: Style.duration(jumpShowing.targetValue > 0 ? 140 : 90); easing.type: Easing.Bezier; easing.bezierCurve: Style.easeOut }
+    }
+    opacity: jumpShown
 
     readonly property real rowHeight: Style.space(30)
     // Where the pointer last was, so rows scrolling under a still pointer
@@ -5340,13 +5759,14 @@ Panel {
     Rectangle {
       anchors.fill: parent
       color: Qt.rgba(jumpLayer.background.r, jumpLayer.background.g, jumpLayer.background.b, 0.7)
-      MouseArea { anchors.fill: parent; onClicked: root.closeJump() }
+      MouseArea { anchors.fill: parent; enabled: root.jumpOpen; onClicked: root.closeJump() }
     }
 
     BorderSurface {
       id: jumpBox
       anchors.horizontalCenter: parent.horizontalCenter
       y: Style.space(40)
+      transform: Translate { y: jumpShowing.targetValue > 0 ? -Style.space(8) * (1 - jumpLayer.jumpShown) : 0 }
       width: Math.min(parent.width - Style.space(32), Style.space(520))
       height: Math.min(parent.height - y - Style.space(16), jumpColumn.implicitHeight + jumpBox.contentTopInset + jumpBox.contentBottomInset)
       color: jumpLayer.background
@@ -5518,12 +5938,70 @@ Panel {
     id: lookLayer
     required property color foreground
     required property color background
-    visible: root.lookOpen
+    visible: root.lookOpen || lookClosing
     z: 18
+
+    // Where the item under the cursor is, for the card to grow out of it
+    // and shrink back into it: set by the view holding it.
+    property var itemRect: function() { return null }
+    // From 0, the item under the cursor, to 1, the whole card; its contents
+    // come in over the last two thirds.
+    property real lookShown: 0
+    property bool lookClosing: false
+    property rect lookFrom: Qt.rect(0, 0, 0, 0)
+    property bool lookFromItem: false
+    readonly property real contentAlpha: Math.max(0, Math.min(1, (lookShown - 0.35) / 0.65))
+    // The cursor as the card last showed it, so a step slides the next
+    // entry in from its side.
+    property int lastIndex: -1
+
+    function grow() {
+      shrinkRun.stop()
+      lookClosing = false
+      lastIndex = root.cursorIndex
+      startFrom(itemRect())
+      growRun.restart()
+    }
+
+    function shrink() {
+      growRun.stop()
+      startFrom(itemRect())
+      lookClosing = true
+      shrinkRun.restart()
+    }
+
+    // Without the item on screen (a folder still being read) the card only
+    // fades.
+    function startFrom(rect) {
+      lookFromItem = rect !== null && rect.width > 0 && lookBox.width > 0
+      lookFrom = lookFromItem ? rect : Qt.rect(lookBox.x, lookBox.y, lookBox.width, lookBox.height)
+    }
+
+    function step(direction) {
+      stepSlide.from = Style.space(28) * direction
+      stepRun.restart()
+    }
+
+    Connections {
+      target: root
+      function onLookOpenChanged() {
+        if (root.lookOpen) lookLayer.grow()
+        else lookLayer.shrink()
+      }
+    }
+
+    NumberAnimation { id: growRun; target: lookLayer; property: "lookShown"; from: 0; to: 1; duration: Style.duration(220); easing.type: Easing.Bezier; easing.bezierCurve: Style.easeOut }
+    NumberAnimation { id: shrinkRun; target: lookLayer; property: "lookShown"; to: 0; duration: Style.duration(190); easing.type: Easing.Bezier; easing.bezierCurve: Style.easeOut; onFinished: lookLayer.lookClosing = false }
+
+    ParallelAnimation {
+      id: stepRun
+      NumberAnimation { id: stepSlide; target: stepShift; property: "x"; to: 0; duration: Style.duration(150); easing.type: Easing.Bezier; easing.bezierCurve: Style.easeOut }
+      NumberAnimation { target: lookContent; property: "opacity"; from: 0; to: 1; duration: Style.duration(150); easing.type: Easing.Bezier; easing.bezierCurve: Style.easeOut }
+    }
 
     // Read through entry itself, never through a flag worked out from it: as
     // the preview closes or moves on, a flag can lag the entry by a moment.
-    readonly property var entry: root.lookOpen && root.previewEntry && root.previewEntry.path !== "" ? root.previewEntry : null
+    readonly property var entry: (root.lookOpen || lookClosing) && root.previewEntry && root.previewEntry.path !== "" ? root.previewEntry : null
     readonly property string wanted: Model.lookKind(entry)
     readonly property bool playable: wanted === "video" || wanted === "audio"
     // Without Qt Multimedia, video and music show their still instead.
@@ -5617,6 +6095,8 @@ Panel {
     onEntryChanged: {
       folderItems = []
       if (!entry || !entry.path) return
+      if (root.lookOpen && !growRun.running && lastIndex >= 0 && root.cursorIndex !== lastIndex) step(root.cursorIndex > lastIndex ? 1 : -1)
+      lastIndex = root.cursorIndex
       var kindNow = Model.lookKind(entry)
       var inside = Model.isArchiveLocation(entry.path)
       if (inside && (kindNow === "image" || kindNow === "pdf" || kindNow === "text" || kindNow === "thumbnail")) root.extractMember(entry, null)
@@ -5662,7 +6142,8 @@ Panel {
     Rectangle {
       anchors.fill: parent
       color: Qt.rgba(lookLayer.background.r, lookLayer.background.g, lookLayer.background.b, 0.7)
-      MouseArea { anchors.fill: parent; onClicked: root.closeLook() }
+      opacity: lookLayer.lookShown
+      MouseArea { anchors.fill: parent; enabled: root.lookOpen; onClicked: root.closeLook() }
     }
 
     BorderSurface {
@@ -5672,8 +6153,19 @@ Panel {
       color: lookLayer.background
       borderSpec: Border.flat(Color.accent, Style.normalBorderWidth)
       padding: Style.space(10)
+      opacity: lookLayer.lookFromItem ? 1 : lookLayer.lookShown
+      transform: [
+        Scale {
+          xScale: lookBox.width > 0 ? lookLayer.lookFrom.width / lookBox.width + (1 - lookLayer.lookFrom.width / lookBox.width) * lookLayer.lookShown : 1
+          yScale: lookBox.height > 0 ? lookLayer.lookFrom.height / lookBox.height + (1 - lookLayer.lookFrom.height / lookBox.height) * lookLayer.lookShown : 1
+        },
+        Translate {
+          x: (lookLayer.lookFrom.x - lookBox.x) * (1 - lookLayer.lookShown)
+          y: (lookLayer.lookFrom.y - lookBox.y) * (1 - lookLayer.lookShown)
+        }
+      ]
 
-      MouseArea { anchors.fill: parent }
+      MouseArea { anchors.fill: parent; enabled: root.lookOpen }
 
       // The name, where it is in the folder, and the way out.
       Row {
@@ -5683,6 +6175,7 @@ Panel {
         width: lookBox.width - lookBox.contentLeftInset - lookBox.contentRightInset
         height: Style.spacing.controlHeight
         spacing: root.iconGap
+        opacity: lookLayer.contentAlpha
 
         Text {
           anchors.verticalCenter: parent.verticalCenter
@@ -5729,6 +6222,7 @@ Panel {
         width: lookTop.width
         height: lookFoot.y - y - Style.space(8)
         clip: true
+        opacity: lookLayer.contentAlpha
 
         readonly property real side: Style.space(40)
 
@@ -5740,6 +6234,7 @@ Panel {
         Item {
           id: lookContent
           anchors.fill: parent
+          transform: Translate { id: stepShift }
           anchors.leftMargin: lookStage.side
           anchors.rightMargin: lookStage.side
           anchors.topMargin: Style.space(10)
@@ -5749,6 +6244,9 @@ Panel {
             id: lookPicture
             anchors.fill: parent
             visible: lookLayer.kind === "image" && lookLayer.ready
+            // A picture fades in as it is read; one read before shows at once.
+            opacity: status === Image.Ready ? 1 : 0
+            Behavior on opacity { NumberAnimation { duration: Style.duration(160); easing.type: Easing.Bezier; easing.bezierCurve: Style.easeOut } }
             url: visible ? Model.fileUrl(lookLayer.sourcePath) : ""
           }
 
@@ -5756,6 +6254,8 @@ Panel {
             id: lookPage
             anchors.fill: parent
             visible: status === Image.Ready
+            opacity: status === Image.Ready ? 1 : 0
+            Behavior on opacity { NumberAnimation { duration: Style.duration(160); easing.type: Easing.Bezier; easing.bezierCurve: Style.easeOut } }
             source: lookLayer.kind === "pdf" && lookLayer.ready ? Model.fileUrl(lookLayer.sourcePath) : ""
             currentFrame: Math.min(root.previewPage, Math.max(0, frameCount - 1))
             sourceSize.width: Math.ceil(width * Screen.devicePixelRatio)
@@ -5769,6 +6269,8 @@ Panel {
             id: lookThumb
             anchors.fill: parent
             visible: (lookLayer.kind === "thumbnail" || lookLayer.pdfFailed) && lookLayer.thumbPath !== ""
+            opacity: status === Image.Ready ? 1 : 0
+            Behavior on opacity { NumberAnimation { duration: Style.duration(160); easing.type: Easing.Bezier; easing.bezierCurve: Style.easeOut } }
             url: lookLayer.thumbPath !== "" ? Model.fileUrl(lookLayer.thumbPath) : ""
           }
 
@@ -6024,6 +6526,7 @@ Panel {
         y: lookBox.height - lookBox.contentBottomInset - height
         width: lookTop.width
         spacing: Style.space(6)
+        opacity: lookLayer.contentAlpha
 
         Row {
           width: parent.width
@@ -6047,6 +6550,7 @@ Panel {
                 spacing: Style.space(6)
 
                 Text {
+                  id: factLabel
                   textFormat: Text.PlainText
                   text: modelData[0]
                   color: lookLayer.foreground
@@ -6055,13 +6559,17 @@ Panel {
                   font.pixelSize: Style.font.caption
                 }
 
+                // A long value, a deep folder's path, gives way in the middle
+                // rather than running under the buttons.
                 Text {
+                  width: Math.min(implicitWidth, lookFacts.width - factLabel.width - parent.spacing)
                   textFormat: Text.PlainText
                   text: modelData[1]
                   color: lookLayer.foreground
                   opacity: 0.9
                   font.family: root.fontFamily
                   font.pixelSize: Style.font.caption
+                  elide: Text.ElideMiddle
                 }
               }
             }

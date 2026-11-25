@@ -14,6 +14,8 @@ A file navigator in the Omarchy bar, in the spirit of GNOME Files: a popup under
 
 The popup and the window share the tabs; they are saved on the widget's `shell.json` entry and come back after a restart. The window is never open together with the popup: popping out closes the popup, docking (or a left click on the bar button) closes the window.
 
+Things move the way Hyprland's windows do, on the same easeOutQuint curve and only as long as they need to: a folder slides in from the side it comes from, the cursor glides from item to item, the large preview grows out of the item under the cursor and shrinks back into it, views and tabs crossfade, files that come or go fade while the rest settle into place, menus, Ctrl+P and notes pop in, and pictures fade in as they are read. With Hyprland's animations off (`omarchy toggle animations`), nothing moves.
+
 ## Interactions
 
 - Left click on the bar: open the popup, or dock the window back into it. Right click: pop out into a window or dock. Middle click: open the folder on screen in Nautilus.
