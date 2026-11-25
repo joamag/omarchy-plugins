@@ -974,6 +974,17 @@ describe("isImage", () => {
   })
 })
 
+describe("isText", () => {
+  it("tells text, code and extensionless files by name, whatever their size", () => {
+    assert.equal(Model.isText(entry("a.md", { size: 300000 })), true)
+    assert.equal(Model.isText(entry("a.qml")), true)
+    assert.equal(Model.isText(entry("Makefile")), true)
+    assert.equal(Model.isText(entry("a.bin")), false)
+    assert.equal(Model.isText(entry("docs", { dir: true })), false)
+    assert.equal(Model.isText(null), false)
+  })
+})
+
 describe("isTextual", () => {
   it("previews small text, code and extensionless files", () => {
     assert.equal(Model.isTextual(entry("a.md", { size: 100 })), true)
@@ -1509,6 +1520,51 @@ describe("keepSelected", () => {
   })
 })
 
+describe("bandRows", () => {
+  it("lists the rows a band crosses, whichever way it was drawn", () => {
+    assert.deepEqual(Model.bandRows(30, 80, 26, 10), [1, 2, 3])
+    assert.deepEqual(Model.bandRows(80, 30, 26, 10), [1, 2, 3])
+    assert.deepEqual(Model.bandRows(5, 5, 26, 10), [0])
+  })
+
+  it("keeps to the rows there are", () => {
+    assert.deepEqual(Model.bandRows(-40, 30, 26, 3), [0, 1])
+    assert.deepEqual(Model.bandRows(60, 400, 26, 3), [2])
+    assert.deepEqual(Model.bandRows(0, 10, 26, 0), [])
+    assert.deepEqual(Model.bandRows(0, 10, 0, 3), [])
+  })
+})
+
+describe("bandTiles", () => {
+  // Three columns of 100 by 80 cells, tiles 3 in from their edges.
+  const tiles = (x0, y0, x1, y1, count = 7) => Model.bandTiles(x0, y0, x1, y1, 100, 80, 3, count, 3)
+
+  it("lists the tiles a band crosses, row by row", () => {
+    assert.deepEqual(tiles(50, 40, 150, 120), [0, 1, 3, 4])
+    assert.deepEqual(tiles(150, 120, 50, 40), [0, 1, 3, 4])
+    assert.deepEqual(tiles(10, 10, 290, 70), [0, 1, 2])
+  })
+
+  it("leaves out the gaps between tiles and the cells past the last", () => {
+    // Only the margin of tile 1 and of tile 4, between the tiles.
+    assert.deepEqual(tiles(98, 10, 102, 70), [])
+    // Cells 7 and 8 of the last row hold no tile.
+    assert.deepEqual(tiles(150, 170, 290, 230), [])
+    assert.deepEqual(tiles(10, 170, 290, 230), [6])
+    assert.deepEqual(tiles(-50, -50, 400, 400, 0), [])
+    assert.deepEqual(Model.bandTiles(0, 0, 10, 10, 0, 80, 3, 7, 3), [])
+  })
+})
+
+describe("bandSelection", () => {
+  it("selects what the band crosses, after what Ctrl kept", () => {
+    assert.deepEqual(Model.bandSelection(LISTING, [1, 2], []), [LISTING[1].path, LISTING[2].path])
+    assert.deepEqual(Model.bandSelection(LISTING, [1, 2], [LISTING[2].path, "/kept"]), [LISTING[2].path, "/kept", LISTING[1].path])
+    assert.deepEqual(Model.bandSelection(LISTING, [9], null), [])
+    assert.deepEqual(Model.bandSelection(null, null, null), [])
+  })
+})
+
 describe("typeAheadIndex", () => {
   const names = ["alpha", "apple", "banana", "Berry", "cherry"].map((n) => entry(n))
 
@@ -1906,6 +1962,7 @@ describe("hints", () => {
     assert.equal(Model.hints("prompt")[0].key, "Enter")
     assert.equal(Model.hints("jump")[3].key, "Ctrl+Enter")
     assert.equal(Model.hints("find")[0].label, "the start of a name")
+    assert.equal(Model.hints("chooser")[2].key, "Ctrl+S")
     assert.equal(Model.hints("whatever"), Model.HINTS.browse)
   })
 })
@@ -1992,6 +2049,234 @@ describe("folderMenu", () => {
   })
 })
 
+describe("chooserApp", () => {
+  it("names the app from the last part of its id", () => {
+    assert.equal(Model.chooserApp("com.google.Chrome"), "Chrome")
+    assert.equal(Model.chooserApp("firefox"), "firefox")
+    assert.equal(Model.chooserApp(""), "")
+    assert.equal(Model.chooserApp(null), "")
+  })
+})
+
+describe("chooserFilter", () => {
+  it("parts the globs from the MIME types", () => {
+    assert.deepEqual(Model.chooserFilter(["Images", [[0, "*.png"], [1, "Image/JPEG"], [0, ""], "bad"]]), { label: "Images", globs: ["*.png"], mimes: ["image/jpeg"] })
+    assert.deepEqual(Model.chooserFilter(null), { label: "", globs: [], mimes: [] })
+  })
+})
+
+describe("sameFilter", () => {
+  const read = Model.chooserFilter
+
+  it("matches the label and every pattern", () => {
+    assert.ok(Model.sameFilter(read(["Document", [[0, "*.txt"], [1, "text/plain"]]]), read(["Document", [[0, "*.txt"], [1, "Text/Plain"]]])))
+    assert.ok(!Model.sameFilter(read(["Document", [[0, "*.txt"]]]), read(["Document", [[0, "*.pdf"]]])))
+    assert.ok(!Model.sameFilter(read(["Document", [[1, "text/plain"]]]), read(["Document", []])))
+    assert.ok(!Model.sameFilter(read(["Text", [[0, "*.txt"]]]), read(["Document", [[0, "*.txt"]]])))
+  })
+})
+
+describe("chooserFilters", () => {
+  const pdf = ["PDF", [[0, "*.pdf"]]]
+  const all = ["All files", [[0, "*"]]]
+
+  it("keeps the list, with the current filter first when it is missing", () => {
+    assert.deepEqual(Model.chooserFilters([pdf, all], all).map((f) => f.label), ["PDF", "All files"])
+    assert.deepEqual(Model.chooserFilters([pdf], ["Text", [[0, "*.txt"]]]).map((f) => f.label), ["Text", "PDF"])
+    assert.deepEqual(Model.chooserFilters(null, null), [])
+  })
+
+  it("adds a current filter that only shares a label with one in the list", () => {
+    const out = Model.chooserFilters([["Document", [[0, "*.txt"]]]], ["Document", [[0, "*.pdf"]]])
+    assert.deepEqual(out.map((f) => f.globs), [["*.pdf"], ["*.txt"]])
+  })
+})
+
+describe("chooserRequest", () => {
+  it("reads a save request", () => {
+    const r = Model.chooserRequest({ id: "4", method: "SaveFile", app: "com.google.Chrome", title: "Save File", acceptLabel: "_Save", currentName: "Q4 report.pdf", currentFolder: "/home/joamag//Downloads/", filters: [["PDF", [[0, "*.pdf"]]], ["All files", [[0, "*"]]]], currentFilter: ["All files", [[0, "*"]]] }, HOME)
+    assert.deepEqual(r, { id: "4", kind: "save", title: "Save File", app: "Chrome", accept: "Save", name: "Q4 report.pdf", folder: `${HOME}/Downloads`, files: [], filters: r.filters, filter: 1, multiple: false })
+    assert.equal(r.filters.length, 2)
+  })
+
+  it("tells open, folder and several-files requests apart", () => {
+    const open = Model.chooserRequest({ method: "OpenFile", multiple: true }, HOME)
+    assert.deepEqual([open.kind, open.title, open.accept, open.folder, open.multiple, open.filter], ["open", "Open", "Open", HOME, true, 0])
+    const folder = Model.chooserRequest({ method: "OpenFile", directory: true }, HOME)
+    assert.deepEqual([folder.kind, folder.title, folder.accept], ["folder", "Choose a folder", "Select"])
+    const many = Model.chooserRequest({ method: "SaveFiles", files: ["a.txt", "", "b.txt"], multiple: true }, HOME)
+    assert.deepEqual([many.kind, many.accept, many.files, many.multiple], ["savefiles", "Save", ["a.txt", "b.txt"], false])
+  })
+
+  it("finds the current filter by its patterns, not only its label", () => {
+    const txt = ["Document", [[0, "*.txt"]]]
+    const pdf = ["Document", [[0, "*.pdf"]]]
+    assert.equal(Model.chooserRequest({ method: "OpenFile", filters: [txt, pdf], currentFilter: pdf }, HOME).filter, 1)
+    assert.equal(Model.chooserRequest({ method: "OpenFile", filters: [txt, pdf], currentFilter: txt }, HOME).filter, 0)
+    const other = Model.chooserRequest({ method: "OpenFile", filters: [txt], currentFilter: pdf }, HOME)
+    assert.deepEqual([other.filter, other.filters[0].globs], [0, ["*.pdf"]])
+  })
+
+  it("takes the folder and name from the current file, and falls back home", () => {
+    const r = Model.chooserRequest({ method: "SaveFile", currentFile: "/srv/notes/todo.md" }, HOME)
+    assert.deepEqual([r.folder, r.name], ["/srv/notes", "todo.md"])
+    assert.equal(Model.chooserRequest({ currentFolder: "relative/x" }, HOME).folder, HOME)
+    assert.equal(Model.chooserRequest(null, "").folder, "/")
+  })
+})
+
+describe("globRegExp", () => {
+  it("matches stars, question marks and sets, ignoring case", () => {
+    assert.ok(Model.globRegExp("*.pdf").test("Q4 report.PDF"))
+    assert.ok(!Model.globRegExp("*.pdf").test("report.pdf.txt"))
+    assert.ok(Model.globRegExp("photo-??.[jp]ng").test("photo-01.png"))
+    assert.ok(!Model.globRegExp("photo-??.[!p]ng").test("photo-01.png"))
+    assert.ok(Model.globRegExp("a+b(1).txt").test("a+b(1).txt"))
+    assert.ok(Model.globRegExp("[x").test("[x"))
+  })
+})
+
+describe("mimeFits", () => {
+  it("knows types by their extension", () => {
+    assert.ok(Model.mimeFits("image/png", entry("a.png")))
+    assert.ok(Model.mimeFits("image/jpeg", entry("a.JPG")))
+    assert.ok(Model.mimeFits("application/pdf", entry("a.pdf")))
+    assert.ok(Model.mimeFits("application/x-tar", entry("a.tar")))
+    assert.ok(!Model.mimeFits("image/png", entry("a.jpg")))
+  })
+
+  it("takes whole families and anything", () => {
+    assert.ok(Model.mimeFits("image/*", entry("a.webp")))
+    assert.ok(!Model.mimeFits("image/*", entry("a.pdf")))
+    assert.ok(Model.mimeFits("text/*", entry("notes.md", { size: 10 })))
+    // Past the preview's limit a text file is still one.
+    assert.ok(Model.mimeFits("text/*", entry("notes.md", { size: 262144 })))
+    assert.ok(Model.mimeFits("text/*", entry("notes.md", { size: 262145 })))
+    assert.ok(!Model.mimeFits("text/*", entry("a.png")))
+    assert.ok(Model.mimeFits("*/*", entry("a.bin")))
+    assert.ok(Model.mimeFits("application/octet-stream", entry("a.bin")))
+  })
+})
+
+describe("filterTakes", () => {
+  const images = Model.chooserFilter(["Images", [[0, "*.png"], [1, "image/jpeg"]]])
+
+  it("takes a file one of the patterns or types fits", () => {
+    assert.ok(Model.filterTakes(images, entry("a.png")))
+    assert.ok(Model.filterTakes(images, entry("a.jpeg")))
+    assert.ok(!Model.filterTakes(images, entry("a.pdf")))
+  })
+
+  it("takes everything without a filter or patterns", () => {
+    assert.ok(Model.filterTakes(null, entry("a.pdf")))
+    assert.ok(Model.filterTakes(Model.chooserFilter(["Empty", []]), entry("a.pdf")))
+  })
+})
+
+describe("chooserPicks", () => {
+  const open = Model.chooserRequest({ method: "OpenFile", filters: [["PDF", [[0, "*.pdf"]]], ["All", [[0, "*"]]]] }, HOME)
+  const folder = Model.chooserRequest({ method: "OpenFile", directory: true }, HOME)
+  const many = Model.chooserRequest({ method: "SaveFiles", files: ["a"] }, HOME)
+
+  it("picks files the filter on screen takes, and folders only when asked for", () => {
+    assert.ok(Model.chooserPicks(open, 0, entry("a.pdf")))
+    assert.ok(!Model.chooserPicks(open, 0, entry("a.png")))
+    assert.ok(Model.chooserPicks(open, 1, entry("a.png")))
+    assert.ok(!Model.chooserPicks(open, 0, entry("d", { dir: true })))
+    assert.ok(Model.chooserPicks(folder, 0, entry("d", { dir: true })))
+    assert.ok(!Model.chooserPicks(folder, 0, entry("a.pdf")))
+    assert.ok(!Model.chooserPicks(many, 0, entry("a.pdf")))
+  })
+
+  it("never picks what is in the Trash or inside an archive", () => {
+    assert.ok(!Model.chooserPicks(open, 1, Model.makeEntry({ path: `${HOME}/.local/share/Trash/files/a.pdf`, trashName: "a.pdf" })))
+    assert.ok(!Model.chooserPicks(open, 1, Model.makeEntry({ path: Model.archiveLocation(ZIP, "a.pdf") })))
+    assert.ok(!Model.chooserPicks(null, 0, entry("a.pdf")))
+    assert.ok(!Model.chooserPicks(open, 0, null))
+  })
+})
+
+describe("chooserPlaces", () => {
+  it("lists the folder on screen, the recent ones and the desktop, once each", () => {
+    assert.deepEqual(Model.chooserPlaces(`${HOME}/Downloads`, [`${HOME}/Documents`, `${HOME}/Downloads`, Model.TRASH, "", `${HOME}/Music`], HOME), [`${HOME}/Downloads`, `${HOME}/Documents`, `${HOME}/Music`, `${HOME}/Desktop`])
+    assert.equal(Model.chooserPlaces(HOME, ["/a", "/b", "/c", "/d", "/e"], HOME, 3).length, 3)
+    assert.deepEqual(Model.chooserPlaces(Model.RECENT, null, HOME), [`${HOME}/Desktop`])
+  })
+})
+
+describe("chooserPaths", () => {
+  const save = Model.chooserRequest({ method: "SaveFile" }, HOME)
+  const many = Model.chooserRequest({ method: "SaveFiles", files: ["a.txt", "b.txt"] }, HOME)
+  const open = Model.chooserRequest({ method: "OpenFile", filters: [["PDF", [[0, "*.pdf"]]]] }, HOME)
+  const several = Model.chooserRequest({ method: "OpenFile", multiple: true }, HOME)
+  const folder = Model.chooserRequest({ method: "OpenFile", directory: true }, HOME)
+  const files = [entry("a.pdf"), entry("b.png"), entry("c.pdf"), entry("d", { dir: true })]
+
+  it("saves under the name typed, or the names asked for", () => {
+    assert.deepEqual(Model.chooserPaths(save, "/srv", "  out.pdf ", [], 0), ["/srv/out.pdf"])
+    assert.deepEqual(Model.chooserPaths(many, "/srv", "", [], 0), ["/srv/a.txt", "/srv/b.txt"])
+  })
+
+  it("opens what was picked that the request takes", () => {
+    assert.deepEqual(Model.chooserPaths(open, "/srv", "", files, 0), [`${HOME}/Downloads/a.pdf`])
+    assert.deepEqual(Model.chooserPaths(several, "/srv", "", files, 0), [`${HOME}/Downloads/a.pdf`, `${HOME}/Downloads/b.png`, `${HOME}/Downloads/c.pdf`])
+  })
+
+  it("answers a folder request with the folder picked, or the one on screen", () => {
+    assert.deepEqual(Model.chooserPaths(folder, "/srv", "", files, 0), [`${HOME}/Downloads/d`])
+    assert.deepEqual(Model.chooserPaths(folder, "/srv", "", [files[0]], 0), ["/srv"])
+    assert.deepEqual(Model.chooserPaths(folder, Model.TRASH, "", [], 0), [])
+    assert.deepEqual(Model.chooserPaths(null, "/srv", "", files, 0), [])
+  })
+})
+
+describe("chooserProblem", () => {
+  const save = Model.chooserRequest({ method: "SaveFile" }, HOME)
+  const open = Model.chooserRequest({ method: "OpenFile" }, HOME)
+  const folder = Model.chooserRequest({ method: "OpenFile", directory: true }, HOME)
+
+  it("asks for a name that can be saved under", () => {
+    assert.equal(Model.chooserProblem(save, HOME, "a.pdf", []), "")
+    assert.equal(Model.chooserProblem(save, HOME, "  ", []), "Type a name")
+    assert.equal(Model.chooserProblem(save, HOME, "a/b", []), "A name cannot hold /")
+    assert.equal(Model.chooserProblem(save, HOME, "..", []), "Type another name")
+  })
+
+  it("wants a real folder to save in, and something picked to open", () => {
+    assert.equal(Model.chooserProblem(save, Model.TRASH, "a.pdf", []), "Open a folder to save in")
+    assert.equal(Model.chooserProblem(folder, Model.RECENT, "", []), "Open a folder first")
+    assert.equal(Model.chooserProblem(open, HOME, "", []), "Pick a file")
+    assert.equal(Model.chooserProblem(open, Model.RECENT, "", ["/a"]), "")
+    assert.equal(Model.chooserProblem(null, HOME, "", []), "")
+  })
+})
+
+describe("chooserClash", () => {
+  it("finds the files and folders already called that", () => {
+    const listed = [entry("a.pdf"), entry("d", { dir: true })]
+    assert.deepEqual(Model.chooserClash(listed, [`${HOME}/Downloads/a.pdf`, `${HOME}/Downloads/d`, `${HOME}/Downloads/new.pdf`]), { files: ["a.pdf"], folders: ["d"] })
+    assert.deepEqual(Model.chooserClash(null, null), { files: [], folders: [] })
+  })
+})
+
+describe("chooserKeepBoth", () => {
+  it("gives taken names a free (copy) one and keeps the rest", () => {
+    const listed = [entry("a.pdf"), entry("a (copy).pdf")]
+    assert.deepEqual(Model.chooserKeepBoth(listed, [`${HOME}/Downloads/a.pdf`, `${HOME}/Downloads/b.pdf`]), [`${HOME}/Downloads/a (copy 2).pdf`, `${HOME}/Downloads/b.pdf`])
+    assert.deepEqual(Model.chooserKeepBoth(null, ["/x/a"]), ["/x/a"])
+  })
+})
+
+describe("nextIntegration", () => {
+  it("applies each integration in order until all are as wanted", () => {
+    assert.deepEqual(Model.nextIntegration({ default: true }, {}), { name: "default", state: "on" })
+    assert.deepEqual(Model.nextIntegration({ default: true, launcher: true }, { default: "on" }), { name: "chooser", state: "off" })
+    assert.deepEqual(Model.nextIntegration({ default: true, launcher: true }, { default: "on", chooser: "off" }), { name: "launcher", state: "on" })
+    assert.equal(Model.nextIntegration({ chooser: true }, { default: "off", chooser: "on", launcher: "off" }), null)
+    assert.deepEqual(Model.nextIntegration(null, null), { name: "default", state: "off" })
+  })
+})
+
 describe("files.sh", () => {
   // A scratch home with the standard folders, a data dir, a config dir and
   // stand-ins for the commands that would touch the real machine. gio does
@@ -2048,7 +2333,7 @@ esac`)
     fs.mkdirSync(apps)
     fs.writeFileSync(path.join(apps, "obsidian.desktop"), "[Desktop Entry]\nName=Obsidian\nName[pt]=Obsidiana\n[Desktop Action new]\nName=New vault\n")
     fs.writeFileSync(path.join(apps, "nvim.desktop"), "[Desktop Entry]\nExec=nvim\n")
-    const env = { HOME: home, XDG_DATA_HOME: data, XDG_CONFIG_HOME: config, XDG_DATA_DIRS: path.join(dir, "none"), FAKE_LOG: path.join(dir, "gio.log"), TMPDIR: dir }
+    const env = { HOME: home, XDG_DATA_HOME: data, XDG_CONFIG_HOME: config, XDG_DATA_DIRS: path.join(dir, "none"), XDG_CONFIG_DIRS: path.join(dir, "none"), FAKE_LOG: path.join(dir, "gio.log"), TMPDIR: dir }
     const run = (args, extra = {}) => runScript("joamag.files", "files.sh", args, { bin, env: { ...env, ...extra } })
     const log = () => (fs.existsSync(env.FAKE_LOG) ? fs.readFileSync(env.FAKE_LOG, "utf8").trim().split("\n") : [])
     return { dir, home, data, config, bin, env, run, log }
@@ -2600,6 +2885,10 @@ exit \${FAKE_PY_STATUS:-0}`)
     write(path.join(dest, "mine.txt"), "mine")
     const run = background(t, s, ["extract", a.zip, dest, "0"])
     await run.progressed
+    // The first progress can come before the stand-in has written; what
+    // landed must be there before the extraction is stopped.
+    const partial = path.join(dest, "partial")
+    for (let i = 0; i < 500 && !fs.existsSync(partial); i++) await new Promise((r) => setTimeout(r, 10))
     run.child.kill("SIGTERM")
     await run.closed
     const r = Model.parseResult(run.stdout)
@@ -2886,7 +3175,7 @@ case "$1" in
     printf '%s\\ninode/directory=%s\\n' "$kept" "$2" > "$list"
     printf 'xdg-mime %s\\n' "$*" >> "$FAKE_LOG" ;;
 esac`)
-    for (const name of ["hyprctl", "gdbus", "setsid", "pkill"]) fakeCommand(s.bin, name, `printf '${name} %s\\n' "$*" >> "$FAKE_LOG"`)
+    for (const name of ["hyprctl", "gdbus", "setsid", "pkill", "systemctl"]) fakeCommand(s.bin, name, `printf '${name} %s\\n' "$*" >> "$FAKE_LOG"`)
     fakeCommand(s.bin, "pgrep", 'printf "pgrep %s\\n" "$*" >> "$FAKE_LOG"; [[ -n ${FAKE_RUNNING:-} ]]')
     const apps = path.join(s.data, "applications")
     const installed = (id) => fs.writeFileSync(path.join(apps, id), `[Desktop Entry]\nName=${id}\nMimeType=inode/directory;\n`)
@@ -2897,6 +3186,13 @@ esac`)
       previous: path.join(s.home, ".local", "state", "joamag-files", "previous-file-manager"),
       previousService: path.join(s.home, ".local", "state", "joamag-files", "previous-file-manager.service"),
       mimeapps: path.join(s.config, "mimeapps.list"),
+      chooserService: path.join(s.data, "dbus-1", "services", "org.freedesktop.impl.portal.desktop.joamag.files.service"),
+      chooserPortal: path.join(s.data, "xdg-desktop-portal", "portals", "joamag-files.portal"),
+      portals: path.join(s.config, "xdg-desktop-portal", "hyprland-portals.conf"),
+      previousChooser: path.join(s.home, ".local", "state", "joamag-files", "previous-file-chooser"),
+      portalsMade: path.join(s.home, ".local", "state", "joamag-files", "portals-made"),
+      hyprland: path.join(s.config, "hypr", "hyprland.lua"),
+      launcher: path.join(apps, "joamag-files-window.desktop"),
     }
     // The service's whole command line, as files.sh looks for it.
     const service = `(.*/)?python3 ${pluginDir("joamag.files").replace(/[\][\\.*^$+?(){}|]/g, "\\$&")}/filemanager1\\.py`
@@ -3133,6 +3429,220 @@ esac`)
     assert.equal(s.run(["default", "on"], { ...m.env, FAKE_MIME_FAIL: "1" }).stdout, "error\txdg-mime: cannot write\n")
   })
 
+  it("shows the window, or the previous file manager without the widget", (t) => {
+    const s = setup(t)
+    const m = manager(s)
+    const apps = path.join(s.data, "applications")
+    assert.equal(s.run(["window"], m.env).stdout, "")
+    m.installed("org.gnome.Nautilus.desktop")
+    s.run(["window"], { ...m.env, FAKE_SHELL_STATUS: "1" })
+    assert.deepEqual(s.log(), ["shell joamag.files window", "shell joamag.files window", `launch ${apps}/org.gnome.Nautilus.desktop`])
+  })
+
+  it("shows apps' Open and Save dialogs in the widget, and hands everything back", (t) => {
+    const s = setup(t)
+    const m = manager(s)
+    const here = pluginDir("joamag.files")
+    const portals = "[preferred]\ndefault=hyprland;gtk\norg.freedesktop.impl.portal.Secret=gnome-keyring\n"
+    const mine = "-- My config\nrequire(\"hypr.bindings\")\n"
+    write(m.files.portals, portals)
+    write(m.files.hyprland, mine)
+    assert.equal(s.run(["chooser", "on"], m.env).stdout, "")
+    assert.equal(fs.readFileSync(m.files.chooserService, "utf8"), `[D-BUS Service]\nName=org.freedesktop.impl.portal.desktop.joamag.files\nExec=${here}/filechooser.py\n`)
+    assert.equal(fs.readFileSync(m.files.chooserPortal, "utf8"), "[portal]\nDBusName=org.freedesktop.impl.portal.desktop.joamag.files\nInterfaces=org.freedesktop.impl.portal.FileChooser;\n")
+    assert.equal(fs.readFileSync(m.files.portals, "utf8"), "[preferred]\norg.freedesktop.impl.portal.FileChooser=joamag-files\ndefault=hyprland;gtk\norg.freedesktop.impl.portal.Secret=gnome-keyring\n")
+    assert.equal(fs.readFileSync(m.files.hyprland, "utf8"), mine + [
+      "",
+      "-- joamag.files: the Files chooser floats over the app that asked (its File chooser setting adds and removes these lines)",
+      'o.window({ class = "^org.quickshell$", title = "^Files chooser · .*" }, { tag = "+floating-window" })',
+      "-- joamag.files: end",
+      "",
+    ].join("\n"))
+    assert.deepEqual(s.log(), [
+      "gdbus call --session --dest org.freedesktop.DBus --object-path /org/freedesktop/DBus --method org.freedesktop.DBus.ReloadConfig",
+      "systemctl --user try-restart xdg-desktop-portal.service",
+      "hyprctl reload",
+    ])
+
+    // Again, at the next start: nothing to change, the portal running
+    // having read them.
+    fs.writeFileSync(s.env.FAKE_LOG, "")
+    s.run(["chooser", "on"], m.env)
+    assert.deepEqual(s.log(), ["systemctl --user show -P MainPID xdg-desktop-portal.service"])
+
+    // Off: every file as it was, the service stopped.
+    fs.writeFileSync(s.env.FAKE_LOG, "")
+    assert.equal(s.run(["chooser", "off"], m.env).stdout, "")
+    assert.equal(fs.readFileSync(m.files.portals, "utf8"), portals)
+    assert.equal(fs.readFileSync(m.files.hyprland, "utf8"), mine)
+    for (const file of [m.files.chooserService, m.files.chooserPortal, m.files.portalsMade]) assert.ok(!fs.existsSync(file), file)
+    const pattern = m.service.replace("filemanager1", "filechooser")
+    assert.deepEqual(s.log(), [
+      "gdbus call --session --dest org.freedesktop.DBus --object-path /org/freedesktop/DBus --method org.freedesktop.DBus.ReloadConfig",
+      "systemctl --user try-restart xdg-desktop-portal.service",
+      "hyprctl reload",
+      `pkill -f -x -- ${pattern}`,
+    ])
+
+    // Off again, and off for someone who never turned it on, change nothing.
+    fs.writeFileSync(s.env.FAKE_LOG, "")
+    s.run(["chooser", "off"], m.env)
+    fs.rmSync(m.files.hyprland)
+    s.run(["chooser", "off"], m.env)
+    assert.deepEqual(s.log(), [`pkill -f -x -- ${pattern}`, `pkill -f -x -- ${pattern}`])
+    assert.ok(!fs.existsSync(m.files.hyprland))
+  })
+
+  it("sets the user's own file chooser aside, and makes preferences only when there are none", (t) => {
+    const s = setup(t)
+    const m = manager(s)
+    // The user's own choice of dialog comes back where it was.
+    const theirs = "[preferred]\norg.freedesktop.impl.portal.FileChooser=kde\ndefault=gtk\n"
+    write(m.files.portals, theirs)
+    s.run(["chooser", "on"], m.env)
+    assert.equal(fs.readFileSync(m.files.portals, "utf8"), "[preferred]\norg.freedesktop.impl.portal.FileChooser=joamag-files\ndefault=gtk\n")
+    assert.equal(fs.readFileSync(m.files.previousChooser, "utf8"), "org.freedesktop.impl.portal.FileChooser=kde\n")
+    s.run(["chooser", "off"], m.env)
+    assert.equal(fs.readFileSync(m.files.portals, "utf8"), theirs)
+    assert.ok(!fs.existsSync(path.dirname(m.files.previousChooser)))
+    // Preferences without a [preferred] section get one.
+    write(m.files.portals, "# empty\n")
+    s.run(["chooser", "on"], m.env)
+    assert.equal(fs.readFileSync(m.files.portals, "utf8"), "# empty\n[preferred]\norg.freedesktop.impl.portal.FileChooser=joamag-files\n")
+    s.run(["chooser", "off"], m.env)
+    assert.equal(fs.readFileSync(m.files.portals, "utf8"), "# empty\n[preferred]\n")
+    // None of the user's own: a copy of the system's, which goes again.
+    fs.rmSync(m.files.portals)
+    const system = path.join(s.dir, "system")
+    write(path.join(system, "xdg-desktop-portal", "hyprland-portals.conf"), "[preferred]\ndefault=gtk\n")
+    s.run(["chooser", "on"], { ...m.env, XDG_DATA_DIRS: `${path.join(s.dir, "none")}:${system}` })
+    assert.equal(fs.readFileSync(m.files.portals, "utf8"), "[preferred]\norg.freedesktop.impl.portal.FileChooser=joamag-files\ndefault=gtk\n")
+    s.run(["chooser", "off"], m.env)
+    assert.ok(!fs.existsSync(m.files.portals))
+    assert.ok(!fs.existsSync(m.files.portalsMade))
+    // Not even the system's: Omarchy's.
+    s.run(["chooser", "on"], m.env)
+    assert.equal(fs.readFileSync(m.files.portals, "utf8"), "[preferred]\norg.freedesktop.impl.portal.FileChooser=joamag-files\ndefault=hyprland;gtk\n")
+  })
+
+  it("copies the preferences the portal goes by, keeps the user's changes to the copy, and finds a spaced key", (t) => {
+    const s = setup(t)
+    const m = manager(s)
+    const read = () => fs.readFileSync(m.files.portals, "utf8")
+    // Spaces round the = make the same key.
+    const spaced = "[preferred]\norg.freedesktop.impl.portal.FileChooser = gtk\ndefault=gtk\n"
+    write(m.files.portals, spaced)
+    s.run(["chooser", "on"], m.env)
+    assert.equal(read(), "[preferred]\norg.freedesktop.impl.portal.FileChooser=joamag-files\ndefault=gtk\n")
+    assert.equal(fs.readFileSync(m.files.previousChooser, "utf8"), "org.freedesktop.impl.portal.FileChooser = gtk\n")
+    s.run(["chooser", "off"], m.env)
+    assert.equal(read(), spaced)
+    // Without ones for Hyprland, the portal goes by the user's general ones.
+    fs.rmSync(m.files.portals)
+    const general = path.join(s.config, "xdg-desktop-portal", "portals.conf")
+    write(general, "[preferred]\ndefault=gtk\norg.freedesktop.impl.portal.ScreenCast=none\n")
+    s.run(["chooser", "on"], m.env)
+    assert.equal(read(), "[preferred]\norg.freedesktop.impl.portal.FileChooser=joamag-files\ndefault=gtk\norg.freedesktop.impl.portal.ScreenCast=none\n")
+    // The copy changed since stays, without the widget.
+    fs.appendFileSync(m.files.portals, "org.freedesktop.impl.portal.Screenshot=gtk\n")
+    s.run(["chooser", "off"], m.env)
+    assert.equal(read(), "[preferred]\ndefault=gtk\norg.freedesktop.impl.portal.ScreenCast=none\norg.freedesktop.impl.portal.Screenshot=gtk\n")
+    assert.ok(!fs.existsSync(m.files.portalsMade))
+    // The system's: the config folders before the data ones.
+    fs.rmSync(m.files.portals)
+    fs.rmSync(general)
+    const etc = path.join(s.dir, "etc")
+    const system = path.join(s.dir, "system")
+    write(path.join(etc, "xdg-desktop-portal", "portals.conf"), "[preferred]\ndefault=kde\n")
+    write(path.join(system, "xdg-desktop-portal", "hyprland-portals.conf"), "[preferred]\ndefault=gtk\n")
+    s.run(["chooser", "on"], { ...m.env, XDG_CONFIG_DIRS: etc, XDG_DATA_DIRS: system })
+    assert.equal(read(), "[preferred]\norg.freedesktop.impl.portal.FileChooser=joamag-files\ndefault=kde\n")
+  })
+
+  it("restarts a portal that has not read the preferences yet, and says when it cannot", (t) => {
+    const s = setup(t)
+    const m = manager(s)
+    fakeCommand(s.bin, "systemctl", `printf 'systemctl %s\\n' "$*" >> "$FAKE_LOG"
+case "$2" in
+  show) echo "\${FAKE_PORTAL_PID:-0}" ;;
+  try-restart) [[ -n \${FAKE_RESTART_FAIL:-} ]] && { echo "Failed to connect to bus" >&2; exit 1; } ;;
+esac
+exit 0`)
+    write(m.files.portals, "[preferred]\ndefault=gtk\n")
+    const restart = "systemctl --user try-restart xdg-desktop-portal.service"
+    const show = "systemctl --user show -P MainPID xdg-desktop-portal.service"
+    assert.equal(s.run(["chooser", "on"], { ...m.env, FAKE_RESTART_FAIL: "1" }).stdout, "error\tcannot restart the desktop portal: Failed to connect to bus\n")
+    // The rest is in place all the same.
+    assert.ok(fs.readFileSync(m.files.hyprland, "utf8").includes("Files chooser"))
+    // A portal that started before the preferences changed starts again;
+    // one that started after does not.
+    const running = { ...m.env, FAKE_PORTAL_PID: String(process.pid) }
+    const now = Date.now() / 1000
+    fs.utimesSync(m.files.portals, now + 60, now + 60)
+    fs.writeFileSync(s.env.FAKE_LOG, "")
+    assert.equal(s.run(["chooser", "on"], running).stdout, "")
+    fs.utimesSync(m.files.portals, now - 86400, now - 86400)
+    s.run(["chooser", "on"], running)
+    s.run(["chooser", "on"], m.env)
+    assert.deepEqual(s.log(), [show, restart, show, show])
+  })
+
+  it("passes the widget's answer on to the chooser service", (t) => {
+    const s = setup(t)
+    const away = { DBUS_SESSION_BUS_ADDRESS: `unix:path=${path.join(s.dir, "no-bus")}` }
+    assert.match(s.run(["chosen", "1", "0", "0", "/a"], away).stdout, /^error\t\S/)
+    assert.equal(s.run(["chosen", "1"], away).stdout, "error\tanswer needs an id, a response and a filter\n")
+  })
+
+  it("asks the chooser service to show its dialogs again", (t) => {
+    const s = setup(t)
+    const away = { DBUS_SESSION_BUS_ADDRESS: `unix:path=${path.join(s.dir, "no-bus")}` }
+    assert.match(s.run(["resend"], away).stdout, /^error\t\S/)
+  })
+
+  it("lists the window in the app launcher, and takes it out", (t) => {
+    const s = setup(t)
+    const m = manager(s)
+    const here = pluginDir("joamag.files")
+    assert.equal(s.run(["launcher", "on"], m.env).stdout, "")
+    assert.equal(fs.readFileSync(m.files.launcher, "utf8"), [
+      "[Desktop Entry]", "Type=Application", "Name=Files", "GenericName=File Manager",
+      "Comment=Browse, copy and move files in the Files window of the bar", "Icon=system-file-manager",
+      `Exec=${here}/files.sh window`, "Categories=System;FileTools;FileManager;", "Keywords=folders;explorer;", "StartupNotify=false", "",
+    ].join("\n"))
+    assert.equal(s.run(["launcher", "on"], m.env).stdout, "")
+    assert.equal(s.run(["launcher", "off"], m.env).stdout, "")
+    assert.ok(!fs.existsSync(m.files.launcher))
+    assert.equal(s.run(["launcher", "off"], m.env).stdout, "")
+  })
+
+  it("says which file it cannot write", (t) => {
+    const s = setup(t)
+    const m = manager(s)
+    // A folder where the file goes cannot be written over.
+    fs.mkdirSync(m.files.launcher, { recursive: true })
+    assert.equal(s.run(["launcher", "on"], m.env).stdout, `error\tcannot write ${m.files.launcher}\n`)
+    fs.mkdirSync(m.files.chooserService, { recursive: true })
+    assert.equal(s.run(["chooser", "on"], m.env).stdout, `error\tcannot write ${m.files.chooserService}\n`)
+    assert.deepEqual(s.log(), [])
+  })
+
+  it("quotes and escapes a plugin folder with odd characters in the Exec line", (t) => {
+    const { spawnSync } = require("node:child_process")
+    const s = setup(t)
+    const m = manager(s)
+    const odd = path.join(s.dir, 'my "odd" $plugins 50% a\\b')
+    fs.mkdirSync(odd)
+    fs.copyFileSync(path.join(pluginDir("joamag.files"), "files.sh"), path.join(odd, "files.sh"))
+    fs.chmodSync(path.join(odd, "files.sh"), 0o755)
+    const result = spawnSync(path.join(odd, "files.sh"), ["launcher", "on"], { encoding: "utf8", env: { ...s.env, ...m.env, PATH: `${s.bin}:/usr/bin:/bin` } })
+    assert.equal(result.stdout, "")
+    const exec = fs.readFileSync(m.files.launcher, "utf8").match(/^Exec=(.*)$/m)[1]
+    // A ", $ or \\ takes a backslash in the quotes, each backslash doubled
+    // again as a string; a % is doubled.
+    assert.equal(exec, String.raw`"${s.dir}/my \\"odd\\" \\$plugins 50%% a\\\\b/files.sh" window`)
+  })
+
   it("rejects bad invocations", (t) => {
     const s = setup(t)
     assert.equal(s.run(["bogus"]).status, 1)
@@ -3140,6 +3650,8 @@ esac`)
     assert.equal(s.run(["free"]).status, 1)
     assert.equal(s.run(["reveal"]).status, 1)
     assert.equal(s.run(["default"]).stdout, "error\tdefault takes on or off\n")
+    assert.equal(s.run(["chooser", "maybe"]).stdout, "error\tchooser takes on or off\n")
+    assert.equal(s.run(["launcher"]).stdout, "error\tlauncher takes on or off\n")
   })
 })
 
@@ -3207,5 +3719,168 @@ until_true eval '[[ $(wc -l < "$dir/log" 2>/dev/null) == 2 ]]' || exit 1
       "reveal file:///home/u/a%20b.txt",
       "open file:///home/u",
     ])
+  })
+})
+
+// filechooser.py on a bus of its own, between a stand-in for the widget
+// (omarchy-shell, logging and taking each request unless told the widget
+// is down, slowly while told to be slow) and a stand-in for the GTK
+// dialog it falls back to, with a MIME database of its own.
+describe("filechooser.py", () => {
+  const { spawnSync } = require("node:child_process")
+  const ready = spawnSync("sh", ["-c", "command -v dbus-run-session && command -v gdbus && python3 -c 'from gi.repository import Gio'"]).status === 0
+  const NAME = "org.freedesktop.impl.portal.desktop.joamag.files"
+
+  const CONFIG = `<!DOCTYPE busconfig PUBLIC "-//freedesktop//DTD D-Bus Bus Configuration 1.0//EN" "http://www.freedesktop.org/standards/dbus/1.0/busconfig.dtd">
+<busconfig>
+  <type>session</type>
+  <listen>unix:tmpdir=/tmp</listen>
+  <auth>EXTERNAL</auth>
+  <policy context="default">
+    <allow send_destination="*" eavesdrop="true"/>
+    <allow eavesdrop="true"/>
+    <allow own="*"/>
+  </policy>
+</busconfig>
+`
+
+  // A save the widget answers, after an answer it cannot take, an open the
+  // app gives up on, one it gives up on while the widget is still taking
+  // it, one with choices the GTK dialog shows until the app gives up on it
+  // too, one the widget is asked for again as if the shell had restarted,
+  // while it was still taking it and after, opens and saves while the
+  // widget is down, then answers that come too late or make no sense.
+  const DRIVER = String.raw`
+set -u
+dir=$1
+trap 'kill $(jobs -p) 2>/dev/null' EXIT
+until_true() { for _ in $(seq 200); do eval "$1" && return 0; sleep 0.025; done; return 1; }
+owned() { [[ $(gdbus call --session --dest org.freedesktop.DBus --object-path /org/freedesktop/DBus --method org.freedesktop.DBus.NameHasOwner "$1" 2>/dev/null) == "(true,)" ]]; }
+# gdbus call garbles b'' byte strings, so paths go as arrays of bytes.
+ay() { printf '@ay [%s0x00]' "$(printf '%s' "$1" | od -An -tx1 -v | tr -s ' \n' '  ' | sed -E 's/ ?([0-9a-f]{2})/0x\1, /g')"; }
+ask() { gdbus call --session --dest ${NAME} --object-path /org/freedesktop/portal/desktop --method "org.freedesktop.impl.portal.FileChooser.$1" "/org/freedesktop/portal/desktop/request/1_1/$2" com.google.Chrome "" "$3" "$4"; }
+close() { gdbus call --session --dest ${NAME} --object-path "/org/freedesktop/portal/desktop/request/1_1/$1" --method org.freedesktop.impl.portal.Request.Close >/dev/null; }
+python3 "$dir/fake_gtk_chooser.py" "$dir/gtk.log" &
+"$dir/filechooser.py" resend > "$dir/none.out"
+"$dir/filechooser.py" &
+until_true 'owned org.freedesktop.impl.portal.desktop.gtk && owned ${NAME}' || exit 1
+ask SaveFile a "Save File" "{'current_name': <'Q4 report.pdf'>, 'current_folder': <$(ay /home/u/Downloads)>, 'filters': <[('PDF', [(uint32 0, '*.pdf')]), ('All files', [(uint32 0, '*')])]>, 'current_filter': <('All files', [(uint32 0, '*')])>}" > "$dir/save.out" &
+until_true 'grep -q "^took 1$" "$dir/log" 2>/dev/null' || exit 1
+"$dir/filechooser.py" answer 1 0 1 "Q4 report.pdf" > "$dir/relative.out"
+"$dir/filechooser.py" answer 1 0 1 "/home/u/Q4 report.pdf"
+until_true '[[ -s $dir/save.out ]]' || exit 1
+ask OpenFile b "Open" "{'multiple': <true>, 'filters': <[('Documents', [(uint32 1, 'application/x-msword'), (uint32 1, 'text/plain')])]>, 'current_filter': <('Images', [(uint32 1, 'image/*')])>}" > "$dir/close.out" &
+until_true 'grep -q "^took 2$" "$dir/log"' || exit 1
+close b
+until_true '[[ -s $dir/close.out ]] && grep -q "^joamag.files chooserClose 2$" "$dir/log"' || exit 1
+ask SaveFiles d "Save Files" "{'files': <[$(ay a.txt), $(ay 'b c.txt')]>, 'current_folder': <$(ay /srv)>, 'filters': <[('Text', [(uint32 0, '*.md')])]>, 'current_filter': <('Text', [(uint32 0, '*.txt')])>}" > "$dir/many.out" &
+until_true 'grep -q "^took 3$" "$dir/log"' || exit 1
+"$dir/filechooser.py" answer 3 0 0 /srv/a.txt "/srv/b c.txt"
+until_true '[[ -s $dir/many.out ]]' || exit 1
+touch "$dir/slow"
+ask OpenFile e "Open" "{}" > "$dir/overtaken.out" &
+until_true 'grep -q "^joamag.files choose 4 " "$dir/log"' || exit 1
+close e
+until_true '[[ -s $dir/overtaken.out ]]' || exit 1
+rm "$dir/slow"
+until_true 'grep -q "^joamag.files chooserClose 4$" "$dir/log"' || exit 1
+ask SaveFile w "Wait" "{'choices': <[('encoding', 'Encoding', [('utf8', 'UTF-8')], 'utf8')]>}" > "$dir/choices.out" &
+until_true 'grep -q "^SaveFile Wait$" "$dir/gtk.log" 2>/dev/null' || exit 1
+close w
+until_true '[[ -s $dir/choices.out ]]' || exit 1
+touch "$dir/slow"
+ask OpenFile r "Open" "{'filters': <[('Docs', [(uint32 0, '*.note'), (uint32 1, 'application/pdf')]), ('Images', [(uint32 0, '*.png')])]>, 'current_filter': <('Docs', [(uint32 1, 'application/pdf'), (uint32 0, '*.note')])>}" > "$dir/resent.out" &
+until_true 'grep -q "^joamag.files choose 6 " "$dir/log"' || exit 1
+"$dir/filechooser.py" resend > "$dir/resend.out"
+rm "$dir/slow"
+until_true '[[ $(grep -c "^took 6$" "$dir/log") == 2 ]]' || exit 1
+"$dir/filechooser.py" resend >> "$dir/resend.out"
+until_true '[[ $(grep -c "^took 6$" "$dir/log") == 3 ]]' || exit 1
+"$dir/filechooser.py" answer 6 0 1 /srv/a.png
+until_true '[[ -s $dir/resent.out ]]' || exit 1
+touch "$dir/down"
+ask OpenFile c "Upload" "{}" > "$dir/gtk.out"
+ask SaveFiles g "Export" "{'files': <[$(ay x.txt)]>}" > "$dir/gtk-many.out"
+"$dir/filechooser.py" answer 1 0 0 /late > "$dir/late.out"
+"$dir/filechooser.py" answer x > "$dir/bad.out"
+exit 0
+`
+
+  it("shows requests in the widget, takes its answers, and falls back to GTK", (t) => {
+    if (!ready) {
+      t.skip("needs dbus-run-session, gdbus and PyGObject")
+      return
+    }
+    const dir = tmpdir(t)
+    fs.copyFileSync(path.join(pluginDir("joamag.files"), "filechooser.py"), path.join(dir, "filechooser.py"))
+    fs.chmodSync(path.join(dir, "filechooser.py"), 0o755)
+    fs.copyFileSync(fixturePath("fake_gtk_chooser.py"), path.join(dir, "fake_gtk_chooser.py"))
+    fakeCommand(dir, "omarchy-shell", `printf '%s\\n' "$*" >> "${dir}/log"; [[ -e "${dir}/down" ]] && exit 1; [[ $2 == choose ]] || exit 0
+while [[ -e "${dir}/slow" ]]; do sleep 0.02; done; echo ok; printf 'took %s\\n' "$3" >> "${dir}/log"`)
+    const mime = path.join(dir, "data", "mime")
+    fs.mkdirSync(mime, { recursive: true })
+    fs.writeFileSync(path.join(mime, "globs2"), "# made for the test\n50:application/msword:*.doc\n50:text/x-python:*.py\n50:text/plain:*.txt\n40:application/msword:*.doc\n0:model/x-thing:__NOGLOBS__\n")
+    fs.writeFileSync(path.join(mime, "subclasses"), "text/x-python text/plain\n")
+    fs.writeFileSync(path.join(mime, "aliases"), "application/x-msword application/msword\n")
+    fs.writeFileSync(path.join(dir, "bus.conf"), CONFIG)
+    fs.writeFileSync(path.join(dir, "driver.sh"), DRIVER)
+    const result = spawnSync("dbus-run-session", [`--config-file=${path.join(dir, "bus.conf")}`, "--", "bash", path.join(dir, "driver.sh"), dir], {
+      timeout: 20000,
+      env: { ...process.env, PATH: `${dir}:${process.env.PATH}`, XDG_DATA_HOME: path.join(dir, "data"), XDG_DATA_DIRS: path.join(dir, "none") },
+    })
+    assert.equal(result.status, 0, String(result.stderr))
+    const read = (name) => fs.readFileSync(path.join(dir, name), "utf8").trim()
+    // The widget got the request as its model reads it.
+    const lines = read("log").split("\n")
+    const request = JSON.parse(lines[0].split(" ").slice(3).join(" "))
+    assert.deepEqual(request, {
+      id: "1", method: "SaveFile", app: "com.google.Chrome", title: "Save File", acceptLabel: "", currentName: "Q4 report.pdf",
+      currentFolder: "/home/u/Downloads", currentFile: "", multiple: false, directory: false,
+      filters: [["PDF", [[0, "*.pdf"]]], ["All files", [[0, "*"]]]], currentFilter: ["All files", [[0, "*"]]], files: [],
+    })
+    assert.equal(Model.chooserRequest(request, "/home/u").filter, 1)
+    // A path that is not absolute was turned down, and the right answer
+    // after it went back as a file URI with the filter on screen.
+    assert.match(read("relative.out"), /^error\t.*relative path/)
+    assert.equal(read("save.out"), "(uint32 0, {'uris': <['file:///home/u/Q4%20report.pdf']>, 'current_filter': <('All files', [(uint32 0, '*')])>})")
+    // The MIME types of a filter came with the names of their files and
+    // of the types that are kinds of them; image/* the widget knows.
+    const choose = (id) => JSON.parse(lines.find((l) => l.startsWith(`joamag.files choose ${id} `)).split(" ").slice(3).join(" "))
+    const open = choose(2)
+    assert.deepEqual(open.filters, [["Documents", [[1, "application/x-msword"], [1, "text/plain"], [0, "*.doc"], [0, "*.py"], [0, "*.txt"]]]])
+    assert.deepEqual(open.currentFilter, ["Images", [[1, "image/*"]]])
+    const documents = Model.chooserRequest(open, "/home/u").filters[1]
+    assert.deepEqual(["report.doc", "tool.py", "a.pdf"].map((name) => Model.filterTakes(documents, entry(name))), [true, true, false])
+    // A closed request is ended and the widget told; without the widget,
+    // GTK answers.
+    assert.equal(read("close.out"), "(uint32 2, @a{sv} {})")
+    const many = choose(3)
+    assert.deepEqual([many.method, many.files, many.currentFolder], ["SaveFiles", ["a.txt", "b c.txt"], "/srv"])
+    // The current filter, missing from the list but for its label, came
+    // first in it.
+    assert.equal(read("many.out"), "(uint32 0, {'uris': <['file:///srv/a.txt', 'file:///srv/b%20c.txt']>, 'current_filter': <('Text', [(uint32 0, '*.txt')])>})")
+    // Closed while the widget was still taking it, the app heard at once
+    // and the widget once it had it.
+    assert.equal(read("overtaken.out"), "(uint32 2, @a{sv} {})")
+    const after = read("log").split("\n")
+    assert.ok(after.indexOf("took 4") >= 0 && after.indexOf("took 4") < after.indexOf("joamag.files chooserClose 4"), after.join("\n"))
+    // Choices went to the GTK dialog, closed there for the app.
+    assert.ok(!after.some((l) => l.startsWith("joamag.files choose 5 ")))
+    assert.equal(read("choices.out"), "(uint32 2, @a{sv} {})")
+    // Asked again while it was taking it, then after, the widget got the
+    // one it had taken twice more, and none of the ones that had ended;
+    // without the service, nothing to ask.
+    assert.deepEqual(after.filter((l) => /^joamag\.files choose \d+ /.test(l)).map((l) => l.split(" ")[2]), ["1", "2", "3", "4", "6", "6", "6", "7", "8"])
+    // Its current filter, the first one with its patterns in another order,
+    // was not added, so both number the filters the same way.
+    const resent = Model.chooserRequest(choose(6), "/home/u")
+    assert.deepEqual([resent.filters.map((f) => f.label), resent.filter], [["Docs", "Images"], 0])
+    assert.equal(read("resent.out"), "(uint32 0, {'uris': <['file:///srv/a.png']>, 'current_filter': <('Images', [(uint32 0, '*.png')])>})")
+    assert.equal(read("resend.out") + read("none.out"), "")
+    assert.equal(read("gtk.out"), "(uint32 0, {'uris': <['file:///from/gtk/OpenFile/Upload']>})")
+    assert.equal(read("gtk-many.out"), "(uint32 0, {'uris': <['file:///from/gtk/SaveFiles/Export']>})")
+    assert.deepEqual(read("gtk.log").split("\n"), ["SaveFile Wait", "OpenFile Upload", "SaveFiles Export"])
+    assert.equal(read("late.out"), "")
+    assert.equal(read("bad.out"), "error\tanswer needs an id, a response and a filter")
   })
 })

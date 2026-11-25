@@ -51,6 +51,9 @@ Panel {
   // date stay the same, and the folder that listing is of.
   property var entryCache: ({})
   property string listedFolder: ""
+  // The folder the folder model has read since it was set: a listing from
+  // the cache may miss a file made since.
+  property string readFolder: ""
   // Listings of folders seen lately, by path, so a folder shown again (in
   // the tab or as a column) is on screen at once while it is read again.
   property var listingCache: ({})
@@ -155,9 +158,28 @@ Panel {
   property var lastTrashed: []
   property string lastError: ""
   property bool detached: false
-  // The default file manager setting files.sh last applied: on, off, or
-  // nothing yet this start.
-  property string defaultApplied: ""
+  // What files.sh last applied of each integration (Model.INTEGRATIONS):
+  // on, off, or nothing yet this start.
+  property var applied: ({})
+  // An app's Open or Save dialog on screen (Model.chooserRequest), the ones
+  // waiting for it, and what it borrowed from the widget: its tabs, given
+  // back when the dialog ends.
+  property var chooser: null
+  property var chooserQueue: []
+  property var lent: null
+  property int chooserFilter: 0
+  property string chooserName: ""
+  // Names already taken where the dialog saves: { paths, files }.
+  property var chooserClash: null
+  // The folder a Save waits for the read of, to know the names taken.
+  property string chooserWaiting: ""
+  // The window hides and shows again around a dialog; that is not the user
+  // closing it. Whether it shows again is up to the last one to ask.
+  property bool windowSwapping: false
+  property bool windowReturns: false
+  // Times the view went from the widget to a dialog or back, so a folder
+  // check made in one never moves the other.
+  property int handovers: 0
   property var apps: []
   property string appsPath: ""
   // The action files.sh is running and what it was about.
@@ -175,6 +197,8 @@ Panel {
   readonly property int previewWidth: Model.previewWidth(setting("previewWidth", Model.PREVIEW_WIDTH))
   readonly property int windowPreviewWidth: Model.previewWidth(setting("windowPreviewWidth", Model.PREVIEW_WINDOW_WIDTH), Model.PREVIEW_WINDOW_WIDTH)
   readonly property bool defaultManager: setting("defaultFileManager", false) === true
+  readonly property bool fileChooser: setting("fileChooser", false) === true
+  readonly property bool launcherEntry: setting("launcherEntry", false) === true
   readonly property string scriptPath: String(Qt.resolvedUrl("files.sh")).replace(/^file:\/\//, "")
 
   readonly property var tab: tabs[Math.max(0, Math.min(tabs.length - 1, activeTab))]
@@ -188,7 +212,7 @@ Panel {
   readonly property bool inArchive: archiveAt !== null
   readonly property var archiveListing: archiveAt ? archives[archiveAt.archive] || null : null
   readonly property string cacheHome: Quickshell.env("XDG_CACHE_HOME") || home + "/.cache"
-  readonly property bool shown: opened || detached
+  readonly property bool shown: opened || detached || chooser !== null
   // What Ctrl+P offers for what is typed, and a typed path as the last row.
   readonly property var jumpList: {
     if (!jumpOpen) return []
@@ -239,8 +263,19 @@ Panel {
     if (renamePath !== "") return "rename"
     if (editingPath) return "path"
     if (filtering && filterFocused) return "filter"
+    if (chooser) return "chooser"
     if (inArchive) return "archive"
     return inTrash ? "trash" : "browse"
+  }
+
+  // What a dialog answers with as things stand, in words: the files
+  // picked, the folder, or the files saved.
+  readonly property string chooserSummary: {
+    if (!chooser) return ""
+    var paths = Model.chooserPaths(chooser, location, chooserName, chooserPicked(), chooserFilter)
+    if (chooser.kind === "savefiles") return Model.itemsLabel(chooser.files.length, chooser.files[0]) + " here"
+    if (chooser.kind === "folder") return paths.length > 0 ? Model.prettyPath(paths[0], home) : "Open a folder"
+    return paths.length > 0 ? paths.map(Model.baseName).join(", ") : "Nothing yet: pick a file"
   }
 
   readonly property bool vertical: bar ? bar.vertical : false
@@ -336,6 +371,7 @@ Panel {
     lookOpen = false
     endFind()
     lastError = ""
+    chooserWaiting = ""
   }
 
   function go(path) {
@@ -513,24 +549,31 @@ Panel {
   }
 
   // Folders from other apps, Show in folder and the file manager keys come
-  // here while the setting is on, and go back to the previous file manager
-  // when it is turned off. One run at a time; the last word wins.
-  function syncDefault() {
-    var want = defaultManager ? "on" : "off"
-    if (defaultProc.running || want === defaultApplied) return
-    defaultApplied = want
-    defaultProc.command = [root.scriptPath, "default", want]
-    defaultProc.running = true
+  // here while the default file manager setting is on, apps' Open and Save
+  // dialogs while the file chooser one is, and the window is in the app
+  // launcher while that one is; each goes back when turned off. One run of
+  // files.sh at a time; the last word wins.
+  function syncIntegrations() {
+    if (integrationProc.running) return
+    var next = Model.nextIntegration({ "default": defaultManager, chooser: fileChooser, launcher: launcherEntry }, applied)
+    if (!next) return
+    var done = Object.assign({}, applied)
+    done[next.name] = next.state
+    applied = done
+    integrationProc.command = [root.scriptPath, next.name, next.state]
+    integrationProc.running = true
   }
 
   function saveTabs() {
+    // A dialog's own tab is never saved; the widget's come back after it.
+    if (chooser) return
     tabsDirty = false
     persistSettings({ tabs: Model.serializeTabs(tabs), activeTab: activeTab, recentFolders: visited })
   }
 
   // The saved tabs come back on start, and when shell.json is edited by hand.
   function loadTabs() {
-    if (tabsDirty) return
+    if (tabsDirty || chooser) return
     visited = Model.addVisited(setting("recentFolders", []), "", Model.VISITED_MAX)
     var saved = Model.parseTabs(setting("tabs", []), home)
     if (JSON.stringify(Model.serializeTabs(saved)) === JSON.stringify(Model.serializeTabs(tabs)) && Number(setting("activeTab", 0)) === activeTab) return
@@ -626,6 +669,12 @@ Panel {
     }
     entryCache = next
     listingCache = Model.rememberListing(listingCache, location, out)
+    readFolder = location
+    // A Save waiting for this read answers once it is on screen.
+    if (chooserWaiting === location) {
+      chooserWaiting = ""
+      Qt.callLater(root.acceptChooser)
+    }
     if (same && listedFolder === location) return
     var refresh = listedFolder === location
     listedFolder = location
@@ -762,6 +811,7 @@ Panel {
     else if (clipboard) clearClipboard()
     else if (selected.length > 0) selected = []
     else if (filtering || query !== "") clearFilter()
+    else if (chooser) cancelChooser()
     else if (!detached) root.close()
   }
 
@@ -769,6 +819,10 @@ Panel {
 
   function openEntry(entry) {
     if (!entry) return
+    if (chooser && !entry.dir) {
+      pickForChooser(entry)
+      return
+    }
     if (entry.trashName) {
       restore([entry])
       return
@@ -793,8 +847,11 @@ Panel {
     openFile(entry.path)
   }
 
+  // In the app GIO picks, the default Open with marks: xdg-open, outside a
+  // desktop it knows, hands a type without a default of its own (a log,
+  // YAML, JSON) to a browser instead.
   function openFile(path) {
-    Util.execArgv(["xdg-open", path])
+    Util.execArgv(["gio", "open", path])
     if (!detached) root.close()
   }
 
@@ -803,6 +860,10 @@ Panel {
   function openPicked(chosen) {
     var list = chosen || picked()
     if (list.length === 0) return
+    if (chooser && !list[0].dir) {
+      pickForChooser(list[0])
+      return
+    }
     if (list[0].trashName) {
       restore(list)
       return
@@ -811,7 +872,7 @@ Panel {
       openEntry(list[0])
       return
     }
-    for (var i = 0; i < list.length && i < 12; i++) if (!list[i].dir && !Model.isArchiveLocation(list[i].path)) Util.execArgv(["xdg-open", list[i].path])
+    for (var i = 0; i < list.length && i < 12; i++) if (!list[i].dir && !Model.isArchiveLocation(list[i].path)) Util.execArgv(["gio", "open", list[i].path])
     if (!detached) root.close()
   }
 
@@ -1730,11 +1791,12 @@ Panel {
     }
     // One check at a time: a folder asked for meanwhile waits its turn.
     if (pathCheckProc.running) {
-      pathCheckProc.queued = { target: target, inNewTab: inNewTab === true }
+      pathCheckProc.queued = { target: target, inNewTab: inNewTab === true, handover: handovers }
       return
     }
     pathCheckProc.target = target
     pathCheckProc.inNewTab = inNewTab === true
+    pathCheckProc.handover = handovers
     pathCheckProc.command = ["test", "-d", target]
     pathCheckProc.running = true
   }
@@ -1824,7 +1886,13 @@ Panel {
 
   // Out of the bar into a window Hyprland can move, resize and tile, with
   // the same tabs; and back.
+  // While a dialog is on, the window is the dialog's: it comes to the front
+  // instead, and docking would cancel the dialog.
   function popOut() {
+    if (chooser) {
+      raiseWindow()
+      return
+    }
     windowBuilt = true
     detached = true
     window.visible = true
@@ -1834,6 +1902,10 @@ Panel {
   }
 
   function dock() {
+    if (chooser) {
+      raiseWindow()
+      return
+    }
     detached = false
     window.visible = false
     root.open()
@@ -1874,6 +1946,181 @@ Panel {
     if (!detached) open()
   }
 
+  // ---- File chooser -----------------------------------------------------
+
+  // An app's Open or Save dialog from filechooser.py: shown now, or after
+  // the one on screen. "ok" tells the service the widget took it.
+  function chooseFor(id, raw) {
+    var parsed
+    try {
+      parsed = JSON.parse(raw)
+    } catch (e) {
+      return "error: " + e.message
+    }
+    var request = Model.chooserRequest(parsed, home)
+    request.id = id
+    // Sent again, a dialog on screen or waiting stays where it is.
+    if ((chooser && chooser.id === id) || chooserQueue.some(function(r) { return r.id === id })) return "ok"
+    if (chooser) chooserQueue = chooserQueue.concat([request])
+    else startChooser(request)
+    return "ok"
+  }
+
+  // The dialog borrows the widget's view: a tab of its own at the folder
+  // the app suggests, in the window floated over the app. The widget's tabs
+  // and window come back when it ends.
+  function startChooser(request) {
+    if (!lent) lent = { tabs: tabs, activeTab: activeTab, dirty: tabsDirty }
+    handovers++
+    if (opened) root.close()
+    var shown = view
+    chooser = request
+    chooserFilter = request.filter
+    chooserName = request.name
+    chooserClash = null
+    lastError = ""
+    tabs = [Model.newTab(request.folder, shown)]
+    activeTab = 0
+    tabsDirty = false
+    resetFolderState()
+    refreshLocation()
+    windowBuilt = true
+    remapWindow(true)
+  }
+
+  // The window shows again under its new title, so Hyprland floats it as a
+  // dialog or tiles it as the widget's window; or it goes.
+  function remapWindow(show) {
+    windowSwapping = true
+    windowReturns = show
+    window.visible = false
+    Qt.callLater(root.finishRemap)
+  }
+
+  function finishRemap() {
+    windowSwapping = false
+    if (!windowReturns) return
+    window.visible = true
+    focusRequested(chooser && chooser.kind === "save" ? "chooser" : "view")
+  }
+
+  // The next dialog waiting, or the widget as it was.
+  function endChooser() {
+    chooser = null
+    chooserClash = null
+    lastError = ""
+    if (chooserQueue.length > 0) {
+      var next = chooserQueue[0]
+      chooserQueue = chooserQueue.slice(1)
+      startChooser(next)
+      return
+    }
+    var was = lent
+    lent = null
+    handovers++
+    if (was) {
+      tabs = was.tabs
+      activeTab = was.activeTab
+      tabsDirty = was.dirty
+    }
+    resetFolderState()
+    refreshLocation()
+    remapWindow(detached)
+  }
+
+  // The answer goes back to the app through files.sh: the paths, with the
+  // filter on screen, or nothing when cancelled.
+  function answerChooser(response, paths) {
+    if (!chooser) return
+    var filter = response === 0 && chooser.filters.length > 0 ? chooserFilter : -1
+    Util.execArgv([root.scriptPath, "chosen", chooser.id, String(response), String(filter)].concat(paths || []))
+    endChooser()
+  }
+
+  function cancelChooser() {
+    answerChooser(1, [])
+  }
+
+  // The app closed its dialog: it ends without an answer.
+  function closeChooser(id) {
+    chooserQueue = chooserQueue.filter(function(r) { return r.id !== id })
+    if (chooser && chooser.id === id) endChooser()
+  }
+
+  // What the dialog answers with when nothing is handed to it: the
+  // selection, or the entry under the cursor. A folder dialog takes only a
+  // selection, so a folder just opened answers with itself, not with the
+  // first folder in it.
+  function chooserPicked() {
+    return Model.pickedEntries(entries, selected, chooser && chooser.kind === "folder" ? -1 : cursorIndex)
+  }
+
+  // Save, Open or Select: the dialog answers with LIST (or what is picked),
+  // once it can; a name already taken asks first, once the folder is read.
+  function acceptChooser(list) {
+    if (!chooser) return
+    var paths = Model.chooserPaths(chooser, location, chooserName, list || chooserPicked(), chooserFilter)
+    var problem = Model.chooserProblem(chooser, location, chooserName, paths)
+    if (problem !== "") {
+      showToast(problem)
+      return
+    }
+    if (chooser.kind === "save" || chooser.kind === "savefiles") {
+      if (readFolder !== location) {
+        chooserWaiting = location
+        return
+      }
+      var clash = Model.chooserClash(folderEntries, paths)
+      if (clash.folders.length > 0) {
+        showToast(clash.folders[0] + " is a folder here")
+        return
+      }
+      if (clash.files.length > 0) {
+        chooserClash = { paths: paths, files: clash.files }
+        // The card's keys go through the view, not the name.
+        focusRequested("view")
+        return
+      }
+    }
+    answerChooser(0, paths)
+  }
+
+  // A name taken where the dialog saves: back to the dialog (skip), keep
+  // both (the new ones get free names) or replace.
+  function resolveChooserClash(how) {
+    var clash = chooserClash
+    chooserClash = null
+    if (!clash) return
+    if (how === "skip") {
+      focusRequested(chooser && chooser.kind === "save" ? "chooser" : "view")
+      return
+    }
+    answerChooser(0, how === "keep" ? Model.chooserKeepBoth(folderEntries, clash.paths) : clash.paths)
+  }
+
+  // Enter or a double click on a file: in a Save dialog its name is the one
+  // to save as; otherwise it is what the dialog answers with, along with
+  // the rest of the selection when it is part of it.
+  function pickForChooser(entry) {
+    if (chooser.kind === "save") {
+      chooserName = entry.name
+      focusRequested("chooser")
+    } else if (Model.chooserPicks(chooser, chooserFilter, entry)) {
+      acceptChooser(Model.entriesFor(picked(), entry))
+    } else {
+      showToast(chooser.kind === "folder" ? "Pick a folder" : "This dialog does not take " + entry.name)
+    }
+  }
+
+  function nextChooserFilter() {
+    if (chooser && chooser.filters.length > 0) chooserFilter = (chooserFilter + 1) % chooser.filters.length
+  }
+
+  // Files the dialog cannot take, faded the way hidden ones are.
+  function chooserDims(entry) {
+    return chooser !== null && !entry.dir && !Model.chooserPicks(chooser, chooserFilter, entry)
+  }
+
   // ---- Keyboard ---------------------------------------------------------
 
   // The panel keys of the other widgets (j/k, h/l, Enter, Esc, g, the hint
@@ -1888,6 +2135,11 @@ Panel {
     var columns = view === "grid" ? Math.max(1, gridColumns) : 1
 
     if (finding && findKey(event)) return true
+    // In a Save dialog, Tab goes to the name.
+    if (chooser && key === Qt.Key_Tab && !ctrl && chooser.kind === "save") {
+      focusRequested("chooser")
+      return true
+    }
     if (keysOpen) {
       if (key === Qt.Key_Escape || text === "?" || key === Qt.Key_Return) keysOpen = false
       return true
@@ -1923,6 +2175,7 @@ Panel {
       case Qt.Key_PageUp: switchTab(activeTab - 1); return true
       case Qt.Key_L: startPathEdit(); return true
       case Qt.Key_P: openJump(); return true
+      case Qt.Key_S: if (chooser) acceptChooser(null); return chooser !== null
       case Qt.Key_Space: toggleCursorSelection(); return true
       case Qt.Key_H: toggleHidden(); return true
       case Qt.Key_F: startFilter(); return true
@@ -2003,7 +2256,7 @@ Panel {
     case "e": startPathEdit(); return true
     case "i": togglePreview(); return true
     case ".": toggleHidden(); return true
-    case "w": toggleDetached(); return true
+    case "w": if (!chooser) toggleDetached(); return true
     case "v": setView(Model.nextView(view)); return true
     case "s": sortBy(Model.cycleSortKey(sortKey)); return true
     case "t": newTab(""); return true
@@ -2046,23 +2299,42 @@ Panel {
     }
     function popOut(): void { root.popOut() }
     function dock(): void { root.dock() }
+    // From the app launcher: the window, shown or brought to the front.
+    function window(): void {
+      if (root.detached || root.chooser) root.raiseWindow()
+      else root.popOut()
+    }
+    // An app's Open or Save dialog from filechooser.py, and the app closing
+    // it; "ok" once the widget took it.
+    function choose(id: string, request: string): string { return root.chooseFor(id, request) }
+    function chooserClose(id: string): void { root.closeChooser(id) }
     function version(): string { return "0.1.0" }
   }
 
   Component.onCompleted: {
     loadTabs()
     refreshPlaces()
-    // Applied again at every start, so the FileManager1 service runs from
-    // then and the setting wins over shell.json edited by hand; off with
-    // nothing set up changes nothing.
-    syncDefault()
+    // Applied again at every start, so the services run from then and the
+    // settings win over shell.json edited by hand; off with nothing set up
+    // changes nothing.
+    syncIntegrations()
+    // Dialogs the shell showed before it started again, still waited on.
+    if (fileChooser) Util.execArgv([root.scriptPath, "resend"])
   }
 
   onSettingsChanged: loadTabs()
 
-  onDefaultManagerChanged: syncDefault()
+  onDefaultManagerChanged: syncIntegrations()
+  onFileChooserChanged: syncIntegrations()
+  onLauncherEntryChanged: syncIntegrations()
 
   onOpenedChanged: {
+    // A dialog has the view: it comes to the front instead.
+    if (opened && chooser) {
+      root.close()
+      raiseWindow()
+      return
+    }
     if (opened) {
       if (detached) {
         // The window and the popup never show at once.
@@ -2113,6 +2385,7 @@ Panel {
     caseSensitive: false
     // A folder just opened shows as soon as it is read.
     onStatusChanged: if (status === FolderListModel.Ready) Qt.callLater(root.snapshotFolder)
+    onFolderChanged: root.readFolder = ""
   }
 
   // Changes on disk come in bursts (a download, a build); they are read a
@@ -2324,13 +2597,17 @@ Panel {
     id: pathCheckProc
     property string target: ""
     property bool inNewTab: false
+    property int handover: 0
     property var queued: null
     onExited: function(exitCode) {
-      if (exitCode === 0) root.openFolder(target, inNewTab)
-      else root.showToast("No folder at " + Model.prettyPath(target, root.home))
+      // One typed before the view went to a dialog or back moves nothing.
+      if (handover === root.handovers) {
+        if (exitCode === 0) root.openFolder(target, inNewTab)
+        else root.showToast("No folder at " + Model.prettyPath(target, root.home))
+      }
       var next = queued
       queued = null
-      if (next) root.checkFolder(next.target, next.inNewTab)
+      if (next && next.handover === root.handovers) root.checkFolder(next.target, next.inNewTab)
     }
   }
 
@@ -2340,7 +2617,7 @@ Panel {
   }
 
   Process {
-    id: defaultProc
+    id: integrationProc
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {
@@ -2350,8 +2627,8 @@ Panel {
         root.showToast(root.lastError)
       }
     }
-    // The setting may have changed again while this ran.
-    onExited: root.syncDefault()
+    // The next integration, or a setting changed again while this ran.
+    onExited: root.syncIntegrations()
   }
 
   Process {
@@ -2431,15 +2708,22 @@ Panel {
   FloatingWindow {
     id: window
     visible: false
-    title: "Files · " + root.locationLabel
+    // Under a dialog's title, the File chooser setting's rule has Hyprland
+    // float it over the app that asked.
+    title: root.chooser ? "Files chooser · " + root.chooser.title + (root.chooser.app ? " · " + root.chooser.app : "") : "Files · " + root.locationLabel
     color: Color.background
     implicitWidth: 1120
     implicitHeight: 700
     minimumSize: Qt.size(640, 420)
 
-    // Closed from Hyprland rather than docked: the tabs stay for next time.
+    // Closed from Hyprland rather than docked: the tabs stay for next time;
+    // a dialog on screen is cancelled.
     onVisibleChanged: {
-      if (visible) return
+      if (visible || root.windowSwapping) return
+      if (root.chooser) {
+        root.cancelChooser()
+        return
+      }
       root.detached = false
       if (root.tabsDirty) root.saveTabs()
     }
@@ -2456,7 +2740,7 @@ Panel {
           windowed: true
           foreground: Color.foreground
           background: Color.background
-          active: root.detached
+          active: root.detached || root.chooser !== null
           focus: true
         }
       }
@@ -2473,7 +2757,7 @@ Panel {
     required property color background
     required property bool active
 
-    readonly property bool typing: pathField.activeFocus || filterField.activeFocus || root.renamePath !== "" || root.prompt !== null || root.jumpOpen
+    readonly property bool typing: pathField.activeFocus || filterField.activeFocus || chooserField.activeFocus || root.renamePath !== "" || root.prompt !== null || root.jumpOpen
     readonly property real rowHeight: Style.space(26)
     // The widest the sidebar and the preview may be on screen, so the files
     // always keep some room.
@@ -2487,7 +2771,7 @@ Panel {
         else event.accepted = event.key !== Qt.Key_Tab
         return
       }
-      if (root.conflictJob) {
+      if (root.conflictJob || root.chooserClash) {
         if (conflictCard.handleKey(event)) event.accepted = true
         return
       }
@@ -2508,6 +2792,12 @@ Panel {
           pathField.text = root.inFolder ? Model.prettyPath(root.location, root.home) : "~"
           pathField.forceActiveFocus()
           pathField.selectAll()
+        } else if (what === "chooser") {
+          // The name with its stem picked, ready to be typed over.
+          chooserField.text = root.chooserName
+          chooserField.forceActiveFocus()
+          var dot = root.chooserName.lastIndexOf(".")
+          chooserField.select(0, dot > 0 ? dot : root.chooserName.length)
         } else if (what === "prompt") promptCard.focusField()
         else if (what === "jump") jumpCard.focusField()
         else if (what === "view") viewRoot.forceActiveFocus()
@@ -2678,6 +2968,7 @@ Panel {
           }
           IconButton { glyph: "󰋽"; tip: "Preview pane (i)"; selected: root.showPreview; onClicked: root.togglePreview() }
           IconButton {
+            visible: !root.chooser
             glyph: viewRoot.windowed ? "󰘕" : "󰘖"
             tip: viewRoot.windowed ? "Dock back into the bar (w)" : "Pop out into a window (w)"
             onClicked: root.toggleDetached()
@@ -2977,6 +3268,7 @@ Panel {
 
           Row {
             id: actionRow
+            visible: root.chooser === null
             width: parent.width
             spacing: Style.space(6)
 
@@ -3021,6 +3313,136 @@ Panel {
                 enabled: modelData.id !== "paste" || root.clipboard !== null
                 opacity: enabled ? 1 : 0.4
                 onClicked: root.run(modelData.id, null)
+              }
+            }
+          }
+
+          // An app's Open or Save dialog: the places saved in lately, then
+          // the name (or what is picked), the file type, Cancel and the
+          // app's own word for going ahead.
+          Column {
+            id: chooserBand
+            visible: root.chooser !== null
+            width: parent.width
+            spacing: Style.space(6)
+
+            Flow {
+              width: parent.width
+              spacing: Style.space(6)
+
+              Repeater {
+                model: chooserBand.visible ? Model.chooserPlaces(root.location, root.visited, root.home) : []
+
+                Button {
+                  required property string modelData
+                  height: Style.spacing.controlHeight
+                  iconText: Model.placeIcon(modelData, root.home, root.places, root.drives)
+                  iconSize: Style.font.body
+                  text: Model.placeLabel(modelData, root.home, root.places, root.drives)
+                  fontSize: Style.font.bodySmall
+                  foreground: viewRoot.foreground
+                  fontFamily: root.fontFamily
+                  horizontalPadding: Style.spacing.sm
+                  bordered: true
+                  hasCursor: modelData === root.location
+                  onClicked: root.go(modelData)
+                }
+              }
+            }
+
+            Row {
+              id: chooserRow
+              width: parent.width
+              spacing: Style.space(6)
+
+              readonly property real buttonWidth: Style.space(96)
+              readonly property real fieldWidth: width - chooserLabel.width - (filterButton.visible ? filterButton.width + spacing : 0) - (buttonWidth + spacing) * 2 - spacing
+
+              Text {
+                id: chooserLabel
+                anchors.verticalCenter: parent.verticalCenter
+                textFormat: Text.PlainText
+                text: !root.chooser ? "" : root.chooser.kind === "save" ? "Name" : root.chooser.kind === "folder" ? "Folder" : root.chooser.kind === "savefiles" ? "Saving" : "Picked"
+                color: viewRoot.foreground
+                opacity: 0.6
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.bodySmall
+              }
+
+              TextField {
+                id: chooserField
+                visible: root.chooser !== null && root.chooser.kind === "save"
+                width: chooserRow.fieldWidth
+                height: Style.spacing.controlHeight
+                // The stem stays picked while the window takes the focus,
+                // and the highlight goes once the name is left for the
+                // folder or another field.
+                persistentSelection: true
+                onActiveFocusChanged: if (!activeFocus && Window.active) deselect()
+                foreground: viewRoot.foreground
+                font.family: root.fontFamily
+                text: root.chooserName
+                onTextChanged: if (text !== root.chooserName) root.chooserName = text
+                Keys.onPressed: function(event) {
+                  var ctrl = (event.modifiers & Qt.ControlModifier) !== 0
+                  if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter || (ctrl && event.key === Qt.Key_S)) {
+                    root.acceptChooser(null)
+                    event.accepted = true
+                  } else if (event.key === Qt.Key_Escape) {
+                    root.cancelChooser()
+                    event.accepted = true
+                  } else if (event.key === Qt.Key_Tab || event.key === Qt.Key_Down) {
+                    viewRoot.forceActiveFocus()
+                    event.accepted = true
+                  }
+                }
+              }
+
+              Text {
+                visible: !chooserField.visible
+                width: chooserRow.fieldWidth
+                anchors.verticalCenter: parent.verticalCenter
+                textFormat: Text.PlainText
+                text: root.chooserSummary
+                color: viewRoot.foreground
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.bodySmall
+                elide: Text.ElideMiddle
+              }
+
+              Button {
+                id: filterButton
+                visible: root.chooser !== null && root.chooser.filters.length > 0
+                width: Style.space(150)
+                height: Style.spacing.controlHeight
+                text: visible ? root.chooser.filters[root.chooserFilter].label + " ▾" : ""
+                fontSize: Style.font.bodySmall
+                foreground: viewRoot.foreground
+                fontFamily: root.fontFamily
+                bordered: true
+                onClicked: root.nextChooserFilter()
+              }
+
+              Button {
+                width: chooserRow.buttonWidth
+                height: Style.spacing.controlHeight
+                text: "Cancel"
+                fontSize: Style.font.bodySmall
+                foreground: viewRoot.foreground
+                fontFamily: root.fontFamily
+                bordered: true
+                onClicked: root.cancelChooser()
+              }
+
+              Button {
+                width: chooserRow.buttonWidth
+                height: Style.spacing.controlHeight
+                text: root.chooser ? root.chooser.accept : ""
+                fontSize: Style.font.bodySmall
+                foreground: Color.accent
+                fontFamily: root.fontFamily
+                bordered: true
+                onClicked: root.acceptChooser(null)
               }
             }
           }
@@ -3114,18 +3536,84 @@ Panel {
       itemRect: viewRoot.cursorRect
     }
 
-    ConfirmDialog {
-      id: confirmDialog
+    // The confirmation fades in growing to its size and fades out
+    // shrinking, like the other cards, over a backdrop that only fades; what
+    // it asks stays while it goes.
+    Item {
+      id: confirmLayer
       anchors.fill: parent
       z: 10
-      opened: root.confirm !== null
-      message: root.confirm ? root.confirm.message : ""
-      confirmText: root.confirm ? root.confirm.confirmText : ""
-      background: viewRoot.background
-      foreground: viewRoot.foreground
-      fontFamily: root.fontFamily
-      onCanceled: root.confirm = null
-      onConfirmed: root.confirmed()
+      visible: confirmShown > 0
+
+      property var lastConfirm: null
+      readonly property var shownConfirm: root.confirm || lastConfirm
+      property real confirmShown: root.confirm !== null ? 1 : 0
+      Behavior on confirmShown {
+        id: confirmShowing
+        NumberAnimation { duration: Style.duration(confirmShowing.targetValue > 0 ? 220 : 190); easing.type: Easing.Bezier; easing.bezierCurve: Style.easeOut }
+      }
+
+      Connections {
+        target: root
+        function onConfirmChanged() { if (root.confirm) confirmLayer.lastConfirm = root.confirm }
+      }
+
+      Rectangle {
+        anchors.fill: parent
+        color: Qt.rgba(viewRoot.background.r, viewRoot.background.g, viewRoot.background.b, 0.7)
+        opacity: confirmLayer.confirmShown
+      }
+
+      ConfirmDialog {
+        id: confirmDialog
+        anchors.fill: parent
+        opened: confirmLayer.visible
+        scrim: "transparent"
+        opacity: confirmLayer.confirmShown
+        transform: Scale { origin.x: confirmDialog.width / 2; origin.y: confirmDialog.height / 2; xScale: 0.92 + 0.08 * confirmLayer.confirmShown; yScale: xScale }
+        message: confirmLayer.shownConfirm ? confirmLayer.shownConfirm.message : ""
+        confirmText: confirmLayer.shownConfirm ? confirmLayer.shownConfirm.confirmText : ""
+        background: viewRoot.background
+        foreground: viewRoot.foreground
+        fontFamily: root.fontFamily
+        onCanceled: root.confirm = null
+        onConfirmed: root.confirmed()
+      }
+    }
+
+    // A click outside the field being typed in (the name, the filter, the
+    // path) gives the keyboard back to the folder, so its keys work again;
+    // the click itself still reaches what is under it. The mouse's back and
+    // forward buttons go back and forward, as the header's ‹ and › do.
+    Item {
+      anchors.fill: parent
+      z: 100
+
+      // On the press, whatever the pointer does after: a side button
+      // often nudges the mouse, which would cancel a tap.
+      MouseArea {
+        anchors.fill: parent
+        acceptedButtons: Qt.BackButton | Qt.ForwardButton
+        onPressed: function(mouse) {
+          // Not while a card asks something, as with the keys.
+          if (root.confirm || root.conflictJob || root.chooserClash) return
+          if (mouse.button === Qt.BackButton) root.back()
+          else root.forward()
+        }
+      }
+
+      PointHandler {
+        acceptedButtons: Qt.AllButtons
+        onActiveChanged: {
+          if (!active) return
+          var fields = [chooserField, filterField, pathField]
+          for (var i = 0; i < fields.length; i++) {
+            if (!fields[i].activeFocus) continue
+            if (!fields[i].contains(fields[i].mapFromItem(null, point.scenePosition.x, point.scenePosition.y))) viewRoot.forceActiveFocus()
+            return
+          }
+        }
+      }
     }
   }
 
@@ -3493,6 +3981,12 @@ Panel {
         hasCursor: true
       }
 
+      BandBox {
+        id: listBand
+        flick: list
+        picks: function(from, to) { return Model.bandRows(from.y, to.y, listPane.rowHeight, list.count) }
+      }
+
       delegate: EntryRow {
         id: listRow
         required property int index
@@ -3501,6 +3995,7 @@ Panel {
         entry: root.entries[index] || root.blankEntry
         entryIndex: index
         foreground: listPane.foreground
+        bander: listBand
         nameWidth: listPane.nameWidth
         whereWidth: listPane.whereWidth
         typeWidth: listPane.typeWidth
@@ -3518,14 +4013,18 @@ Panel {
         transform: Translate { y: root.settle > 0 ? (root.settleShifts[listRow.entry.path] || 0) * root.settle * listPane.rowHeight : 0 }
       }
 
-      // Empty space below the rows: click clears the selection, right
-      // click opens the folder menu.
+      // Empty space below the rows: click clears the selection, a drag
+      // draws a selection band, right click opens the folder menu.
       MouseArea {
         z: -1
         width: list.width
         height: Math.max(list.height, list.contentHeight)
         acceptedButtons: Qt.LeftButton | Qt.RightButton
+        onPressed: function(mouse) { if (mouse.button === Qt.LeftButton) listBand.begin(mapToItem(listBand.parent, mouse.x, mouse.y), mouse.modifiers) }
+        onPositionChanged: function(mouse) { listBand.follow(mapToItem(listBand.parent, mouse.x, mouse.y)) }
+        onReleased: listBand.finish()
         onClicked: function(mouse) {
+          if (listBand.drew) return
           if (mouse.button === Qt.RightButton) {
             var p = mapToItem(null, mouse.x, mouse.y)
             root.openMenu(root.folderMenu(), p.x, p.y, null)
@@ -3587,14 +4086,29 @@ Panel {
     required property var entry
     required property int entryIndex
     required property Item dragItem
+    // In a list or a column, a press off the name (the size and date
+    // columns, past a short name) draws BANDER's selection band instead of
+    // dragging the files; NAMEEND is where the name stops.
+    property var bander: null
+    property real nameEnd: -1
+    property bool banding: false
 
     anchors.fill: parent
     hoverEnabled: true
     acceptedButtons: Qt.LeftButton | Qt.RightButton | Qt.MiddleButton
-    drag.target: entry.trashName || root.renamePath === entry.path || Model.isArchiveLocation(entry.path) ? null : dragItem
+    drag.target: banding || entry.trashName || root.renamePath === entry.path || Model.isArchiveLocation(entry.path) ? null : dragItem
     drag.threshold: Style.space(8)
 
+    onPressed: function(mouse) {
+      banding = bander !== null && mouse.button === Qt.LeftButton && mouse.x > nameEnd
+      if (banding) bander.begin(mapToItem(bander.parent, mouse.x, mouse.y), mouse.modifiers)
+    }
+    onPositionChanged: function(mouse) { if (banding) bander.follow(mapToItem(bander.parent, mouse.x, mouse.y)) }
+    onReleased: if (banding) bander.finish()
+
     onClicked: function(mouse) {
+      // A band drawn is not also a click on the row it started on.
+      if (banding && bander.drew) return
       // Middle click opens a folder in a new tab, as Ctrl+double click does.
       if (mouse.button === Qt.MiddleButton) {
         root.openInNewTab(entryMouse.entry)
@@ -3644,6 +4158,58 @@ Panel {
     }
   }
 
+  // A selection band drawn from blank space in a list, the grid or a
+  // column: what PICKS finds between the corner it started at and the
+  // pointer (both in its parent's terms) is selected, after what was
+  // selected with Ctrl. It shows once the pointer has moved a little, so a
+  // click stays a click, and FLICK follows the pointer past its edges.
+  component BandBox: Rectangle {
+    id: band
+    required property var picks
+    property Flickable flick: null
+    property point start
+    property point end
+    property var kept: []
+    property bool held: false
+    property bool drawn: false
+    // The last band, drawn or not, so its release is not also a click.
+    property bool drew: false
+    visible: drawn
+    z: 5
+    x: Math.min(start.x, end.x)
+    y: Math.min(start.y, end.y)
+    width: Math.abs(end.x - start.x)
+    height: Math.abs(end.y - start.y)
+    color: Qt.rgba(Color.accent.r, Color.accent.g, Color.accent.b, 0.12)
+    border.width: 1
+    border.color: Color.accent
+
+    function begin(point, modifiers) {
+      start = point
+      end = point
+      kept = (modifiers & Qt.ControlModifier) ? root.selected : []
+      held = true
+      drawn = false
+      drew = false
+    }
+
+    function follow(point) {
+      if (!held) return
+      end = point
+      if (flick && point.y < flick.contentY) flick.contentY = Math.max(0, point.y)
+      else if (flick && point.y > flick.contentY + flick.height) flick.contentY = Math.min(Math.max(0, flick.contentHeight - flick.height), point.y - flick.height)
+      if (!drawn && Math.abs(end.x - start.x) + Math.abs(end.y - start.y) < Style.space(8)) return
+      drawn = true
+      root.selected = Model.bandSelection(root.entries, picks(start, end), kept)
+    }
+
+    function finish() {
+      drew = drawn
+      held = false
+      drawn = false
+    }
+  }
+
   component EntryRow: Item {
     id: row
     required property var entry
@@ -3654,6 +4220,9 @@ Panel {
     required property real typeWidth
     required property real sizeWidth
     required property real dateWidth
+    // The list's selection band, drawn from a press off the name.
+    property var bander: null
+    readonly property real nameEnd: Style.space(8) + root.iconBox + root.iconGap + Math.min(rowName.implicitWidth, nameWidth)
 
     readonly property bool isSelected: root.selected.indexOf(entry.path) >= 0
     readonly property bool isCursor: root.cursorIndex === entryIndex
@@ -3673,7 +4242,7 @@ Panel {
       anchors.leftMargin: Style.space(8)
       anchors.rightMargin: Style.space(8)
       spacing: Style.space(10)
-      opacity: row.isCut ? 0.45 : (row.entry.hidden ? 0.7 : 1)
+      opacity: (row.isCut ? 0.45 : (row.entry.hidden ? 0.7 : 1)) * (root.chooserDims(row.entry) ? 0.4 : 1)
 
       // The icon and the name as a pair, the gap between them the one
       // every icon has.
@@ -3697,6 +4266,7 @@ Panel {
           height: parent.height
 
           Text {
+            id: rowName
             visible: !row.renaming
             anchors.left: parent.left
             anchors.right: parent.right
@@ -3784,6 +4354,8 @@ Panel {
       entry: row.entry
       entryIndex: row.entryIndex
       dragItem: carrier
+      bander: row.bander
+      nameEnd: row.nameEnd
       enabled: !row.renaming
     }
 
@@ -3881,6 +4453,12 @@ Panel {
         hasCursor: true
       }
 
+      BandBox {
+        id: gridBand
+        flick: grid
+        picks: function(from, to) { return Model.bandTiles(from.x, from.y, to.x, to.y, grid.cellWidth, grid.cellHeight, root.gridColumns, grid.count, Style.space(3)) }
+      }
+
       delegate: Item {
         id: tile
         required property int index
@@ -3929,7 +4507,7 @@ Panel {
           anchors.fill: parent
           anchors.margins: Style.space(8)
           spacing: Style.space(4)
-          opacity: tile.isCut ? 0.45 : (tile.entry.hidden ? 0.7 : 1)
+          opacity: (tile.isCut ? 0.45 : (tile.entry.hidden ? 0.7 : 1)) * (root.chooserDims(tile.entry) ? 0.4 : 1)
 
           Item {
             width: parent.width
@@ -4042,12 +4620,18 @@ Panel {
         }
       }
 
+      // Off the tiles: click clears the selection, a drag draws a selection
+      // band, right click opens the folder menu.
       MouseArea {
         z: -1
         width: grid.width
         height: Math.max(grid.height, grid.contentHeight)
         acceptedButtons: Qt.LeftButton | Qt.RightButton
+        onPressed: function(mouse) { if (mouse.button === Qt.LeftButton) gridBand.begin(mapToItem(gridBand.parent, mouse.x, mouse.y), mouse.modifiers) }
+        onPositionChanged: function(mouse) { gridBand.follow(mapToItem(gridBand.parent, mouse.x, mouse.y)) }
+        onReleased: gridBand.finish()
         onClicked: function(mouse) {
+          if (gridBand.drew) return
           if (mouse.button === Qt.RightButton) {
             var p = mapToItem(null, mouse.x, mouse.y)
             root.openMenu(root.folderMenu(), p.x, p.y, null)
@@ -4258,6 +4842,24 @@ Panel {
               hasCursor: true
             }
 
+            BandBox {
+              id: columnBand
+              flick: currentColumn
+              picks: function(from, to) { return Model.bandRows(from.y, to.y, columnsPane.rowHeight, currentColumn.count) }
+            }
+
+            // Empty space below the rows: click clears the selection, a
+            // drag draws a selection band.
+            MouseArea {
+              z: -1
+              width: currentColumn.width
+              height: Math.max(currentColumn.height, currentColumn.contentHeight)
+              onPressed: function(mouse) { columnBand.begin(mapToItem(columnBand.parent, mouse.x, mouse.y), mouse.modifiers) }
+              onPositionChanged: function(mouse) { columnBand.follow(mapToItem(columnBand.parent, mouse.x, mouse.y)) }
+              onReleased: columnBand.finish()
+              onClicked: if (!columnBand.drew) root.selected = []
+            }
+
             delegate: Item {
               id: cell
               required property int index
@@ -4291,7 +4893,7 @@ Panel {
                 anchors.leftMargin: Style.space(6)
                 anchors.rightMargin: Style.space(6)
                 spacing: root.iconGap
-                opacity: cell.entry.hidden ? 0.7 : 1
+                opacity: (cell.entry.hidden ? 0.7 : 1) * (root.chooserDims(cell.entry) ? 0.4 : 1)
 
                 Text {
                   anchors.verticalCenter: parent.verticalCenter
@@ -4305,10 +4907,12 @@ Panel {
                 }
 
                 Item {
+                  id: cellNameBox
                   width: parent.width - root.iconBox - Style.space(24)
                   height: parent.height
 
                   Text {
+                    id: cellName
                     visible: !cell.renaming
                     anchors.left: parent.left
                     anchors.right: parent.right
@@ -4351,6 +4955,8 @@ Panel {
                 entry: cell.entry
                 entryIndex: cell.index
                 dragItem: cellCarrier
+                bander: columnBand
+                nameEnd: Style.space(6) + root.iconBox + root.iconGap + Math.min(cellName.implicitWidth, cellNameBox.width)
                 enabled: !cell.renaming
               }
 
@@ -5704,13 +6310,23 @@ Panel {
     id: sheet
     required property color foreground
     required property color background
-    visible: root.keysOpen
+    visible: keysShown > 0
     z: 30
     color: background
     borderSpec: Border.flat(Color.accent, Style.normalBorderWidth)
     padding: Style.space(14)
 
-    MouseArea { anchors.fill: parent; onClicked: root.keysOpen = false }
+    // It fades in growing to its size and fades out shrinking, on the large
+    // preview's curve and times.
+    property real keysShown: root.keysOpen ? 1 : 0
+    Behavior on keysShown {
+      id: keysShowing
+      NumberAnimation { duration: Style.duration(keysShowing.targetValue > 0 ? 220 : 190); easing.type: Easing.Bezier; easing.bezierCurve: Style.easeOut }
+    }
+    opacity: keysShown
+    transform: Scale { origin.x: sheet.width / 2; origin.y: sheet.height / 2; xScale: 0.92 + 0.08 * sheet.keysShown; yScale: xScale }
+
+    MouseArea { anchors.fill: parent; enabled: root.keysOpen; onClicked: root.keysOpen = false }
 
     PanelSectionHeader {
       id: sheetTitle
@@ -5767,8 +6383,23 @@ Panel {
     id: promptLayer
     required property color foreground
     required property color background
-    visible: root.prompt !== null
+    visible: promptShown > 0
     z: 16
+
+    // It fades in growing to its size and fades out shrinking, on the large
+    // preview's curve and times; what it asks stays while it goes.
+    property var lastPrompt: null
+    readonly property var shownPrompt: root.prompt || lastPrompt
+    property real promptShown: root.prompt !== null ? 1 : 0
+    Behavior on promptShown {
+      id: promptShowing
+      NumberAnimation { duration: Style.duration(promptShowing.targetValue > 0 ? 220 : 190); easing.type: Easing.Bezier; easing.bezierCurve: Style.easeOut }
+    }
+
+    Connections {
+      target: root
+      function onPromptChanged() { if (root.prompt) promptLayer.lastPrompt = root.prompt }
+    }
 
     function focusField() {
       if (!root.prompt) return
@@ -5781,12 +6412,15 @@ Panel {
     Rectangle {
       anchors.fill: parent
       color: Qt.rgba(promptLayer.background.r, promptLayer.background.g, promptLayer.background.b, 0.7)
-      MouseArea { anchors.fill: parent; onClicked: root.cancelPrompt() }
+      opacity: promptLayer.promptShown
+      MouseArea { anchors.fill: parent; enabled: root.prompt !== null; onClicked: root.cancelPrompt() }
     }
 
     BorderSurface {
       id: promptBox
       anchors.centerIn: parent
+      opacity: promptLayer.promptShown
+      transform: Scale { origin.x: promptBox.width / 2; origin.y: promptBox.height / 2; xScale: 0.92 + 0.08 * promptLayer.promptShown; yScale: xScale }
       width: Math.min(parent.width - Style.space(32), Style.space(440))
       height: promptColumn.implicitHeight + promptBox.contentTopInset + promptBox.contentBottomInset
       color: promptLayer.background
@@ -5805,7 +6439,7 @@ Panel {
         Text {
           width: parent.width
           textFormat: Text.PlainText
-          text: root.prompt ? root.prompt.title : ""
+          text: promptLayer.shownPrompt ? promptLayer.shownPrompt.title : ""
           color: promptLayer.foreground
           font.family: root.fontFamily
           font.pixelSize: Style.font.title
@@ -5830,10 +6464,10 @@ Panel {
         }
 
         Text {
-          visible: root.prompt !== null && root.prompt.error !== ""
+          visible: promptLayer.shownPrompt !== null && promptLayer.shownPrompt.error !== ""
           width: parent.width
           textFormat: Text.PlainText
-          text: root.prompt ? root.prompt.error : ""
+          text: promptLayer.shownPrompt ? promptLayer.shownPrompt.error : ""
           color: Color.urgent
           font.family: root.fontFamily
           font.pixelSize: Style.font.caption
@@ -5858,7 +6492,7 @@ Panel {
           Button {
             width: Style.space(96)
             height: Style.spacing.controlHeight
-            text: root.prompt ? root.prompt.confirm : ""
+            text: promptLayer.shownPrompt ? promptLayer.shownPrompt.confirm : ""
             fontSize: Style.font.bodySmall
             foreground: promptLayer.foreground
             fontFamily: root.fontFamily
@@ -6762,28 +7396,61 @@ Panel {
     id: conflict
     required property color foreground
     required property color background
-    visible: root.conflictJob !== null
+    visible: conflictShown > 0
     z: 15
 
     property int choice: 1
     property bool all: false
 
+    readonly property bool asking: root.conflictJob !== null || root.chooserClash !== null
+    // It fades in growing to its size and fades out shrinking, on the large
+    // preview's curve and times; what it says stays while it goes.
+    property real conflictShown: asking ? 1 : 0
+    Behavior on conflictShown {
+      id: conflictShowing
+      NumberAnimation { duration: Style.duration(conflictShowing.targetValue > 0 ? 220 : 190); easing.type: Easing.Bezier; easing.bezierCurve: Style.easeOut }
+    }
+    property bool forChooser: false
+    property string heading: ""
+
+    function keepCard() {
+      if (!asking) return
+      forChooser = root.chooserClash !== null
+      heading = forChooser ? Model.itemsLabel(root.chooserClash.files.length, root.chooserClash.files[0]) + (root.chooserClash.files.length === 1 ? " already exists in " : " already exist in ") + Model.placeLabel(root.location, root.home, root.places, root.drives)
+        : root.conflictJob.name + " already exists in " + Model.placeLabel(root.transferJob.dest, root.home, root.places, root.drives)
+    }
+
+    Connections {
+      target: root
+      function onConflictJobChanged() { conflict.keepCard() }
+      function onChooserClashChanged() { conflict.keepCard() }
+    }
+
     readonly property var choices: [
-      { how: "skip", label: "Skip" },
+      { how: "skip", label: forChooser ? "Back" : "Skip" },
       { how: "keep", label: "Keep both" },
       { how: "replace", label: "Replace" }
     ]
 
     function decide(index) {
+      if (!asking) return
       var how = choices[index].how
       var rest = all
       choice = 1
       all = false
-      root.resolveConflict(how, rest)
+      if (root.chooserClash) root.resolveChooserClash(how)
+      else root.resolveConflict(how, rest)
+    }
+
+    // Esc or a click beside the card: a dialog goes back to its name, a
+    // copy stops.
+    function back() {
+      if (root.chooserClash) root.resolveChooserClash("skip")
+      else root.cancelConflicts()
     }
 
     function handleKey(event) {
-      if (event.key === Qt.Key_Escape) root.cancelConflicts()
+      if (event.key === Qt.Key_Escape) back()
       else if (event.key === Qt.Key_Left || event.text === "h") choice = Math.max(0, choice - 1)
       else if (event.key === Qt.Key_Right || event.text === "l" || event.key === Qt.Key_Tab) choice = Math.min(2, choice + 1)
       else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) decide(choice)
@@ -6797,12 +7464,15 @@ Panel {
     Rectangle {
       anchors.fill: parent
       color: Qt.rgba(conflict.background.r, conflict.background.g, conflict.background.b, 0.7)
-      MouseArea { anchors.fill: parent; onClicked: root.cancelConflicts() }
+      opacity: conflict.conflictShown
+      MouseArea { anchors.fill: parent; enabled: conflict.asking; onClicked: conflict.back() }
     }
 
     BorderSurface {
       id: conflictBox
       anchors.centerIn: parent
+      opacity: conflict.conflictShown
+      transform: Scale { origin.x: conflictBox.width / 2; origin.y: conflictBox.height / 2; xScale: 0.92 + 0.08 * conflict.conflictShown; yScale: xScale }
       width: Math.min(parent.width - Style.space(32), Style.space(420))
       height: conflictColumn.implicitHeight + conflictBox.contentTopInset + conflictBox.contentBottomInset
       color: conflict.background
@@ -6821,7 +7491,7 @@ Panel {
         Text {
           width: parent.width
           textFormat: Text.PlainText
-          text: root.conflictJob ? root.conflictJob.name + " already exists in " + Model.placeLabel(root.transferJob.dest, root.home, root.places, root.drives) : ""
+          text: conflict.heading
           color: conflict.foreground
           font.family: root.fontFamily
           font.pixelSize: Style.font.title
@@ -6831,7 +7501,8 @@ Panel {
         Text {
           width: parent.width
           textFormat: Text.PlainText
-          text: "Skip this one, keep both (the new one is renamed), or replace it (the old one goes to the Trash)."
+          text: conflict.forChooser ? "Go back, keep both (the new one gets another name), or replace what is there."
+            : "Skip this one, keep both (the new one is renamed), or replace it (the old one goes to the Trash)."
           color: conflict.foreground
           opacity: 0.6
           font.family: root.fontFamily
@@ -6840,6 +7511,7 @@ Panel {
         }
 
         Item {
+          visible: !conflict.forChooser
           width: allRow.implicitWidth
           height: allRow.implicitHeight
 

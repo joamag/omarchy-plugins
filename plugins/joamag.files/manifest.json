@@ -28,6 +28,8 @@
       "previewWidth": 240,
       "windowPreviewWidth": 290,
       "defaultFileManager": false,
+      "fileChooser": false,
+      "launcherEntry": false,
       "tabs": [],
       "activeTab": 0,
       "recentFolders": []
@@ -98,6 +100,18 @@
         "key": "defaultFileManager",
         "type": "boolean",
         "label": "Use as the default file manager",
+        "defaultValue": false
+      },
+      {
+        "key": "fileChooser",
+        "type": "boolean",
+        "label": "Show apps' Open and Save dialogs in Files",
+        "defaultValue": false
+      },
+      {
+        "key": "launcherEntry",
+        "type": "boolean",
+        "label": "Show Files in the app launcher",
         "defaultValue": false
       }
     ]

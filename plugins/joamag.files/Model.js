@@ -120,7 +120,8 @@ var HINTS = {
   ],
   prompt: [{ key: "Enter", label: "go ahead" }, { key: "Esc", label: "cancel" }],
   path: [{ key: "Enter", label: "go" }, { key: "Esc", label: "cancel" }],
-  jump: [{ key: "type", label: "to find" }, { key: "↑↓", label: "choose" }, { key: "Enter", label: "open" }, { key: "Ctrl+Enter", label: "in a new tab" }, { key: "Esc", label: "close" }]
+  jump: [{ key: "type", label: "to find" }, { key: "↑↓", label: "choose" }, { key: "Enter", label: "open" }, { key: "Ctrl+Enter", label: "in a new tab" }, { key: "Esc", label: "close" }],
+  chooser: [{ key: "Enter", label: "open, pick" }, { key: "Tab", label: "name" }, { key: "Ctrl+S", label: "done" }, { key: "Ctrl+Space", label: "select" }, { key: "Ctrl+P", label: "jump" }, { key: "Esc", label: "cancel" }]
 }
 
 // Every key, for the `?` sheet: the panel keys of the other widgets and the
@@ -876,11 +877,16 @@ function isImage(entry) {
   return !!entry && !entry.dir && THUMBNAIL_EXTENSIONS.indexOf(extensionOf(entry.name)) >= 0
 }
 
-// Small text files get their first lines in the preview pane.
-function isTextual(entry) {
+// Text and source files, and files with no extension (a Makefile).
+function isText(entry) {
   if (!entry || entry.dir) return false
   var kind = kindOf(entry.name, false)
-  return (kind === "text" || kind === "code" || (kind === "file" && extensionOf(entry.name) === "")) && !(entry.size > 262144)
+  return kind === "text" || kind === "code" || (kind === "file" && extensionOf(entry.name) === "")
+}
+
+// Small text files get their first lines in the preview pane.
+function isTextual(entry) {
+  return isText(entry) && !(entry.size > 262144)
 }
 
 // What the preview can show for an entry: the picture itself, a PDF page
@@ -1295,6 +1301,53 @@ function keepSelected(selected, list) {
   return out
 }
 
+// The rows a selection band from TOP to BOTTOM (either way round, in the
+// list's own terms) crosses, in a list of COUNT rows ROW high.
+function bandRows(top, bottom, row, count) {
+  var out = []
+  if (!(row > 0) || !(count > 0)) return out
+  var first = Math.max(0, Math.floor(Math.min(top, bottom) / row))
+  var last = Math.min(count - 1, Math.floor(Math.max(top, bottom) / row))
+  for (var i = first; i <= last; i++) out.push(i)
+  return out
+}
+
+// The tiles a selection band between two corners crosses, in a grid of
+// COLUMNS cells WIDTH by HEIGHT holding COUNT tiles, each tile MARGIN in
+// from the edges of its cell; in order.
+function bandTiles(x0, y0, x1, y1, width, height, columns, count, margin) {
+  var out = []
+  if (!(width > 0) || !(height > 0) || !(columns > 0)) return out
+  var m = margin || 0
+  var left = Math.min(x0, x1)
+  var right = Math.max(x0, x1)
+  var top = Math.min(y0, y1)
+  var bottom = Math.max(y0, y1)
+  var firstRow = Math.max(0, Math.floor(top / height))
+  var lastRow = Math.floor(bottom / height)
+  var firstColumn = Math.max(0, Math.floor(left / width))
+  var lastColumn = Math.min(columns - 1, Math.floor(right / width))
+  for (var r = firstRow; r <= lastRow; r++) {
+    for (var c = firstColumn; c <= lastColumn; c++) {
+      var i = r * columns + c
+      if (i >= (count || 0)) continue
+      if (c * width + width - m > left && c * width + m < right && r * height + height - m > top && r * height + m < bottom) out.push(i)
+    }
+  }
+  return out
+}
+
+// The selection a band leaves over LIST: BASE (what was selected as it
+// started, kept with Ctrl), then the paths at INDEXES, each once.
+function bandSelection(list, indexes, base) {
+  var out = (base || []).slice()
+  for (var i = 0; i < (indexes || []).length; i++) {
+    var e = list && list[indexes[i]]
+    if (e && out.indexOf(e.path) < 0) out.push(e.path)
+  }
+  return out
+}
+
 // Where typing the start of a name lands the cursor, the way Explorer finds
 // it: a first letter moves on to the next name after the cursor with it, so
 // typing it again steps through them; more letters keep the cursor on its
@@ -1706,4 +1759,231 @@ function folderMenu(path, clipboard, showHidden, sortKey, bookmarked) {
     items.push({ id: "nautilus", label: "Open in Nautilus", icon: "󰏌", shortcut: "N" })
   }
   return items
+}
+
+// ---------- File chooser ----------
+
+// MIME types whose extensions are not simply the part after the slash.
+var MIME_EXTENSIONS = {
+  "image/jpeg": ["jpg", "jpeg"],
+  "image/svg+xml": ["svg"],
+  "image/tiff": ["tif", "tiff"],
+  "text/plain": ["txt", "text"],
+  "text/markdown": ["md", "markdown"],
+  "text/html": ["html", "htm"],
+  "application/x-7z-compressed": ["7z"],
+  "application/gzip": ["gz", "tgz"],
+  "audio/mpeg": ["mp3"],
+  "video/quicktime": ["mov"],
+  "video/x-matroska": ["mkv"]
+}
+
+// The app that asked, from the portal's app id: "com.google.Chrome" is
+// Chrome; an app without an id has no name to show.
+function chooserApp(appId) {
+  var id = String(appId || "")
+  return id.slice(id.lastIndexOf(".") + 1)
+}
+
+// One of the portal's filters, (label, [(0, glob) or (1, MIME type)]), as
+// { label, globs, mimes }.
+function chooserFilter(raw) {
+  var out = { label: String(raw && raw[0] || ""), globs: [], mimes: [] }
+  var patterns = raw && Array.isArray(raw[1]) ? raw[1] : []
+  for (var i = 0; i < patterns.length; i++) {
+    var p = patterns[i]
+    if (!Array.isArray(p) || String(p[1] || "") === "") continue
+    if (Number(p[0]) === 1) out.mimes.push(String(p[1]).toLowerCase())
+    else out.globs.push(String(p[1]))
+  }
+  return out
+}
+
+// Whether filters A and B, as chooserFilter reads them, are one: two can
+// share a label and take other files.
+function sameFilter(a, b) {
+  return a.label === b.label && a.globs.join("\n") === b.globs.join("\n") && a.mimes.join("\n") === b.mimes.join("\n")
+}
+
+// The request's filters; its current filter goes first when the list
+// leaves it out, which filechooser.py does the same way to read the answer.
+function chooserFilters(list, current) {
+  var out = (Array.isArray(list) ? list : []).map(chooserFilter)
+  if (current) {
+    var c = chooserFilter(current)
+    if (!out.some(function(f) { return sameFilter(f, c) })) out.unshift(c)
+  }
+  return out
+}
+
+// What filechooser.py hands the widget for one OpenFile, SaveFile or
+// SaveFiles request, as { id, kind, title, app, accept, name, folder,
+// files, filters, filter, multiple }: kind is open, folder, save or
+// savefiles, and the words, the folder and the name fall back to sensible
+// ones when the app gives none.
+function chooserRequest(raw, home) {
+  var r = raw || {}
+  var method = String(r.method || "")
+  var kind = method === "SaveFile" ? "save" : method === "SaveFiles" ? "savefiles" : r.directory === true ? "folder" : "open"
+  var file = String(r.currentFile || "")
+  var folder = String(r.currentFolder || "") || (file ? parentPath(file) : "")
+  var filters = chooserFilters(r.filters, r.currentFilter)
+  var current = r.currentFilter ? chooserFilter(r.currentFilter) : null
+  var at = current ? filters.map(function(f) { return sameFilter(f, current) }).indexOf(true) : -1
+  var saving = kind === "save" || kind === "savefiles"
+  return {
+    id: String(r.id || ""),
+    kind: kind,
+    title: String(r.title || "") || (saving ? "Save" : kind === "folder" ? "Choose a folder" : "Open"),
+    app: chooserApp(r.app),
+    accept: String(r.acceptLabel || "").replace(/_/g, "") || (saving ? "Save" : kind === "folder" ? "Select" : "Open"),
+    name: String(r.currentName || "") || (file ? baseName(file) : ""),
+    folder: folder.charAt(0) === "/" ? normalizePath(folder) : String(home || "/"),
+    files: (Array.isArray(r.files) ? r.files : []).map(String).filter(function(f) { return f !== "" }),
+    filters: filters,
+    filter: Math.max(0, at),
+    multiple: r.multiple === true && (kind === "open" || kind === "folder")
+  }
+}
+
+// A glob as the portal sends it ("*.pdf", "photo-??.[jp]ng"), matched the
+// way people expect a file dialog to, regardless of case.
+function globRegExp(glob) {
+  var out = ""
+  var g = String(glob || "")
+  for (var i = 0; i < g.length; i++) {
+    var c = g.charAt(i)
+    if (c === "*") out += ".*"
+    else if (c === "?") out += "."
+    else if (c === "[" && g.indexOf("]", i + 2) > i) {
+      var end = g.indexOf("]", i + 2)
+      var set = g.slice(i + 1, end).replace(/\\/g, "\\\\")
+      out += "[" + (set.charAt(0) === "!" ? "^" + set.slice(1) : set) + "]"
+      i = end
+    } else out += c.replace(/[.+^${}()|[\]\\]/g, "\\$&")
+  }
+  return new RegExp("^" + out + "$", "i")
+}
+
+// Whether a file's name fits MIME, as far as a name tells: image/*, a
+// known type, or one whose extension follows its slash. filechooser.py
+// adds the names the system's MIME database gives a type to its filter.
+function mimeFits(mime, entry) {
+  var m = String(mime || "").toLowerCase()
+  if (m === "*" || m === "*/*" || m === "application/octet-stream") return true
+  var major = m.split("/")[0]
+  var minor = m.slice(major.length + 1)
+  if (minor === "*") {
+    if (major === "text") return isText(entry)
+    return kindOf(entry.name, false) === major
+  }
+  var exts = MIME_EXTENSIONS[m] || [minor.replace(/^x-/, "")]
+  return exts.indexOf(extensionOf(entry.name)) >= 0
+}
+
+// Whether FILTER takes the file ENTRY; no filter takes everything.
+function filterTakes(filter, entry) {
+  if (!filter || (filter.globs.length === 0 && filter.mimes.length === 0)) return true
+  for (var i = 0; i < filter.globs.length; i++) if (globRegExp(filter.globs[i]).test(entry.name)) return true
+  for (var j = 0; j < filter.mimes.length; j++) if (mimeFits(filter.mimes[j], entry)) return true
+  return false
+}
+
+// Whether ENTRY can be chosen for REQUEST under its FILTER: a folder when a
+// folder is asked for, a file when a file is and the filter takes it;
+// nothing in the Trash or inside an archive, which are not files an app
+// can open.
+function chooserPicks(request, filter, entry) {
+  if (!request || !entry || entry.trashName || isArchiveLocation(entry.path)) return false
+  if (entry.dir) return request.kind === "folder"
+  if (request.kind === "folder" || request.kind === "savefiles") return false
+  return filterTakes(request.filters[filter] || null, entry)
+}
+
+// The places row above the name: the folder on screen, the folders opened
+// lately and the desktop, each once, folders on disk only, MAX at most.
+function chooserPlaces(location, visited, home, max) {
+  var out = []
+  var limit = max || 5
+  function add(path) {
+    if (!path || isVirtual(path) || out.indexOf(path) >= 0 || out.length >= limit) return
+    out.push(path)
+  }
+  add(location)
+  for (var i = 0; i < (visited || []).length; i++) add(visited[i])
+  add(joinPath(home, "Desktop"))
+  return out
+}
+
+// What the dialog answers with: the file to save as NAME in LOCATION, the
+// files SaveFiles named there, or what was PICKED that the request can
+// take (the first only, unless it takes several); asking for a folder with
+// none picked answers with the folder on screen.
+function chooserPaths(request, location, name, picked, filter) {
+  if (!request) return []
+  if (request.kind === "save") return [joinPath(location, String(name || "").trim())]
+  if (request.kind === "savefiles") return request.files.map(function(f) { return joinPath(location, f) })
+  var list = (picked || []).filter(function(e) { return chooserPicks(request, filter, e) }).map(function(e) { return e.path })
+  if (request.kind === "folder" && list.length === 0 && !isVirtual(location)) list = [location]
+  return request.multiple ? list : list.slice(0, 1)
+}
+
+// Why the dialog cannot answer yet, or "": a name to type or fix, a folder
+// to open (the Trash, Recent and archives are not ones to save in), or
+// nothing picked.
+function chooserProblem(request, location, name, paths) {
+  if (!request) return ""
+  var saving = request.kind === "save" || request.kind === "savefiles"
+  if ((saving || request.kind === "folder") && isVirtual(location)) return saving ? "Open a folder to save in" : "Open a folder first"
+  if (request.kind === "save") {
+    var n = String(name || "").trim()
+    if (n === "") return "Type a name"
+    if (n.indexOf("/") >= 0) return "A name cannot hold /"
+    if (n === "." || n === "..") return "Type another name"
+  }
+  if (request.kind === "open" && (paths || []).length === 0) return "Pick a file"
+  return ""
+}
+
+// The names in the way of PATHS in the folder listed as ENTRIES: files to
+// replace or keep both of, and folders, which nothing can be saved over.
+function chooserClash(entries, paths) {
+  var out = { files: [], folders: [] }
+  for (var i = 0; i < (paths || []).length; i++) {
+    var at = indexOfPath(entries, paths[i])
+    if (at < 0) continue
+    if (entries[at].dir) out.folders.push(entries[at].name)
+    else out.files.push(entries[at].name)
+  }
+  return out
+}
+
+// PATHS with each name already taken in the listing ENTRIES given a free
+// "(copy)" one, for Keep both.
+function chooserKeepBoth(entries, paths) {
+  var names = (entries || []).map(function(e) { return e.name })
+  return (paths || []).map(function(p) {
+    var name = uniqueName(names, baseName(p), false)
+    names.push(name)
+    return joinPath(parentPath(p), name)
+  })
+}
+
+// ---------- Integrations ----------
+
+// What the widget sets up outside shell.json, in the order files.sh
+// applies it: the default file manager, the file chooser and the launcher
+// entry.
+var INTEGRATIONS = ["default", "chooser", "launcher"]
+
+// The next one files.sh should apply, as { name, state } (on or off), from
+// what the settings WANT (by name, true or false) and what was last
+// APPLIED (by name, on or off); null once all are in place.
+function nextIntegration(want, applied) {
+  for (var i = 0; i < INTEGRATIONS.length; i++) {
+    var name = INTEGRATIONS[i]
+    var state = want && want[name] ? "on" : "off"
+    if (!applied || applied[name] !== state) return { name: name, state: state }
+  }
+  return null
 }
