@@ -4,7 +4,7 @@ A file navigator in the Omarchy bar, in the spirit of GNOME Files: a popup under
 
 ## Layout
 
-- **Header**: back, forward, up, a Go to button (in the popup), the path bar, the filter, the List / Grid / Columns switch, the hidden files toggle (the eye: dot files and folders shown or not, remembered across restarts), the preview pane, pop out or dock, and a ⋮ menu (new folder or file, paste, select all, hidden files, sort, bookmark, Nautilus).
+- **Header**: back, forward, up, a Go to button (in the popup), the path bar, the filter, the List / Grid / Columns switch, the hidden files toggle (the eye: dot files and folders shown or not, remembered across restarts), the preview pane, pop out or dock, and a ⋮ menu (new folder or file, paste, select all, hidden files, sort, bookmark, Nautilus, Settings).
 - **Tabs** under the header, each with its place glyph, its name and its number for the `1`-`9` keys; `+` opens a new one at the same folder.
 - **The folder** as a list (name, type, size, date, sortable by clicking a column), a grid with the pictures themselves for images, the first page of PDFs and thumbnails for videos, audio, documents and fonts, or columns from the root of the path down to the folder on screen, followed by the folder under the cursor or the file's preview. Opening or closing a column slides the strip over quickly, and only that column is added or taken away; folders seen lately show at once while they are read again. Each column keeps the folder it leads through in sight. Drag a column's divider to size every column (double click it to fit the longest names); columns scrolled off to one side come back with Shift+wheel, a sideways swipe, or the ‹ › at that edge. Recent, Trash and search results also say where each item lives.
 - **Preview pane** (`i`): the selected file up close, as large as the pane allows: pictures; PDF pages, with ‹ › (or `<` `>`) to turn them and the page count; a frame of a video, an album cover, the first page of an office document or a font sample from the thumbnailers the system registers (the ones Nautilus uses); or the first lines of a text file (a binary file says so instead of showing noise). Under it the kind, size, date and folder, and Open / Open with, Open / In new tab, or Restore / Delete. Drag its edge to make it wider or narrower (double click it for the default width); the popup and the window each keep their own width.
@@ -88,7 +88,7 @@ The panel keys of the other widgets and the Nautilus shortcuts both work; `?` sh
 
 ## Settings
 
-Inline on the widget entry in `~/.config/omarchy/shell.json`; the widget writes them itself as you switch:
+Inline on the widget entry in `~/.config/omarchy/shell.json`; the widget writes them itself as you switch. The three integrations are turned on and off from **Settings** at the end of the ⋮ menu (and of the right click menu on blank space), ticked while on; Omarchy has no settings window for a widget's options, and `omarchy bar set joamag.files KEY true --json` works too. Settings is left out while an app's dialog is on screen.
 
 | Key | Default | Meaning |
 |---|---|---|
@@ -109,7 +109,7 @@ Inline on the widget entry in `~/.config/omarchy/shell.json`; the widget writes 
 
 ## Default file manager
 
-Turn on **Use as the default file manager** in the widget's settings and the widget takes over from Nautilus (or Omarchy's Files):
+Turn on **Use as the default file manager** in the ⋮ menu's Settings and the widget takes over from Nautilus (or Omarchy's Files):
 
 - Folders other apps open (`xdg-open`, a download's "Open folder", `xdg-open .` in a terminal) show in the widget. A remote location (`sftp://`, `smb://`) still goes to the previous file manager.
 - "Show in folder" in a browser or another app opens the folder with the file picked. Apps ask for it over D-Bus (`org.freedesktop.FileManager1`), and a small service, `filemanager1.py`, answers for the widget. While Nautilus has a window open it keeps that name, and the widget takes over once Nautilus closes; it never takes the name away.
@@ -121,7 +121,7 @@ Switching it on adds a hidden app, `~/.local/share/applications/joamag-files.des
 
 ## File chooser
 
-Turn on **Show apps' Open and Save dialogs in Files** and the dialogs apps ask the desktop portal for (Chrome's Save as and upload buttons, Firefox, Flatpak apps) show in the widget's window instead of the GTK dialog: the sidebar, tabs, list, grid or columns, preview and Ctrl+P, floated over the app with a band at the bottom. The band has a row of the places saved in lately, the name to save as (its stem picked, ready to type over), the app's file types, Cancel and the app's own word for going ahead (Save, Open, Upload).
+Turn on **Show apps' Open and Save dialogs in Files** in the ⋮ menu's Settings and the dialogs apps ask the desktop portal for (Chrome's Save as and upload buttons, Firefox, Flatpak apps) show in the widget's window instead of the GTK dialog: the sidebar, tabs, list, grid or columns, preview and Ctrl+P, floated over the app with a band at the bottom. The band has a row of the places saved in lately, the name to save as (its stem picked, ready to type over), the app's file types, Cancel and the app's own word for going ahead (Save, Open, Upload).
 
 - Saving: type a name and press Enter, or Ctrl+S, or pick a place in the row first. Enter on a file takes its name. A name already there asks to go back, keep both (the new file gets a "(copy)" name) or replace it.
 - Opening: Enter or a double click on a file opens it; Ctrl+Space, Ctrl+click and Shift pick several when the app takes several. Files the chosen type leaves out are faded.
