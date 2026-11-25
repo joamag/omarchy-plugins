@@ -3536,10 +3536,13 @@ Panel {
       anchors.fill: parent
       z: 100
 
-      TapHandler {
+      // On the press, whatever the pointer does after: a side button
+      // often nudges the mouse, which would cancel a tap.
+      MouseArea {
+        anchors.fill: parent
         acceptedButtons: Qt.BackButton | Qt.ForwardButton
-        onTapped: function(eventPoint, button) {
-          if (button === Qt.BackButton) root.back()
+        onPressed: function(mouse) {
+          if (mouse.button === Qt.BackButton) root.back()
           else root.forward()
         }
       }
