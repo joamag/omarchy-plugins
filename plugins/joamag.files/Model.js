@@ -290,12 +290,17 @@ function isArchiveLocation(path) {
   return String(path || "").indexOf(ARCHIVE_PREFIX) === 0
 }
 
-// { archive, inner } for a folder inside an archive, or null.
+// { archive, inner } for a folder inside an archive, or null. The archive
+// ends at the first separator that follows an archive's name, so a folder
+// on the way to it may hold the separator in its own name.
 function splitArchive(path) {
   var p = String(path || "")
   if (!isArchiveLocation(p)) return null
   var rest = p.slice(ARCHIVE_PREFIX.length)
-  var at = rest.indexOf(ARCHIVE_SEPARATOR)
+  var first = rest.indexOf(ARCHIVE_SEPARATOR)
+  var at = first
+  while (at >= 0 && !isArchiveName(baseName(rest.slice(0, at)))) at = rest.indexOf(ARCHIVE_SEPARATOR, at + 1)
+  if (at < 0) at = first
   if (at < 0) return { archive: rest, inner: "" }
   return { archive: rest.slice(0, at), inner: rest.slice(at + ARCHIVE_SEPARATOR.length) }
 }
@@ -801,18 +806,22 @@ function closeTab(tabs, index, active) {
 
 // A folder that moved or got renamed takes the tabs inside it along; one
 // that went away (Trash, delete) sends them to the folder above it, and an
-// ejected drive sends them all to TO itself with WHOLE. History would point
-// at paths that no longer exist, so it starts over.
+// ejected drive sends them all to TO itself with WHOLE. A tab inside an
+// archive goes by the archive's own path. History would point at paths
+// that no longer exist, so it starts over.
 function retargetTabs(tabs, from, to, whole) {
   var changed = false
   var out = []
   for (var i = 0; i < (tabs || []).length; i++) {
     var tab = tabs[i]
-    if (!isUnder(tab.path, from) || isVirtual(from)) {
+    var at = splitArchive(tab.path)
+    var disk = at ? at.archive : tab.path
+    if (!isUnder(disk, from) || isVirtual(from)) {
       out.push(tab)
       continue
     }
-    var path = to ? (whole ? to : to + tab.path.slice(from.length)) : (parentPath(from) || "/")
+    var path = to ? (whole ? to : to + disk.slice(from.length)) : (parentPath(from) || "/")
+    if (at && to && !whole) path = archiveLocation(path, at.inner)
     out.push(newTab(path, tab.view))
     changed = true
   }
@@ -1432,16 +1441,18 @@ function uniqueName(names, name, dir) {
 function planTransfer(sources, dest, mode, destNames, dirs) {
   var plan = { error: "", jobs: [] }
   var assigned = (destNames || []).slice()
+  // Another spelling of a folder (a bookmark with // in it) is the same one.
+  var to = normalizePath(dest)
   for (var i = 0; i < (sources || []).length; i++) {
     var src = sources[i]
     var name = baseName(src)
     var dir = !!(dirs && dirs[src])
-    if (isUnder(dest, src)) {
+    if (isUnder(to, src)) {
       plan.error = "Cannot put " + name + " inside itself"
       plan.jobs = []
       return plan
     }
-    if (parentPath(src) === dest) {
+    if (parentPath(src) === to) {
       if (mode === "move") continue
       var copyName = uniqueName(assigned, name, dir)
       assigned.push(copyName)

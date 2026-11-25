@@ -272,6 +272,15 @@ describe("splitArchive", () => {
     assert.deepEqual(Model.splitArchive(`archive:${ZIP}`), { archive: ZIP, inner: "" })
     assert.equal(Model.splitArchive(ZIP), null)
   })
+
+  it("finds the archive behind a folder whose name holds the separator", () => {
+    const odd = "/tmp/reports::/docs.zip"
+    assert.deepEqual(Model.splitArchive(Model.archiveLocation(odd, "a/b")), { archive: odd, inner: "a/b" })
+    assert.deepEqual(Model.splitArchive(Model.archiveLocation(odd, "")), { archive: odd, inner: "" })
+    assert.deepEqual(Model.splitArchive(Model.archiveLocation(ZIP, "x::/y")), { archive: ZIP, inner: "x::/y" })
+    // Without an archive's name anywhere, the first separator splits it.
+    assert.deepEqual(Model.splitArchive("archive:/x/blob::/a"), { archive: "/x/blob", inner: "a" })
+  })
 })
 
 describe("archiveStem", () => {
@@ -874,6 +883,15 @@ describe("retargetTabs", () => {
   it("sends tabs to the parent of a folder that went away", () => {
     assert.deepEqual(Model.retargetTabs(tabs, `${HOME}/Downloads/fonts`, "").map((t) => t.path), [`${HOME}/Downloads`, `${HOME}/Music`, `${HOME}/Downloads`])
     assert.deepEqual(Model.retargetTabs([Model.newTab("/srv")], "/srv", "").map((t) => t.path), ["/"])
+  })
+
+  it("carries tabs inside an archive along with it, or out of it", () => {
+    const inside = [Model.newTab(Model.archiveLocation("/work/photos/set.zip", "2025"), "grid")]
+    assert.deepEqual(Model.retargetTabs(inside, "/work/photos", "/work/pictures").map((t) => t.path), [Model.archiveLocation("/work/pictures/set.zip", "2025")])
+    assert.deepEqual(Model.retargetTabs(inside, "/work/photos/set.zip", "/work/photos/old.zip").map((t) => t.path), [Model.archiveLocation("/work/photos/old.zip", "2025")])
+    assert.deepEqual(Model.retargetTabs(inside, "/work/photos/set.zip", "").map((t) => t.path), ["/work/photos"])
+    assert.deepEqual(Model.retargetTabs(inside, "/work", HOME, true).map((t) => t.path), [HOME])
+    assert.equal(Model.retargetTabs(inside, "/work/photo", "/srv"), inside)
   })
 
   it("sends every tab on an ejected drive to one place", () => {
@@ -1707,6 +1725,12 @@ describe("planTransfer", () => {
     assert.equal(plan.error, "Cannot put joamag inside itself")
     assert.deepEqual(plan.jobs, [])
     assert.deepEqual(Model.planTransfer(null, dest, "copy", null, null), { error: "", jobs: [] })
+  })
+
+  it("knows a folder by any spelling of its path", () => {
+    // A bookmark with a doubled slash is still inside the folder dragged.
+    assert.equal(Model.planTransfer(["/work/project"], "/work//project/sub/", "copy", [], { "/work/project": true }).error, "Cannot put project inside itself")
+    assert.deepEqual(Model.planTransfer(["/work/a.txt"], "/work/./", "move", [], {}).jobs, [])
   })
 })
 
