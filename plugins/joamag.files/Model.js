@@ -142,6 +142,12 @@ function num(value) {
   return isFinite(n) ? n : NaN
 }
 
+// MAP's own value for KEY, never one every object inherits: a file named
+// "notes.constructor" is a plain file.
+function ownValue(map, key) {
+  return Object.prototype.hasOwnProperty.call(map, key) ? map[key] : undefined
+}
+
 // ---------- Paths ----------
 
 // Collapses repeated slashes, "." and ".." and the trailing slash, so two
@@ -314,7 +320,7 @@ var MONTH_INDEX = { Jan: 0, Feb: 1, Mar: 2, Apr: 3, May: 4, Jun: 5, Jul: 6, Aug:
 // modified }, inner without leading or trailing slashes.
 function parseArchiveListing(raw, nowMs) {
   var now = new Date(num(nowMs) || Date.now())
-  var byPath = {}
+  var byPath = Object.create(null)
   var out = []
   var lines = String(raw || "").split("\n")
   var re = /^(\S)\S*\s+\d+\s+\S+\s+\S+\s+(\d+)\s+([A-Z][a-z]{2})\s+(\d{1,2})\s+(\d{1,2}:\d{2}|\d{4})\s(.+)$/
@@ -391,7 +397,7 @@ function archiveSummary(members, limit) {
 // holding a single top folder unpacks as that folder, the rest into a
 // folder named after the archive, either way under a free name.
 function extractTarget(members, archiveName, names) {
-  var tops = {}
+  var tops = Object.create(null)
   var count = 0
   var single = null
   for (var i = 0; i < (members || []).length; i++) {
@@ -825,18 +831,18 @@ function extensionOf(name) {
 
 function kindOf(name, dir) {
   if (dir) return "dir"
-  return EXTENSIONS[extensionOf(name)] || "file"
+  return ownValue(EXTENSIONS, extensionOf(name)) || "file"
 }
 
 function typeLabel(entry) {
   if (!entry) return ""
   if (entry.dir) return "Folder"
   var ext = extensionOf(entry.name)
-  return typeFor(ext, EXTENSIONS[ext] || "file")
+  return typeFor(ext, ownValue(EXTENSIONS, ext) || "file")
 }
 
 function typeFor(ext, kind) {
-  if (TYPE_LABELS[ext]) return TYPE_LABELS[ext]
+  if (ownValue(TYPE_LABELS, ext)) return TYPE_LABELS[ext]
   if (kind === "image" && ext !== "") return ext.toUpperCase() + " image"
   return KIND_LABELS[kind]
 }
@@ -941,7 +947,7 @@ function makeEntry(fields) {
   var dir = fields.dir === true
   var lower = name.toLowerCase()
   var ext = dir ? "" : extensionOf(name)
-  var kind = dir ? "dir" : (EXTENSIONS[ext] || "file")
+  var kind = dir ? "dir" : (ownValue(EXTENSIONS, ext) || "file")
   return {
     name: name,
     path: path,
@@ -1396,7 +1402,7 @@ function slotOffset(index, shift, columns) {
 // The first free "name (copy).ext", "name (copy 2).ext" ... Folders and dot
 // files keep their whole name as the stem.
 function uniqueName(names, name, dir) {
-  var taken = {}
+  var taken = Object.create(null)
   for (var i = 0; i < (names || []).length; i++) taken[names[i]] = true
   if (!taken[name]) return name
   var stem = name

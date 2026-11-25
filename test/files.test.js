@@ -76,6 +76,15 @@ describe("num", () => {
   })
 })
 
+describe("ownValue", () => {
+  it("reads a map's own keys and never what every object inherits", () => {
+    assert.equal(Model.ownValue({ md: "text" }, "md"), "text")
+    assert.equal(Model.ownValue({ md: "text" }, "txt"), undefined)
+    assert.equal(Model.ownValue({ md: "text" }, "constructor"), undefined)
+    assert.equal(Model.ownValue({ md: "text" }, "__proto__"), undefined)
+  })
+})
+
 describe("normalizePath", () => {
   it("collapses slashes, dots and the trailing slash", () => {
     assert.equal(Model.normalizePath("/home//joamag/./Downloads/"), "/home/joamag/Downloads")
@@ -291,6 +300,12 @@ describe("parseArchiveListing", () => {
     assert.ok(Number.isNaN(members[0].size))
   })
 
+  it("keeps members named like what objects inherit", () => {
+    const odd = Model.parseArchiveListing("-rw-r--r-- 0 a b 1 Jan  1  2024 toString\n-rw-r--r-- 0 a b 2 Jan  1  2024 __proto__/x", LISTING_NOW)
+    assert.deepEqual(odd.map((m) => m.inner), ["toString", "__proto__", "__proto__/x"])
+    assert.equal(odd[0].size, 1)
+  })
+
   it("starts empty", () => {
     assert.deepEqual(Model.parseArchiveListing("", LISTING_NOW), [])
     assert.ok(Model.parseArchiveListing("-rw-r--r--  0 a b 1 Jan  1 10:00 x", undefined).length === 1)
@@ -321,6 +336,9 @@ describe("extractTarget", () => {
     const single = Model.parseArchiveListing("-rw-r--r-- 0 a b 1 Jan  1  2024 proj/a.txt\n-rw-r--r-- 0 a b 1 Jan  1  2024 proj/b.txt", LISTING_NOW)
     assert.deepEqual(Model.extractTarget(single, "proj-1.0.tar.gz", []), { name: "proj", strip: 1 })
     assert.deepEqual(Model.extractTarget(single, "proj-1.0.tar.gz", ["proj"]), { name: "proj (copy)", strip: 1 })
+    // A top folder named like what objects inherit is counted too.
+    const odd = Model.parseArchiveListing("-rw-r--r-- 0 a b 1 Jan  1  2024 constructor/a.txt\n-rw-r--r-- 0 a b 1 Jan  1  2024 constructor/b.txt", LISTING_NOW)
+    assert.deepEqual(Model.extractTarget(odd, "odd.zip", []), { name: "constructor", strip: 1 })
   })
 
   it("unpacks anything else into a folder named after the archive", () => {
@@ -877,6 +895,7 @@ describe("kindOf", () => {
     assert.equal(Model.kindOf("a.qml", false), "code")
     assert.equal(Model.kindOf("a.woff2", false), "font")
     assert.equal(Model.kindOf("a.weird", false), "file")
+    assert.equal(Model.kindOf("notes.constructor", false), "file")
   })
 })
 
@@ -887,6 +906,7 @@ describe("typeLabel", () => {
     assert.equal(Model.typeLabel(entry("shot.png")), "PNG image")
     assert.equal(Model.typeLabel(entry("talk.mkv")), "Video")
     assert.equal(Model.typeLabel(entry("blob")), "File")
+    assert.equal(Model.typeLabel(entry("notes.toString")), "File")
     assert.equal(Model.typeLabel(null), "")
   })
 })
@@ -897,6 +917,7 @@ describe("typeFor", () => {
     assert.equal(Model.typeFor("webp", "image"), "WEBP image")
     assert.equal(Model.typeFor("", "image"), "Image")
     assert.equal(Model.typeFor("iso", "disc"), "Disk image")
+    assert.equal(Model.typeFor("valueOf", "file"), "File")
   })
 })
 
@@ -1055,6 +1076,10 @@ describe("makeEntry", () => {
       lower: ".notes 2.md", key: ".notes 0000000000000002.md", origin: "", trashName: "",
     })
     assert.equal(Model.makeEntry({ path: "/x/plain" }).key, "plain")
+    // A name that matches what objects inherit is still a plain file.
+    const odd = Model.makeEntry({ path: "/x/notes.constructor" })
+    assert.equal(odd.kind, "file")
+    assert.equal(odd.type, "File")
   })
 
   it("leaves folders without a size", () => {
@@ -1625,6 +1650,7 @@ describe("uniqueName", () => {
   it("returns a free name unchanged", () => {
     assert.equal(Model.uniqueName(["b.txt"], "a.txt", false), "a.txt")
     assert.equal(Model.uniqueName(null, "a.txt", false), "a.txt")
+    assert.equal(Model.uniqueName([], "constructor", true), "constructor")
   })
 
   it("adds (copy) before the extension, then numbers", () => {
