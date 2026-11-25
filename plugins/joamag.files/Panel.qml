@@ -203,7 +203,7 @@ Panel {
   readonly property bool inArchive: archiveAt !== null
   readonly property var archiveListing: archiveAt ? archives[archiveAt.archive] || null : null
   readonly property string cacheHome: Quickshell.env("XDG_CACHE_HOME") || home + "/.cache"
-  readonly property bool shown: opened || detached
+  readonly property bool shown: opened || detached || chooser !== null
   // What Ctrl+P offers for what is typed, and a typed path as the last row.
   readonly property var jumpList: {
     if (!jumpOpen) return []
@@ -2028,6 +2028,8 @@ Panel {
       }
       if (clash.files.length > 0) {
         chooserClash = { paths: paths, files: clash.files }
+        // The card's keys go through the view, not the name.
+        focusRequested("view")
         return
       }
     }
@@ -2039,7 +2041,11 @@ Panel {
   function resolveChooserClash(how) {
     var clash = chooserClash
     chooserClash = null
-    if (!clash || how === "skip") return
+    if (!clash) return
+    if (how === "skip") {
+      focusRequested(chooser && chooser.kind === "save" ? "chooser" : "view")
+      return
+    }
     answerChooser(0, how === "keep" ? Model.chooserKeepBoth(folderEntries, clash.paths) : clash.paths)
   }
 
@@ -3312,12 +3318,15 @@ Panel {
                 visible: root.chooser !== null && root.chooser.kind === "save"
                 width: chooserRow.fieldWidth
                 height: Style.spacing.controlHeight
+                // The stem stays picked while the window takes the focus.
+                persistentSelection: true
                 foreground: viewRoot.foreground
                 font.family: root.fontFamily
                 text: root.chooserName
                 onTextChanged: if (text !== root.chooserName) root.chooserName = text
                 Keys.onPressed: function(event) {
-                  if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
+                  var ctrl = (event.modifiers & Qt.ControlModifier) !== 0
+                  if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter || (ctrl && event.key === Qt.Key_S)) {
                     root.acceptChooser(null)
                     event.accepted = true
                   } else if (event.key === Qt.Key_Escape) {
@@ -7140,7 +7149,7 @@ Panel {
     // Esc or a click beside the card: a dialog goes back to its name, a
     // copy stops.
     function back() {
-      if (root.chooserClash) root.chooserClash = null
+      if (root.chooserClash) root.resolveChooserClash("skip")
       else root.cancelConflicts()
     }
 

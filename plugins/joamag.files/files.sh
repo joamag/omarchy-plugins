@@ -974,7 +974,7 @@ keys_block() {
 # Hyprland config so it can be taken out again.
 rule_block() {
   printf '%s\n' "$RULE_BEGIN" \
-    'o.window({ class = "^org.quickshell$", title = "^Files chooser · " }, { tag = "+floating-window" })' \
+    'o.window({ class = "^org.quickshell$", title = "^Files chooser · .*" }, { tag = "+floating-window" })' \
     "$RULE_END"
 }
 

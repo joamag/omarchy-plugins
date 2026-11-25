@@ -3365,7 +3365,7 @@ esac`)
     assert.equal(fs.readFileSync(m.files.hyprland, "utf8"), mine + [
       "",
       "-- joamag.files: the Files chooser floats over the app that asked (its File chooser setting adds and removes these lines)",
-      'o.window({ class = "^org.quickshell$", title = "^Files chooser · " }, { tag = "+floating-window" })',
+      'o.window({ class = "^org.quickshell$", title = "^Files chooser · .*" }, { tag = "+floating-window" })',
       "-- joamag.files: end",
       "",
     ].join("\n"))
