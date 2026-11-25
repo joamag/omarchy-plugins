@@ -733,6 +733,22 @@ function tabForward(tab) {
   return { path: tab.history[tab.pos + 1], view: tab.view, history: tab.history, pos: tab.pos + 1 }
 }
 
+// A location as a plain path: inside an archive, the archive file stands
+// for the folder it opens as.
+function walkable(path) {
+  var inside = splitArchive(path)
+  if (!inside) return String(path || "")
+  return inside.archive + (inside.inner !== "" ? "/" + inside.inner : "")
+}
+
+// Which way a move goes, for the views to slide the new folder in from that
+// side: out to a folder it was in (-1), or anywhere else (1).
+function moveDirection(from, to) {
+  var a = walkable(from)
+  var b = walkable(to)
+  return a !== b && isUnder(a, b) ? -1 : 1
+}
+
 function withView(tab, view) {
   return { path: tab.path, view: normalizeView(view), history: tab.history, pos: tab.pos }
 }
@@ -1068,6 +1084,43 @@ function sameListing(a, b) {
   return true
 }
 
+// The actions that take their entries out of the folder on screen, which
+// fade as they run.
+var LEAVES = ["trash", "delete", "purge", "restore"]
+
+var SETTLE_MAX = 24
+
+// How the folder on screen changed when read again, for its rows to settle
+// from where they were: by path, how many places each entry still there
+// moved (shifts, only those that moved), and the entries that are new
+// (arrived). null when nothing came or went, or more than MAX did: a
+// listing that changed that much is shown as it is.
+function settleMoves(before, after, max) {
+  var limit = max || SETTLE_MAX
+  var was = before || []
+  var now = after || []
+  var at = Object.create(null)
+  var i
+  for (i = 0; i < was.length; i++) at[was[i].path] = i
+  var shifts = {}
+  var arrived = {}
+  var kept = 0
+  var changes = 0
+  for (i = 0; i < now.length; i++) {
+    var path = now[i].path
+    if (at[path] === undefined) {
+      arrived[path] = true
+      changes++
+    } else {
+      kept++
+      if (at[path] !== i) shifts[path] = at[path] - i
+    }
+  }
+  changes += was.length - kept
+  if (changes === 0 || changes > limit) return null
+  return { shifts: shifts, arrived: arrived }
+}
+
 var LISTING_CACHE_MAX = 32
 var LISTING_CACHE_BIG = 5000
 
@@ -1278,6 +1331,14 @@ function revealOffset(offset, start, end, last, view) {
   if (end - x > view) x = end - view
   if (start < x) x = start
   return Math.max(0, x)
+}
+
+// Where a grid tile at INDEX was, in tiles across and rows down from where
+// it is, after it moved SHIFT places back in a grid COLUMNS wide.
+function slotOffset(index, shift, columns) {
+  var c = Math.max(1, Math.floor(columns) || 1)
+  var from = index + (shift || 0)
+  return { x: (from % c) - (index % c), y: Math.floor(from / c) - Math.floor(index / c) }
 }
 
 // ---------- Copy, move and name conflicts ----------

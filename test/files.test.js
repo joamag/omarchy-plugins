@@ -724,6 +724,33 @@ describe("tabForward", () => {
   })
 })
 
+describe("walkable", () => {
+  it("reads an archive as the folder it opens as", () => {
+    assert.equal(Model.walkable(`${HOME}/Downloads`), `${HOME}/Downloads`)
+    assert.equal(Model.walkable(Model.archiveLocation(ZIP, "")), ZIP)
+    assert.equal(Model.walkable(Model.archiveLocation(ZIP, "docs/sub")), `${ZIP}/docs/sub`)
+    assert.equal(Model.walkable(Model.TRASH), Model.TRASH)
+    assert.equal(Model.walkable(null), "")
+  })
+})
+
+describe("moveDirection", () => {
+  it("goes back out to a folder it was in, and on everywhere else", () => {
+    assert.equal(Model.moveDirection(HOME, `${HOME}/Downloads`), 1)
+    assert.equal(Model.moveDirection(`${HOME}/Downloads/a`, HOME), -1)
+    assert.equal(Model.moveDirection(HOME, "/"), -1)
+    assert.equal(Model.moveDirection(`${HOME}/Music`, `${HOME}/Downloads`), 1)
+    assert.equal(Model.moveDirection(HOME, HOME), 1)
+    // An archive is a folder: in from where it sits, out back to it.
+    assert.equal(Model.moveDirection(`${HOME}/Downloads`, Model.archiveLocation(ZIP, "")), 1)
+    assert.equal(Model.moveDirection(Model.archiveLocation(ZIP, "docs"), Model.archiveLocation(ZIP, "")), -1)
+    assert.equal(Model.moveDirection(Model.archiveLocation(ZIP, "docs"), `${HOME}/Downloads`), -1)
+    // Recent and the Trash are inside nothing.
+    assert.equal(Model.moveDirection(Model.TRASH, HOME), 1)
+    assert.equal(Model.moveDirection(HOME, Model.RECENT), 1)
+  })
+})
+
 describe("withView", () => {
   it("switches the view and keeps the history", () => {
     const tab = Model.navigateTab(Model.newTab("/a"), "/b")
@@ -1191,6 +1218,34 @@ describe("sameListing", () => {
   })
 })
 
+describe("settleMoves", () => {
+  const rows = (...names) => names.map((n) => entry(n))
+  const at = (n) => `${HOME}/Downloads/${n}`
+
+  it("says how far each entry moved and which ones are new", () => {
+    // b went away and e came at the end: c and d move up a place.
+    const moves = Model.settleMoves(rows("a", "b", "c", "d"), rows("a", "c", "d", "e"))
+    assert.deepEqual(moves.shifts, { [at("c")]: 1, [at("d")]: 1 })
+    assert.deepEqual(moves.arrived, { [at("e")]: true })
+    // A new one at the top pushes the rest down.
+    assert.deepEqual(Model.settleMoves(rows("b", "c"), rows("a", "b", "c")), { shifts: { [at("b")]: -1, [at("c")]: -1 }, arrived: { [at("a")]: true } })
+    // Names that are also an object's own words are paths like any other.
+    assert.deepEqual(Model.settleMoves([{ path: "constructor" }], [{ path: "toString" }, { path: "constructor" }]), { shifts: { constructor: -1 }, arrived: { toString: true } })
+  })
+
+  it("leaves alone a listing where nothing came or went, or too much did", () => {
+    // The same files, even sorted anew, change nothing.
+    assert.equal(Model.settleMoves(rows("a", "b"), rows("a", "b")), null)
+    assert.equal(Model.settleMoves(rows("a", "b"), rows("b", "a")), null)
+    assert.equal(Model.settleMoves(null, undefined), null)
+    const many = Array.from({ length: 30 }, (_, i) => `f${i}`)
+    assert.equal(Model.settleMoves(rows(...many), []), null)
+    assert.notEqual(Model.settleMoves(rows(...many), rows(...many.slice(Model.SETTLE_MAX))), null)
+    assert.equal(Model.settleMoves(rows(...many), rows(...many.slice(Model.SETTLE_MAX + 1))), null)
+    assert.equal(Model.settleMoves(rows("a"), rows("a", "b", "c"), 1), null)
+  })
+})
+
 describe("rememberListing", () => {
   it("keeps listings by path, the newest last, up to the cap", () => {
     let cache = {}
@@ -1474,6 +1529,21 @@ describe("revealOffset", () => {
     assert.equal(Model.revealOffset(500, 0, 190, 200, 400), 0)
     assert.equal(Model.revealOffset(500, 250, 400, 200, 400), 200)
     assert.equal(Model.revealOffset(-20, 0, 100, 0, 400), 0)
+  })
+})
+
+describe("slotOffset", () => {
+  it("says where a tile was, in tiles across and rows down", () => {
+    // Four across: the tile now first in the second row was second in it.
+    assert.deepEqual(Model.slotOffset(4, 1, 4), { x: 1, y: 0 })
+    // Last in the first row now, it was first in the second.
+    assert.deepEqual(Model.slotOffset(3, 1, 4), { x: -3, y: 1 })
+    // Pushed on by a new tile before it.
+    assert.deepEqual(Model.slotOffset(4, -1, 4), { x: 3, y: -1 })
+    assert.deepEqual(Model.slotOffset(2, 0, 4), { x: 0, y: 0 })
+    assert.deepEqual(Model.slotOffset(2, undefined, 4), { x: 0, y: 0 })
+    // A grid is a column wide at least.
+    assert.deepEqual(Model.slotOffset(2, 1, 0), { x: 0, y: 1 })
   })
 })
 
