@@ -383,6 +383,11 @@ Panel {
   }
 
   function newTab(path) {
+    // A tab still shrinking away goes first, so it is the one that closes.
+    if (closingTab >= 0) {
+      closeTabTimer.stop()
+      removeTab(closingTab)
+    }
     var result = Model.addTab(tabs, activeTab, Model.newTab(path || location, view))
     if (result.tabs === tabs) {
       showToast("Close a tab first: " + Model.MAX_TABS + " is the most")
@@ -1533,7 +1538,8 @@ Panel {
       }
       break
     case "trash":
-      for (i = 0; i < (ctx.entries || []).length; i++) if (ctx.entries[i].dir) list = Model.retargetTabs(list, ctx.entries[i].path, "")
+      // Only what reached the Trash; a folder that failed is still there.
+      for (i = 0; i < r.trashed.length; i++) list = Model.retargetTabs(list, r.trashed[i].path, "")
       var names = r.trashed.filter(function(t) { return t.name !== "" }).map(function(t) { return t.name })
       lastTrashed = names
       if (r.trashed.length > 0) showToast("Moved " + Model.itemsLabel(r.trashed.length, Model.baseName(r.trashed[0].path)) + " to Trash", names.length > 0 ? names : null)
@@ -1651,12 +1657,16 @@ Panel {
     }
   }
 
-  // Letters add to the name and Backspace takes one back; Esc stops. Any
-  // other key, Enter among them, stops finding and does what it always
-  // does, so Enter opens what was found.
+  // Letters add to the name and Backspace takes one back; Esc stops, and
+  // Enter stops and opens what was found, whatever else is selected. Any
+  // other key stops finding and does what it always does.
   function findKey(event) {
     var mods = event.modifiers & (Qt.ControlModifier | Qt.AltModifier | Qt.MetaModifier)
     if (event.key === Qt.Key_Escape) endFind()
+    else if (!mods && (event.key === Qt.Key_Return || event.key === Qt.Key_Enter)) {
+      endFind()
+      if (cursorEntry) openEntry(cursorEntry)
+    }
     else if (event.key === Qt.Key_Backspace && findText !== "") findTo(findText.slice(0, -1))
     else if (event.key === Qt.Key_Backspace) endFind()
     else if (!mods && event.text.length === 1 && event.text >= " " && event.text !== "\u007f") findTo(findText + event.text)
@@ -1716,6 +1726,11 @@ Panel {
   function checkFolder(target, inNewTab) {
     if (Model.isVirtual(target)) {
       openFolder(target, inNewTab)
+      return
+    }
+    // One check at a time: a folder asked for meanwhile waits its turn.
+    if (pathCheckProc.running) {
+      pathCheckProc.queued = { target: target, inNewTab: inNewTab === true }
       return
     }
     pathCheckProc.target = target
@@ -2235,7 +2250,8 @@ Panel {
 
   Process {
     id: searchProc
-    stdout: SplitParser { onRead: function(line) { root.searchBuffer.push(line) } }
+    // What a stopped search still prints belongs to the query before.
+    stdout: SplitParser { onRead: function(line) { if (!root.searchRestart) root.searchBuffer.push(line) } }
     onExited: {
       root.flushSearch()
       if (root.searchRestart) {
@@ -2308,9 +2324,13 @@ Panel {
     id: pathCheckProc
     property string target: ""
     property bool inNewTab: false
+    property var queued: null
     onExited: function(exitCode) {
       if (exitCode === 0) root.openFolder(target, inNewTab)
       else root.showToast("No folder at " + Model.prettyPath(target, root.home))
+      var next = queued
+      queued = null
+      if (next) root.checkFolder(next.target, next.inNewTab)
     }
   }
 
