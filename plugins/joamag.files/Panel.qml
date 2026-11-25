@@ -1834,15 +1834,26 @@ Panel {
   }
 
   function folderMenu() {
-    return Model.folderMenu(location, !!clipboard, showHidden, sortKey, bookmarked)
+    return Model.folderMenu(location, !!clipboard, showHidden, sortKey, bookmarked, chooser === null)
+  }
+
+  function settingsMenu() {
+    return Model.settingsMenu({ defaultFileManager: defaultManager, fileChooser: fileChooser, launcherEntry: launcherEntry })
   }
 
   // Every command, whether it came from a button, a menu or a key.
   function run(id, entry) {
+    // Settings opens its menu where the one it was picked in was.
+    var from = menu
     menu = null
     var target = entry || cursorEntry
     if (id.indexOf("sort:") === 0) {
       sortBy(id.slice(5))
+      return
+    }
+    // An integration turned on or off; the settings sync applies it.
+    if (id.indexOf("setting:") === 0) {
+      persistSetting(id.slice(8), setting(id.slice(8), false) !== true)
       return
     }
     if (id.indexOf("app:") === 0) {
@@ -1872,6 +1883,7 @@ Panel {
     case "selectall": selectAll(); break
     case "hidden": toggleHidden(); break
     case "nautilus": openNautilus(); break
+    case "settings": openMenu(settingsMenu(), from ? from.x : -1, from ? from.y : -1, null, from !== null && from.alignRight); break
     case "extracthere": if (target && Model.isArchive(target)) extractHere(target.path, target.modified); break
     case "extractall": if (inArchive) extractHere(archiveAt.archive, undefined); break
     case "extractto": askExtractTo(target); break
