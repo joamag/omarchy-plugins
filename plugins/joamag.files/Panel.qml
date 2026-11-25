@@ -261,9 +261,6 @@ Panel {
   // Every animation runs Style.duration(ms) on Style.easeOut, the shell's:
   // Hyprland's own easeOutQuint, and 0 ms when Hyprland's animations are off.
 
-  // The cursor glides from item to item; a new folder, tab or search puts
-  // it in place at once.
-  property bool cursorGlides: true
   // Entries that came or went in the folder on screen: the rest settle
   // from where they were (places moved, by path) and the new ones fade in,
   // as settle runs from 1 down to 0.
@@ -277,12 +274,6 @@ Panel {
   // The tab shrinking away before it closes, and the moment it goes.
   property int closingTab: -1
   property bool tabsSnap: false
-
-  // The next cursor change lands at once rather than gliding.
-  function holdCursorGlide() {
-    cursorGlides = false
-    Qt.callLater(function() { root.cursorGlides = true })
-  }
 
   // What changed between the listing BEFORE and the one on screen now
   // settles into place.
@@ -321,7 +312,6 @@ Panel {
   // Whatever belonged to the folder on screen (cursor, selection, filter,
   // rename) stays behind when the tab moves on.
   function resetFolderState() {
-    holdCursorGlide()
     cursorIndex = 0
     anchorIndex = 0
     selected = []
@@ -539,7 +529,6 @@ Panel {
 
   function toggleHidden() {
     persistSetting("showHidden", !showHidden)
-    holdCursorGlide()
     cursorIndex = Model.clampIndex(cursorIndex, entries.length)
   }
 
@@ -652,7 +641,6 @@ Panel {
   function search() {
     if (!inFolder || query === "") return
     deep = true
-    holdCursorGlide()
     cursorIndex = 0
     selected = []
     searchEntries = []
@@ -685,7 +673,6 @@ Panel {
     if (pendingSelect === "") return
     var idx = Model.indexOfPath(entries, pendingSelect)
     if (idx < 0) return
-    holdCursorGlide()
     cursorIndex = idx
     anchorIndex = idx
     pendingSelect = ""
@@ -1588,7 +1575,6 @@ Panel {
     deep = false
     stopSearch()
     searchEntries = []
-    holdCursorGlide()
     cursorIndex = 0
     selected = []
   }
@@ -3461,7 +3447,7 @@ Panel {
       onCurrentIndexChanged: if (currentIndex >= 0) positionViewAtIndex(currentIndex, ListView.Contain)
       onCountChanged: if (currentIndex >= 0) positionViewAtIndex(currentIndex, ListView.Contain)
 
-      // The cursor: one mark gliding from row to row, under them.
+      // The cursor: one mark under the rows, moving from row to row.
       CursorSurface {
         visible: list.count > 0
         y: root.cursorIndex * listPane.rowHeight
@@ -3469,10 +3455,6 @@ Panel {
         height: listPane.rowHeight
         foreground: listPane.foreground
         hasCursor: true
-        Behavior on y {
-          enabled: root.cursorGlides
-          NumberAnimation { duration: Style.duration(80); easing.type: Easing.Bezier; easing.bezierCurve: Style.easeOut }
-        }
       }
 
       delegate: EntryRow {
@@ -3642,7 +3624,7 @@ Panel {
     readonly property bool isCut: root.clipboard !== null && root.clipboard.mode === "cut" && root.clipboard.paths.indexOf(entry.path) >= 0
     readonly property bool renaming: root.renamePath === entry.path
 
-    // The cursor is the list's own mark, gliding under the rows.
+    // The cursor is the list's own mark, under the rows.
     CursorSurface {
       anchors.fill: parent
       foreground: row.foreground
@@ -3852,7 +3834,7 @@ Panel {
       onWidthChanged: if (gridPane.shown) root.gridColumns = Math.max(1, Math.floor(width / cellWidth))
       onVisibleChanged: if (visible) root.gridColumns = Math.max(1, Math.floor(width / cellWidth))
 
-      // The cursor: one mark gliding from tile to tile, under them.
+      // The cursor: one mark under the tiles, moving from tile to tile.
       CursorSurface {
         visible: grid.count > 0
         x: (root.cursorIndex % root.gridColumns) * grid.cellWidth + Style.space(3)
@@ -3861,14 +3843,6 @@ Panel {
         height: grid.cellHeight - Style.space(6)
         foreground: gridPane.foreground
         hasCursor: true
-        Behavior on x {
-          enabled: root.cursorGlides
-          NumberAnimation { duration: Style.duration(80); easing.type: Easing.Bezier; easing.bezierCurve: Style.easeOut }
-        }
-        Behavior on y {
-          enabled: root.cursorGlides
-          NumberAnimation { duration: Style.duration(80); easing.type: Easing.Bezier; easing.bezierCurve: Style.easeOut }
-        }
       }
 
       delegate: Item {
@@ -3906,7 +3880,7 @@ Panel {
 
         onThumbKeyChanged: if (thumbKey !== "") root.requestThumbnail(entry, 256)
 
-        // The cursor is the grid's own mark, gliding under the tiles.
+        // The cursor is the grid's own mark, under the tiles.
         CursorSurface {
           anchors.fill: parent
           anchors.margins: Style.space(3)
@@ -4238,7 +4212,7 @@ Panel {
             highlightFollowsCurrentItem: false
             onCurrentIndexChanged: if (currentIndex >= 0) positionViewAtIndex(currentIndex, ListView.Contain)
 
-            // The cursor: one mark gliding from row to row, under them.
+            // The cursor: one mark under the rows, moving from row to row.
             CursorSurface {
               visible: currentColumn.count > 0
               y: root.cursorIndex * columnsPane.rowHeight
@@ -4246,10 +4220,6 @@ Panel {
               height: columnsPane.rowHeight
               foreground: columnsPane.foreground
               hasCursor: true
-              Behavior on y {
-                enabled: root.cursorGlides
-                NumberAnimation { duration: Style.duration(80); easing.type: Easing.Bezier; easing.bezierCurve: Style.easeOut }
-              }
             }
 
             delegate: Item {
@@ -4272,7 +4242,7 @@ Panel {
               opacity: stay * (root.settle > 0 && root.arrived[entry.path] === true ? 1 - root.settle : 1)
               transform: Translate { y: root.settle > 0 ? (root.settleShifts[cell.entry.path] || 0) * root.settle * columnsPane.rowHeight : 0 }
 
-              // The cursor is the column's own mark, gliding under the rows.
+              // The cursor is the column's own mark, under the rows.
               CursorSurface {
                 anchors.fill: parent
                 foreground: columnsPane.foreground
