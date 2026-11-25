@@ -1886,7 +1886,13 @@ Panel {
 
   // Out of the bar into a window Hyprland can move, resize and tile, with
   // the same tabs; and back.
+  // While a dialog is on, the window is the dialog's: it comes to the front
+  // instead, and docking would cancel the dialog.
   function popOut() {
+    if (chooser) {
+      raiseWindow()
+      return
+    }
     windowBuilt = true
     detached = true
     window.visible = true
@@ -1896,6 +1902,10 @@ Panel {
   }
 
   function dock() {
+    if (chooser) {
+      raiseWindow()
+      return
+    }
     detached = false
     window.visible = false
     root.open()
@@ -3585,6 +3595,8 @@ Panel {
         anchors.fill: parent
         acceptedButtons: Qt.BackButton | Qt.ForwardButton
         onPressed: function(mouse) {
+          // Not while a card asks something, as with the keys.
+          if (root.confirm || root.conflictJob || root.chooserClash) return
           if (mouse.button === Qt.BackButton) root.back()
           else root.forward()
         }
