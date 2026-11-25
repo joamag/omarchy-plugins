@@ -1255,8 +1255,9 @@ function rangePaths(list, from, to) {
 // under the cursor when nothing is selected.
 function pickedEntries(list, selected, cursor) {
   var out = []
-  var sel = selected || []
-  for (var i = 0; i < (list || []).length; i++) if (sel.indexOf(list[i].path) >= 0) out.push(list[i])
+  var sel = Object.create(null)
+  for (var j = 0; j < (selected || []).length; j++) sel[selected[j]] = true
+  for (var i = 0; i < (list || []).length; i++) if (sel[list[i].path]) out.push(list[i])
   if (out.length === 0 && list && cursor >= 0 && cursor < list.length) out.push(list[cursor])
   return out
 }
@@ -1273,8 +1274,10 @@ function entriesFor(picked, entry) {
 
 // Drop selected paths that are no longer listed, after a refresh.
 function keepSelected(selected, list) {
+  var listed = Object.create(null)
+  for (var j = 0; j < (list || []).length; j++) listed[list[j].path] = true
   var out = []
-  for (var i = 0; i < (selected || []).length; i++) if (indexOfPath(list, selected[i]) >= 0) out.push(selected[i])
+  for (var i = 0; i < (selected || []).length; i++) if (listed[selected[i]]) out.push(selected[i])
   return out
 }
 
