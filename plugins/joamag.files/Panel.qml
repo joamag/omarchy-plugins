@@ -83,6 +83,9 @@ Panel {
   property int cursorIndex: 0
   property int anchorIndex: 0
   property var selected: []
+  // A key press hides the rows' hover, which looks like the cursor, until
+  // the pointer moves.
+  property bool hoverHidden: false
   // What the preview pane and the columns' last column show: the cursor
   // entry, at once for a single step, after a pause while a key is held.
   property var previewEntry: null
@@ -758,8 +761,12 @@ Panel {
     var n = entries.length
     if (n === 0) return
     var next = Model.clampIndex(cursorIndex + delta, n)
-    if (extend) selected = Model.rangePaths(entries, anchorIndex, next)
-    else anchorIndex = next
+    if (extend) {
+      selected = Model.rangePaths(entries, anchorIndex, next)
+    } else {
+      if (selected.length === 1) selected = Model.followSelection(selected, cursorEntry ? cursorEntry.path : "", entries[next].path)
+      anchorIndex = next
+    }
     cursorIndex = next
   }
 
@@ -768,10 +775,11 @@ Panel {
     anchorIndex = cursorIndex
   }
 
+  // Ctrl+Space marks the file and goes on to the next, the mark staying.
   function toggleCursorSelection() {
     if (!cursorEntry) return
     selected = Model.toggleSelected(selected, cursorEntry.path)
-    moveCursor(1, false)
+    setCursor(cursorIndex + 1)
   }
 
   // What an action applies to: the selection, or the entry under the
@@ -2149,6 +2157,7 @@ Panel {
     var shift = (event.modifiers & Qt.ShiftModifier) !== 0
     var alt = (event.modifiers & Qt.AltModifier) !== 0
     var columns = view === "grid" ? Math.max(1, gridColumns) : 1
+    hoverHidden = true
 
     if (finding && findKey(event)) return true
     // In a Save dialog, Tab goes to the name.
@@ -2775,6 +2784,20 @@ Panel {
 
     readonly property bool typing: pathField.activeFocus || filterField.activeFocus || chooserField.activeFocus || root.renamePath !== "" || root.prompt !== null || root.jumpOpen
     readonly property real rowHeight: Style.space(26)
+
+    // The pointer moving shows the rows' hover again, after the keys hid
+    // it; rows scrolling under a pointer that stays put do not. On the view
+    // itself, under the rows: above them it would keep their hover from
+    // them, and a row clicked would stay lit.
+    HoverHandler {
+      property point last: Qt.point(-1, -1)
+      onPointChanged: {
+        var p = point.scenePosition
+        if (p.x === last.x && p.y === last.y) return
+        last = p
+        root.hoverHidden = false
+      }
+    }
     // The widest the sidebar and the preview may be on screen, so the files
     // always keep some room.
     readonly property real sidebarRoom: Math.round(width / 3)
@@ -3974,33 +3997,37 @@ Panel {
       boundsBehavior: Flickable.StopAtBounds
       model: listPane.shown ? root.entries.length : 0
       reuseItems: true
-      currentIndex: root.cursorIndex
-      highlightFollowsCurrentItem: false
+      // No current item of its own: the cursor is the widget's, marked by
+      // its row, and a current item has the view lay its rows out from it
+      // after a listing of another size, moving them off where the bands
+      // measure them.
+      currentIndex: -1
 
       property real keptY: 0
+      property bool keeping: false
       Connections {
         target: root
-        function onListingWillChange() { list.keptY = list.contentY }
-        function onListingChanged() { list.contentY = list.keptY }
+        function onListingWillChange() { list.keptY = list.contentY; list.keeping = true }
+        function onListingChanged() { list.contentY = list.keptY; list.keeping = false }
+        function onCursorIndexChanged() { Qt.callLater(list.showCursor) }
       }
 
-      onCurrentIndexChanged: if (currentIndex >= 0) positionViewAtIndex(currentIndex, ListView.Contain)
-      onCountChanged: if (currentIndex >= 0) positionViewAtIndex(currentIndex, ListView.Contain)
+      // The cursor in view, followed from the widget's own: a listing of
+      // another size sends the view to its top and its current index back
+      // to 0. It waits for the view to lay the rows out again, since asked
+      // in the middle the view moves them off the cursor's mark; a refresh
+      // keeps the scroll it had.
+      function showCursor() { if (root.cursorIndex >= 0 && root.cursorIndex < count) positionViewAtIndex(root.cursorIndex, ListView.Contain) }
+      onCountChanged: if (!keeping) Qt.callLater(list.showCursor)
 
-      // The cursor: one mark under the rows, moving from row to row.
-      CursorSurface {
-        visible: list.count > 0
-        y: root.cursorIndex * listPane.rowHeight
-        width: list.width
-        height: listPane.rowHeight
-        foreground: listPane.foreground
-        hasCursor: true
-      }
-
+      // In the rows' own content, which scrolls: an item declared in a
+      // ListView sits on its frame, which does not, and the band would
+      // measure from there.
       BandBox {
         id: listBand
+        parent: list.contentItem
         flick: list
-        picks: function(from, to) { return Model.bandRows(from.y, to.y, listPane.rowHeight, list.count) }
+        picks: function(from, to) { return Model.bandRows(from.y - list.originY, to.y - list.originY, listPane.rowHeight, list.count) }
       }
 
       delegate: EntryRow {
@@ -4212,8 +4239,8 @@ Panel {
     function follow(point) {
       if (!held) return
       end = point
-      if (flick && point.y < flick.contentY) flick.contentY = Math.max(0, point.y)
-      else if (flick && point.y > flick.contentY + flick.height) flick.contentY = Math.min(Math.max(0, flick.contentHeight - flick.height), point.y - flick.height)
+      if (flick && point.y < flick.contentY) flick.contentY = Math.max(flick.originY, point.y)
+      else if (flick && point.y > flick.contentY + flick.height) flick.contentY = Math.min(flick.originY + Math.max(0, flick.contentHeight - flick.height), point.y - flick.height)
       if (!drawn && Math.abs(end.x - start.x) + Math.abs(end.y - start.y) < Style.space(8)) return
       drawn = true
       root.selected = Model.bandSelection(root.entries, picks(start, end), kept)
@@ -4245,12 +4272,14 @@ Panel {
     readonly property bool isCut: root.clipboard !== null && root.clipboard.mode === "cut" && root.clipboard.paths.indexOf(entry.path) >= 0
     readonly property bool renaming: root.renamePath === entry.path
 
-    // The cursor is the list's own mark, under the rows.
+    // The cursor, the hover and the selection on the row itself, so they
+    // go wherever the row goes: scrolled, reused for another file, settling
+    // or fading.
     CursorSurface {
       anchors.fill: parent
       foreground: row.foreground
       current: row.isSelected && !row.isCursor
-      hasCursor: !row.isCursor && (mouse.containsMouse || drop.containsDrag)
+      hasCursor: row.isCursor || (mouse.containsMouse && !root.hoverHidden) || drop.containsDrag
     }
 
     Row {
@@ -4444,35 +4473,30 @@ Panel {
       cellHeight: Style.space(124)
       model: gridPane.shown ? root.entries.length : 0
       reuseItems: true
-      currentIndex: root.cursorIndex
-      highlightFollowsCurrentItem: false
+      // No current item of its own, as in the list.
+      currentIndex: -1
 
       property real keptY: 0
+      property bool keeping: false
       Connections {
         target: root
-        function onListingWillChange() { grid.keptY = grid.contentY }
-        function onListingChanged() { grid.contentY = grid.keptY }
+        function onListingWillChange() { grid.keptY = grid.contentY; grid.keeping = true }
+        function onListingChanged() { grid.contentY = grid.keptY; grid.keeping = false }
+        function onCursorIndexChanged() { Qt.callLater(grid.showCursor) }
       }
 
-      onCurrentIndexChanged: if (currentIndex >= 0) positionViewAtIndex(currentIndex, GridView.Contain)
+      // The cursor in view, as the list keeps it.
+      function showCursor() { if (root.cursorIndex >= 0 && root.cursorIndex < count) positionViewAtIndex(root.cursorIndex, GridView.Contain) }
+      onCountChanged: if (!keeping) Qt.callLater(grid.showCursor)
       onWidthChanged: if (gridPane.shown) root.gridColumns = Math.max(1, Math.floor(width / cellWidth))
       onVisibleChanged: if (visible) root.gridColumns = Math.max(1, Math.floor(width / cellWidth))
 
-      // The cursor: one mark under the tiles, moving from tile to tile.
-      CursorSurface {
-        visible: grid.count > 0
-        x: (root.cursorIndex % root.gridColumns) * grid.cellWidth + Style.space(3)
-        y: Math.floor(root.cursorIndex / root.gridColumns) * grid.cellHeight + Style.space(3)
-        width: grid.cellWidth - Style.space(6)
-        height: grid.cellHeight - Style.space(6)
-        foreground: gridPane.foreground
-        hasCursor: true
-      }
-
+      // In the tiles' own content, as the list's band is.
       BandBox {
         id: gridBand
+        parent: grid.contentItem
         flick: grid
-        picks: function(from, to) { return Model.bandTiles(from.x, from.y, to.x, to.y, grid.cellWidth, grid.cellHeight, root.gridColumns, grid.count, Style.space(3)) }
+        picks: function(from, to) { return Model.bandTiles(from.x - grid.originX, from.y - grid.originY, to.x - grid.originX, to.y - grid.originY, grid.cellWidth, grid.cellHeight, Math.max(1, Math.floor(grid.width / grid.cellWidth)), grid.count, Style.space(3)) }
       }
 
       delegate: Item {
@@ -4510,13 +4534,14 @@ Panel {
 
         onThumbKeyChanged: if (thumbKey !== "") root.requestThumbnail(entry, 256)
 
-        // The cursor is the grid's own mark, under the tiles.
+        // The cursor, the hover and the selection on the tile itself, as
+        // on a list's row.
         CursorSurface {
           anchors.fill: parent
           anchors.margins: Style.space(3)
           foreground: gridPane.foreground
           current: tile.isSelected && !tile.isCursor
-          hasCursor: !tile.isCursor && (tileMouse.containsMouse || tileDrop.containsDrag)
+          hasCursor: tile.isCursor || (tileMouse.containsMouse && !root.hoverHidden) || tileDrop.containsDrag
         }
 
         Column {
@@ -4844,24 +4869,23 @@ Panel {
             boundsBehavior: Flickable.StopAtBounds
             model: columnsPane.shown ? root.entries.length : 0
             reuseItems: true
-            currentIndex: root.cursorIndex
-            highlightFollowsCurrentItem: false
-            onCurrentIndexChanged: if (currentIndex >= 0) positionViewAtIndex(currentIndex, ListView.Contain)
+            // No current item of its own, as in the list.
+            currentIndex: -1
 
-            // The cursor: one mark under the rows, moving from row to row.
-            CursorSurface {
-              visible: currentColumn.count > 0
-              y: root.cursorIndex * columnsPane.rowHeight
-              width: currentColumn.width
-              height: columnsPane.rowHeight
-              foreground: columnsPane.foreground
-              hasCursor: true
+            // The cursor in view, as the list keeps it.
+            Connections {
+              target: root
+              function onCursorIndexChanged() { Qt.callLater(currentColumn.showCursor) }
             }
+            function showCursor() { if (root.cursorIndex >= 0 && root.cursorIndex < count) positionViewAtIndex(root.cursorIndex, ListView.Contain) }
+            onCountChanged: Qt.callLater(currentColumn.showCursor)
 
+            // In the rows' own content, as the list's band is.
             BandBox {
               id: columnBand
+              parent: currentColumn.contentItem
               flick: currentColumn
-              picks: function(from, to) { return Model.bandRows(from.y, to.y, columnsPane.rowHeight, currentColumn.count) }
+              picks: function(from, to) { return Model.bandRows(from.y - currentColumn.originY, to.y - currentColumn.originY, columnsPane.rowHeight, currentColumn.count) }
             }
 
             // Empty space below the rows: click clears the selection, a
@@ -4896,12 +4920,13 @@ Panel {
               opacity: stay * (root.settle > 0 && root.arrived[entry.path] === true ? 1 - root.settle : 1)
               transform: Translate { y: root.settle > 0 ? (root.settleShifts[cell.entry.path] || 0) * root.settle * columnsPane.rowHeight : 0 }
 
-              // The cursor is the column's own mark, under the rows.
+              // The cursor, the hover and the selection on the row itself,
+              // as in the list.
               CursorSurface {
                 anchors.fill: parent
                 foreground: columnsPane.foreground
                 current: !cell.isCursor && root.selected.indexOf(cell.entry.path) >= 0
-                hasCursor: !cell.isCursor && (cellMouse.containsMouse || cellDrop.containsDrag)
+                hasCursor: cell.isCursor || (cellMouse.containsMouse && !root.hoverHidden) || cellDrop.containsDrag
               }
 
               Row {

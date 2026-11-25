@@ -19,7 +19,7 @@ Things move the way Hyprland's windows do, on the same easeOutQuint curve and on
 ## Interactions
 
 - Left click on the bar: open the popup, or dock the window back into it. Right click: pop out into a window or dock. Middle click: open the folder on screen in Nautilus.
-- Click selects, Ctrl+click adds to the selection, Shift+click selects a range, double click opens. Right click on an item or on empty space opens a menu.
+- Click selects, Ctrl+click adds to the selection, Shift+click selects a range, double click opens. Right click on an item or on empty space opens a menu. The highlight under the pointer hides while you use the keys, until the mouse moves again.
 - Dragging from blank space draws a rectangle that selects what it crosses: off a name in the list or a column (the size and date columns, below the rows), off the tiles in the grid. Ctrl+drag adds to the selection; dragging a name or a tile still moves the files.
 - The mouse's back and forward buttons go back and forward, as the ‹ and › buttons do.
 - A middle click or Ctrl+double click on a folder (or an archive) opens it in a new tab. In the sidebar, the path bar, the Go to card and the columns' parent folders, Ctrl+click and middle click open a new tab.
@@ -51,7 +51,7 @@ The panel keys of the other widgets and the Nautilus shortcuts both work; `?` sh
 
 | Keys | Does |
 |---|---|
-| `j` `k` `↓` `↑` | Move (in the grid, the arrows move by rows) |
+| `j` `k` `↓` `↑` | Move (in the grid, the arrows move by rows); a single selected file, a clicked one, moves along, several stay |
 | `J` `K`, Shift+`↓` `↑` | Extend the selection |
 | `l`, Enter | Open (`l` only enters folders) |
 | `h`, Backspace, Alt+`↑` | Up a folder |

@@ -1310,8 +1310,9 @@ function keepSelected(selected, list) {
   return out
 }
 
-// The rows a selection band from TOP to BOTTOM (either way round, in the
-// list's own terms) crosses, in a list of COUNT rows ROW high.
+// The rows a selection band from TOP to BOTTOM (either way round, measured
+// from the top of the list's first row) crosses, in a list of COUNT rows
+// ROW high.
 function bandRows(top, bottom, row, count) {
   var out = []
   if (!(row > 0) || !(count > 0)) return out
@@ -1321,9 +1322,9 @@ function bandRows(top, bottom, row, count) {
   return out
 }
 
-// The tiles a selection band between two corners crosses, in a grid of
-// COLUMNS cells WIDTH by HEIGHT holding COUNT tiles, each tile MARGIN in
-// from the edges of its cell; in order.
+// The tiles a selection band between two corners (measured from the grid's
+// first cell) crosses, in a grid of COLUMNS cells WIDTH by HEIGHT holding
+// COUNT tiles, each tile MARGIN in from the edges of its cell; in order.
 function bandTiles(x0, y0, x1, y1, width, height, columns, count, margin) {
   var out = []
   if (!(width > 0) || !(height > 0) || !(columns > 0)) return out
