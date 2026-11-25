@@ -77,12 +77,20 @@ def paths_option(options, key):
     return [p.decode("utf-8", "surrogateescape") if isinstance(p, bytes) else p for p in value.get_bytestring_array()] if value else []
 
 
+def filter_key(raw):
+    """What tells one filter from another, the way the widget's model does
+    (Model.sameFilter): its label, its globs and its MIME types, each in
+    their order."""
+    label, patterns = raw
+    return label, [p for kind, p in patterns if kind != 1 and p], [p.lower() for kind, p in patterns if kind == 1 and p]
+
+
 def filters_of(options):
     """The request's filters, its current one first when the list leaves it
     out, the way the widget's model numbers them."""
     filters = list(options.get("filters") or [])
     current = options.get("current_filter")
-    if current and current not in filters:
+    if current and filter_key(current) not in [filter_key(f) for f in filters]:
         filters.insert(0, current)
     return filters
 
@@ -202,10 +210,15 @@ class Chooser:
 
     def resend(self):
         """The requests the widget took go to it again: a shell that started
-        again lost them, and the apps still wait. One on its way already, or
-        with the GTK dialog, stays where it is."""
+        again lost them, and the apps still wait. One on its way already goes
+        again once the widget has taken it; one with the GTK dialog stays
+        there."""
         for ident, entry in list(self.pending.items()):
-            if not entry["asking"] and not entry["forwarded"]:
+            if entry["forwarded"]:
+                continue
+            if entry["asking"]:
+                entry["resend"] = True
+            else:
                 self.ask(ident)
 
     def asked(self, process, result, ident):
@@ -224,6 +237,10 @@ class Chooser:
         entry["asking"] = False
         if not entry["forwarded"] and (not process.get_successful() or (out or "").strip() != "ok"):
             self.forward(ident)
+        elif entry.pop("resend", False):
+            # Asked for again while on its way: the shell that took it may
+            # be the one that went.
+            self.ask(ident)
 
     def forward(self, ident):
         entry = self.pending[ident]

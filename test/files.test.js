@@ -3737,8 +3737,8 @@ describe("filechooser.py", () => {
   // app gives up on, one it gives up on while the widget is still taking
   // it, one with choices the GTK dialog shows until the app gives up on it
   // too, one the widget is asked for again as if the shell had restarted,
-  // opens and saves while the widget is down, then answers that come too
-  // late or make no sense.
+  // while it was still taking it and after, opens and saves while the
+  // widget is down, then answers that come too late or make no sense.
   const DRIVER = String.raw`
 set -u
 dir=$1
@@ -3777,11 +3777,15 @@ ask SaveFile w "Wait" "{'choices': <[('encoding', 'Encoding', [('utf8', 'UTF-8')
 until_true 'grep -q "^SaveFile Wait$" "$dir/gtk.log" 2>/dev/null' || exit 1
 close w
 until_true '[[ -s $dir/choices.out ]]' || exit 1
-ask OpenFile r "Open" "{}" > "$dir/resent.out" &
-until_true 'grep -q "^took 6$" "$dir/log"' || exit 1
+touch "$dir/slow"
+ask OpenFile r "Open" "{'filters': <[('Docs', [(uint32 0, '*.note'), (uint32 1, 'application/pdf')]), ('Images', [(uint32 0, '*.png')])]>, 'current_filter': <('Docs', [(uint32 1, 'application/pdf'), (uint32 0, '*.note')])>}" > "$dir/resent.out" &
+until_true 'grep -q "^joamag.files choose 6 " "$dir/log"' || exit 1
 "$dir/filechooser.py" resend > "$dir/resend.out"
+rm "$dir/slow"
 until_true '[[ $(grep -c "^took 6$" "$dir/log") == 2 ]]' || exit 1
-"$dir/filechooser.py" answer 6 1 -1
+"$dir/filechooser.py" resend >> "$dir/resend.out"
+until_true '[[ $(grep -c "^took 6$" "$dir/log") == 3 ]]' || exit 1
+"$dir/filechooser.py" answer 6 0 1 /srv/a.png
 until_true '[[ -s $dir/resent.out ]]' || exit 1
 touch "$dir/down"
 ask OpenFile c "Upload" "{}" > "$dir/gtk.out"
@@ -3852,10 +3856,15 @@ while [[ -e "${dir}/slow" ]]; do sleep 0.02; done; echo ok; printf 'took %s\\n' 
     // Choices went to the GTK dialog, closed there for the app.
     assert.ok(!after.some((l) => l.startsWith("joamag.files choose 5 ")))
     assert.equal(read("choices.out"), "(uint32 2, @a{sv} {})")
-    // Asked again, the widget got the one it had taken a second time, and
-    // none of the ones that had ended; without the service, nothing to ask.
-    assert.deepEqual(after.filter((l) => /^joamag\.files choose \d+ /.test(l)).map((l) => l.split(" ")[2]), ["1", "2", "3", "4", "6", "6", "7", "8"])
-    assert.equal(read("resent.out"), "(uint32 1, @a{sv} {})")
+    // Asked again while it was taking it, then after, the widget got the
+    // one it had taken twice more, and none of the ones that had ended;
+    // without the service, nothing to ask.
+    assert.deepEqual(after.filter((l) => /^joamag\.files choose \d+ /.test(l)).map((l) => l.split(" ")[2]), ["1", "2", "3", "4", "6", "6", "6", "7", "8"])
+    // Its current filter, the first one with its patterns in another order,
+    // was not added, so both number the filters the same way.
+    const resent = Model.chooserRequest(choose(6), "/home/u")
+    assert.deepEqual([resent.filters.map((f) => f.label), resent.filter], [["Docs", "Images"], 0])
+    assert.equal(read("resent.out"), "(uint32 0, {'uris': <['file:///srv/a.png']>, 'current_filter': <('Images', [(uint32 0, '*.png')])>})")
     assert.equal(read("resend.out") + read("none.out"), "")
     assert.equal(read("gtk.out"), "(uint32 0, {'uris': <['file:///from/gtk/OpenFile/Upload']>})")
     assert.equal(read("gtk-many.out"), "(uint32 0, {'uris': <['file:///from/gtk/SaveFiles/Export']>})")
