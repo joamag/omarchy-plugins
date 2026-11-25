@@ -2378,6 +2378,8 @@ exit \${FAKE_PY_STATUS:-0}`)
       offers: ["text/uri-list", "text/plain;charset=utf-8", "image/png"],
       selection: "clipboard",
       data: { "text/uri-list": "file:///a%20b\r\n", "text/plain;charset=utf-8": "/a b", "image/png": "PNG\u0000DATA" },
+      // The offer of its own selection is let go, as every offer is.
+      released: [0xff000000],
     })
   })
 
@@ -2391,6 +2393,7 @@ exit \${FAKE_PY_STATUS:-0}`)
     assert.equal(seen.version, 2)
     assert.equal(seen.selection, "primary")
     assert.deepEqual(seen.data, { "text/plain": "/a b" })
+    assert.deepEqual(seen.released, [0xff000000])
   })
 
   it("tells the caller to fall back when there is no data-control or no session", async (t) => {

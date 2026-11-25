@@ -190,6 +190,10 @@ def main(argv):
         elif obj == SOURCE and opcode == 0:
             mime, _ = read_string(body, 0)
             write_all(conn.fds.pop(0), data.get(mime, b""))
+        elif obj == DEVICE and opcode == 0:
+            # Every selection in the seat comes as a new offer; this process
+            # only gives, so each one is let go as it comes.
+            conn.send(message(struct.unpack_from("=I", body)[0], 1))
         elif obj == SOURCE and opcode == 1:
             # Another app took the clipboard.
             return 0

@@ -3,7 +3,9 @@
 # A compositor stand-in for the files widget's clipboard.py: it advertises a
 # seat and a data-control manager, takes the clipboard the helper sets, asks
 # for every format offered through a pipe the way a pasting app does, then
-# hands the clipboard to someone else. What it saw goes to stdout as JSON.
+# hands the clipboard to someone else. On the way it offers the helper the
+# new selection, as every client of the seat is, and notes the offers let
+# go. What it saw goes to stdout as JSON.
 #
 # Usage: fake_compositor.py SOCKET MANAGER   (MANAGER "none" advertises none)
 
@@ -40,8 +42,11 @@ def main(path, manager):
     conn, _ = server.accept()
     advertised = [(1, "wl_seat", 9)] + ([(2, manager, 2)] if manager != "none" else [])
     kinds = {1: "display"}
-    seen = {"manager": None, "version": None, "offers": [], "selection": None, "data": {}}
+    seen = {"manager": None, "version": None, "offers": [], "selection": None, "data": {}, "released": []}
     source = None
+    device = None
+    # The compositor's own object ids start here.
+    offer = 0xFF000000
     buffer = b""
     while True:
         if len(buffer) < 8 or len(buffer) < struct.unpack_from("=IHH", buffer)[2]:
@@ -64,7 +69,10 @@ def main(path, manager):
             conn.sendall(message(callback, 0, uint(0)))
             if seen["selection"] is None:
                 continue
-            # The clipboard is set: paste every format, then take it away.
+            # The clipboard is set: every client of the seat gets it offered.
+            kinds[offer] = "offer"
+            conn.sendall(message(device, 0, uint(offer)) + message(device, 1, uint(offer)))
+            # Then paste every format, and take it away.
             for mime in seen["offers"]:
                 read, write = os.pipe()
                 conn.sendmsg([message(source, 0, string(mime))], [(socket.SOL_SOCKET, socket.SCM_RIGHTS, array.array("i", [write]))])
@@ -89,11 +97,14 @@ def main(path, manager):
             source = struct.unpack_from("=I", body)[0]
             kinds[source] = "source"
         elif kind == "manager" and opcode == 1:
-            kinds[struct.unpack_from("=I", body)[0]] = "device"
+            device = struct.unpack_from("=I", body)[0]
+            kinds[device] = "device"
         elif kind == "source" and opcode == 0:
             seen["offers"].append(read_string(body, 0)[0])
         elif kind == "device" and opcode in (0, 2):
             seen["selection"] = "clipboard" if opcode == 0 else "primary"
+        elif kind == "offer" and opcode == 1:
+            seen["released"].append(obj)
     print(json.dumps(seen))
 
 
