@@ -1271,6 +1271,15 @@ function rangePaths(list, from, to) {
   return out
 }
 
+// The selection after a plain cursor move FROM one path TO another: a
+// single file picked at the cursor (clicked, or moved with it before) goes
+// along, the way a file manager's selection does; several picked with
+// Ctrl+Space, Ctrl+click or Shift stay where they are.
+function followSelection(selected, from, to) {
+  var list = selected || []
+  return list.length === 1 && list[0] === from ? [to] : list
+}
+
 // What an action applies to: the selection in list order, or the entry
 // under the cursor when nothing is selected.
 function pickedEntries(list, selected, cursor) {

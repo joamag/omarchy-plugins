@@ -1484,6 +1484,20 @@ describe("rangePaths", () => {
   })
 })
 
+describe("followSelection", () => {
+  it("moves a single file picked at the cursor along with it", () => {
+    assert.deepEqual(Model.followSelection(["/a"], "/a", "/b"), ["/b"])
+  })
+
+  it("leaves several, one away from the cursor, or none where they are", () => {
+    const several = ["/a", "/c"]
+    assert.equal(Model.followSelection(several, "/a", "/b"), several)
+    assert.deepEqual(Model.followSelection(["/c"], "/a", "/b"), ["/c"])
+    assert.deepEqual(Model.followSelection([], "/a", "/b"), [])
+    assert.deepEqual(Model.followSelection(null, "/a", "/b"), [])
+  })
+})
+
 describe("pickedEntries", () => {
   it("returns the selection in list order", () => {
     const sel = [LISTING[3].path, LISTING[0].path]
