@@ -3587,7 +3587,8 @@ until_true eval '[[ $(wc -l < "$dir/log" 2>/dev/null) == 2 ]]' || exit 1
 
 // filechooser.py on a bus of its own, between a stand-in for the widget
 // (omarchy-shell, logging and taking each request unless told the widget
-// is down) and a stand-in for the GTK dialog it falls back to.
+// is down, slowly while told to be slow) and a stand-in for the GTK
+// dialog it falls back to, with a MIME database of its own.
 describe("filechooser.py", () => {
   const { spawnSync } = require("node:child_process")
   const ready = spawnSync("sh", ["-c", "command -v dbus-run-session && command -v gdbus && python3 -c 'from gi.repository import Gio'"]).status === 0
@@ -3606,8 +3607,11 @@ describe("filechooser.py", () => {
 </busconfig>
 `
 
-  // A save the widget answers, an open the app gives up on, an open while
-  // the widget is down, then answers that come too late or make no sense.
+  // A save the widget answers, after an answer it cannot take, an open the
+  // app gives up on, one it gives up on while the widget is still taking
+  // it, one with choices the GTK dialog shows until the app gives up on it
+  // too, opens and saves while the widget is down, then answers that come
+  // too late or make no sense.
   const DRIVER = String.raw`
 set -u
 dir=$1
@@ -3617,23 +3621,37 @@ owned() { [[ $(gdbus call --session --dest org.freedesktop.DBus --object-path /o
 # gdbus call garbles b'' byte strings, so paths go as arrays of bytes.
 ay() { printf '@ay [%s0x00]' "$(printf '%s' "$1" | od -An -tx1 -v | tr -s ' \n' '  ' | sed -E 's/ ?([0-9a-f]{2})/0x\1, /g')"; }
 ask() { gdbus call --session --dest ${NAME} --object-path /org/freedesktop/portal/desktop --method "org.freedesktop.impl.portal.FileChooser.$1" "/org/freedesktop/portal/desktop/request/1_1/$2" com.google.Chrome "" "$3" "$4"; }
-python3 "$dir/fake_gtk_chooser.py" &
+close() { gdbus call --session --dest ${NAME} --object-path "/org/freedesktop/portal/desktop/request/1_1/$1" --method org.freedesktop.impl.portal.Request.Close >/dev/null; }
+python3 "$dir/fake_gtk_chooser.py" "$dir/gtk.log" &
 "$dir/filechooser.py" &
 until_true 'owned org.freedesktop.impl.portal.desktop.gtk && owned ${NAME}' || exit 1
 ask SaveFile a "Save File" "{'current_name': <'Q4 report.pdf'>, 'current_folder': <$(ay /home/u/Downloads)>, 'filters': <[('PDF', [(uint32 0, '*.pdf')]), ('All files', [(uint32 0, '*')])]>, 'current_filter': <('All files', [(uint32 0, '*')])>}" > "$dir/save.out" &
-until_true 'grep -q "^joamag.files choose 1 " "$dir/log" 2>/dev/null' || exit 1
+until_true 'grep -q "^took 1$" "$dir/log" 2>/dev/null' || exit 1
+"$dir/filechooser.py" answer 1 0 1 "Q4 report.pdf" > "$dir/relative.out"
 "$dir/filechooser.py" answer 1 0 1 "/home/u/Q4 report.pdf"
 until_true '[[ -s $dir/save.out ]]' || exit 1
-ask OpenFile b "Open" "{'multiple': <true>, 'current_filter': <('Images', [(uint32 1, 'image/*')])>}" > "$dir/close.out" &
-until_true 'grep -q "^joamag.files choose 2 " "$dir/log"' || exit 1
-gdbus call --session --dest ${NAME} --object-path /org/freedesktop/portal/desktop/request/1_1/b --method org.freedesktop.impl.portal.Request.Close >/dev/null
+ask OpenFile b "Open" "{'multiple': <true>, 'filters': <[('Documents', [(uint32 1, 'application/x-msword'), (uint32 1, 'text/plain')])]>, 'current_filter': <('Images', [(uint32 1, 'image/*')])>}" > "$dir/close.out" &
+until_true 'grep -q "^took 2$" "$dir/log"' || exit 1
+close b
 until_true '[[ -s $dir/close.out ]] && grep -q "^joamag.files chooserClose 2$" "$dir/log"' || exit 1
-ask SaveFiles d "Save Files" "{'files': <[$(ay a.txt), $(ay 'b c.txt')]>, 'current_folder': <$(ay /srv)>, 'current_filter': <('Text', [(uint32 0, '*.txt')])>}" > "$dir/many.out" &
-until_true 'grep -q "^joamag.files choose 3 " "$dir/log"' || exit 1
+ask SaveFiles d "Save Files" "{'files': <[$(ay a.txt), $(ay 'b c.txt')]>, 'current_folder': <$(ay /srv)>, 'filters': <[('Text', [(uint32 0, '*.md')])]>, 'current_filter': <('Text', [(uint32 0, '*.txt')])>}" > "$dir/many.out" &
+until_true 'grep -q "^took 3$" "$dir/log"' || exit 1
 "$dir/filechooser.py" answer 3 0 0 /srv/a.txt "/srv/b c.txt"
 until_true '[[ -s $dir/many.out ]]' || exit 1
+touch "$dir/slow"
+ask OpenFile e "Open" "{}" > "$dir/overtaken.out" &
+until_true 'grep -q "^joamag.files choose 4 " "$dir/log"' || exit 1
+close e
+until_true '[[ -s $dir/overtaken.out ]]' || exit 1
+rm "$dir/slow"
+until_true 'grep -q "^joamag.files chooserClose 4$" "$dir/log"' || exit 1
+ask SaveFile w "Wait" "{'choices': <[('encoding', 'Encoding', [('utf8', 'UTF-8')], 'utf8')]>}" > "$dir/choices.out" &
+until_true 'grep -q "^SaveFile Wait$" "$dir/gtk.log" 2>/dev/null' || exit 1
+close w
+until_true '[[ -s $dir/choices.out ]]' || exit 1
 touch "$dir/down"
 ask OpenFile c "Upload" "{}" > "$dir/gtk.out"
+ask SaveFiles g "Export" "{'files': <[$(ay x.txt)]>}" > "$dir/gtk-many.out"
 "$dir/filechooser.py" answer 1 0 0 /late > "$dir/late.out"
 "$dir/filechooser.py" answer x > "$dir/bad.out"
 exit 0
@@ -3648,12 +3666,18 @@ exit 0
     fs.copyFileSync(path.join(pluginDir("joamag.files"), "filechooser.py"), path.join(dir, "filechooser.py"))
     fs.chmodSync(path.join(dir, "filechooser.py"), 0o755)
     fs.copyFileSync(fixturePath("fake_gtk_chooser.py"), path.join(dir, "fake_gtk_chooser.py"))
-    fakeCommand(dir, "omarchy-shell", `printf '%s\\n' "$*" >> "${dir}/log"; [[ -e "${dir}/down" ]] && exit 1; [[ $2 == choose ]] && echo ok; exit 0`)
+    fakeCommand(dir, "omarchy-shell", `printf '%s\\n' "$*" >> "${dir}/log"; [[ -e "${dir}/down" ]] && exit 1; [[ $2 == choose ]] || exit 0
+while [[ -e "${dir}/slow" ]]; do sleep 0.02; done; echo ok; printf 'took %s\\n' "$3" >> "${dir}/log"`)
+    const mime = path.join(dir, "data", "mime")
+    fs.mkdirSync(mime, { recursive: true })
+    fs.writeFileSync(path.join(mime, "globs2"), "# made for the test\n50:application/msword:*.doc\n50:text/x-python:*.py\n50:text/plain:*.txt\n40:application/msword:*.doc\n0:model/x-thing:__NOGLOBS__\n")
+    fs.writeFileSync(path.join(mime, "subclasses"), "text/x-python text/plain\n")
+    fs.writeFileSync(path.join(mime, "aliases"), "application/x-msword application/msword\n")
     fs.writeFileSync(path.join(dir, "bus.conf"), CONFIG)
     fs.writeFileSync(path.join(dir, "driver.sh"), DRIVER)
     const result = spawnSync("dbus-run-session", [`--config-file=${path.join(dir, "bus.conf")}`, "--", "bash", path.join(dir, "driver.sh"), dir], {
       timeout: 20000,
-      env: { ...process.env, PATH: `${dir}:${process.env.PATH}` },
+      env: { ...process.env, PATH: `${dir}:${process.env.PATH}`, XDG_DATA_HOME: path.join(dir, "data"), XDG_DATA_DIRS: path.join(dir, "none") },
     })
     assert.equal(result.status, 0, String(result.stderr))
     const read = (name) => fs.readFileSync(path.join(dir, name), "utf8").trim()
@@ -3666,16 +3690,37 @@ exit 0
       filters: [["PDF", [[0, "*.pdf"]]], ["All files", [[0, "*"]]]], currentFilter: ["All files", [[0, "*"]]], files: [],
     })
     assert.equal(Model.chooserRequest(request, "/home/u").filter, 1)
-    // Its answer went back as a file URI with the filter on screen.
+    // A path that is not absolute was turned down, and the right answer
+    // after it went back as a file URI with the filter on screen.
+    assert.match(read("relative.out"), /^error\t.*relative path/)
     assert.equal(read("save.out"), "(uint32 0, {'uris': <['file:///home/u/Q4%20report.pdf']>, 'current_filter': <('All files', [(uint32 0, '*')])>})")
+    // The MIME types of a filter came with the names of their files and
+    // of the types that are kinds of them; image/* the widget knows.
+    const choose = (id) => JSON.parse(lines.find((l) => l.startsWith(`joamag.files choose ${id} `)).split(" ").slice(3).join(" "))
+    const open = choose(2)
+    assert.deepEqual(open.filters, [["Documents", [[1, "application/x-msword"], [1, "text/plain"], [0, "*.doc"], [0, "*.py"], [0, "*.txt"]]]])
+    assert.deepEqual(open.currentFilter, ["Images", [[1, "image/*"]]])
+    const documents = Model.chooserRequest(open, "/home/u").filters[1]
+    assert.deepEqual(["report.doc", "tool.py", "a.pdf"].map((name) => Model.filterTakes(documents, entry(name))), [true, true, false])
     // A closed request is ended and the widget told; without the widget,
     // GTK answers.
     assert.equal(read("close.out"), "(uint32 2, @a{sv} {})")
-    const many = JSON.parse(lines.find((l) => l.startsWith("joamag.files choose 3 ")).split(" ").slice(3).join(" "))
+    const many = choose(3)
     assert.deepEqual([many.method, many.files, many.currentFolder], ["SaveFiles", ["a.txt", "b c.txt"], "/srv"])
-    // The current filter, missing from the list, came first in it.
+    // The current filter, missing from the list but for its label, came
+    // first in it.
     assert.equal(read("many.out"), "(uint32 0, {'uris': <['file:///srv/a.txt', 'file:///srv/b%20c.txt']>, 'current_filter': <('Text', [(uint32 0, '*.txt')])>})")
-    assert.equal(read("gtk.out"), "(uint32 0, {'uris': <['file:///from/gtk/Upload']>})")
+    // Closed while the widget was still taking it, the app heard at once
+    // and the widget once it had it.
+    assert.equal(read("overtaken.out"), "(uint32 2, @a{sv} {})")
+    const after = read("log").split("\n")
+    assert.ok(after.indexOf("took 4") >= 0 && after.indexOf("took 4") < after.indexOf("joamag.files chooserClose 4"), after.join("\n"))
+    // Choices went to the GTK dialog, closed there for the app.
+    assert.ok(!after.some((l) => l.startsWith("joamag.files choose 5 ")))
+    assert.equal(read("choices.out"), "(uint32 2, @a{sv} {})")
+    assert.equal(read("gtk.out"), "(uint32 0, {'uris': <['file:///from/gtk/OpenFile/Upload']>})")
+    assert.equal(read("gtk-many.out"), "(uint32 0, {'uris': <['file:///from/gtk/SaveFiles/Export']>})")
+    assert.deepEqual(read("gtk.log").split("\n"), ["SaveFile Wait", "OpenFile Upload", "SaveFiles Export"])
     assert.equal(read("late.out"), "")
     assert.equal(read("bad.out"), "error\tanswer needs an id, a response and a filter")
   })

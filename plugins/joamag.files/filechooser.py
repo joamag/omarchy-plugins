@@ -17,6 +17,7 @@
 
 import itertools
 import json
+import os
 import pathlib
 import sys
 
@@ -78,9 +79,50 @@ def filters_of(options):
     out, the way the widget's model numbers them."""
     filters = list(options.get("filters") or [])
     current = options.get("current_filter")
-    if current and current[0] not in [label for label, _ in filters]:
+    if current and current not in filters:
         filters.insert(0, current)
     return filters
+
+
+def mime_lines(name):
+    """The lines of shared-mime-info's file NAME, in every data folder."""
+    home = os.environ.get("XDG_DATA_HOME") or os.path.join(os.path.expanduser("~"), ".local", "share")
+    for folder in [home] + (os.environ.get("XDG_DATA_DIRS") or "/usr/local/share:/usr/share").split(":"):
+        try:
+            with open(os.path.join(folder, "mime", name), encoding="utf-8") as lines:
+                yield from (line.rstrip("\n") for line in lines if not line.startswith("#"))
+        except OSError:
+            pass
+
+
+def mime_globs(mimes):
+    """The names ("*.docx") of the files of MIMES, and of the types that are
+    kinds of them (text/x-python of text/plain), the way GTK matches a MIME
+    type, as shared-mime-info lists them."""
+    aliases = dict(line.split(" ", 1) for line in mime_lines("aliases") if " " in line)
+    wanted = {aliases.get(mime, mime) for mime in mimes}
+    parents = {}
+    for line in mime_lines("subclasses"):
+        child, _, parent = line.partition(" ")
+        parents.setdefault(child, set()).add(parent)
+
+    def kind(mime, seen):
+        return mime in wanted or any(kind(parent, seen | {mime}) for parent in parents.get(mime, ()) if parent not in seen)
+
+    globs = []
+    for line in mime_lines("globs2"):
+        fields = line.split(":")
+        if len(fields) >= 3 and fields[2] != "__NOGLOBS__" and fields[2] not in globs and kind(fields[1], set()):
+            globs.append(fields[2])
+    return globs
+
+
+def patterns_of(patterns):
+    """A filter's patterns as lists, with the names of the files of each
+    MIME type in it, which the widget tells files apart by; image/* and the
+    like it knows by itself."""
+    mimes = [mime for kind, mime in patterns if kind == 1 and not mime.endswith("/*")]
+    return [list(p) for p in patterns] + ([[0, glob] for glob in mime_globs(mimes)] if mimes else [])
 
 
 def describe(ident, method, app_id, title, options, raw):
@@ -98,8 +140,8 @@ def describe(ident, method, app_id, title, options, raw):
         "currentFile": path_option(raw, "current_file"),
         "multiple": bool(options.get("multiple", False)),
         "directory": bool(options.get("directory", False)),
-        "filters": [[label, [list(p) for p in patterns]] for label, patterns in options.get("filters") or []],
-        "currentFilter": [current[0], [list(p) for p in current[1]]] if current else None,
+        "filters": [[label, patterns_of(patterns)] for label, patterns in options.get("filters") or []],
+        "currentFilter": [current[0], patterns_of(current[1])] if current else None,
         "files": paths_option(raw, "files"),
     }
 
@@ -111,11 +153,17 @@ class Chooser:
         self.connection = connection
         self.request = nodes.lookup_interface(REQUEST)
         self.pending = {}
+        # Closed while on their way to the widget, which hears of it after.
+        self.closed = set()
         self.ids = itertools.count(1)
 
     def call(self, connection, sender, path, interface, method, parameters, invocation):
         if interface == ANSWERS:
-            self.answer(*parameters.unpack())
+            try:
+                self.answer(*parameters.unpack())
+            except ValueError as error:
+                invocation.return_dbus_error("org.freedesktop.DBus.Error.InvalidArgs", str(error))
+                return
             invocation.return_value(None)
             return
         handle, app_id, _parent, title, options = parameters.unpack()
@@ -123,7 +171,13 @@ class Chooser:
         # The portal closes the request here when the app gives up on it.
         registration = connection.register_object(handle, self.request, lambda *args: self.close(ident, args[-1]), None, None)
         self.pending[ident] = {"invocation": invocation, "method": method, "parameters": parameters, "handle": handle,
-                               "registration": registration, "filters": filters_of(options), "forwarded": False}
+                               "registration": registration, "filters": filters_of(options), "forwarded": False,
+                               "asking": False}
+        # The widget has no controls for an app's choices (the encoding to
+        # read a file in), which the GTK dialog shows.
+        if options.get("choices"):
+            self.forward(ident)
+            return
         request = json.dumps(describe(ident, method, app_id, title, options, parameters.get_child_value(4)))
         try:
             process = Gio.Subprocess.new(["omarchy-shell", "joamag.files", "choose", ident, request],
@@ -131,6 +185,7 @@ class Chooser:
         except GLib.Error:
             self.forward(ident)
             return
+        self.pending[ident]["asking"] = True
         process.communicate_utf8_async(None, None, self.asked, ident)
 
     def asked(self, process, result, ident):
@@ -139,8 +194,15 @@ class Chooser:
             _, out, _ = process.communicate_utf8_finish(result)
         except GLib.Error:
             out = ""
+        if ident in self.closed:
+            self.closed.discard(ident)
+            self.drop(ident)
+            return
         entry = self.pending.get(ident)
-        if entry and not entry["forwarded"] and (not process.get_successful() or (out or "").strip() != "ok"):
+        if not entry:
+            return
+        entry["asking"] = False
+        if not entry["forwarded"] and (not process.get_successful() or (out or "").strip() != "ok"):
             self.forward(ident)
 
     def forward(self, ident):
@@ -169,22 +231,36 @@ class Chooser:
             return
         self.pending.pop(ident)
         self.release(entry)
-        Gio.Subprocess.new(["omarchy-shell", "joamag.files", "chooserClose", ident],
-                           Gio.SubprocessFlags.STDOUT_SILENCE | Gio.SubprocessFlags.STDERR_SILENCE)
         entry["invocation"].return_value(GLib.Variant("(ua{sv})", (OTHER, {})))
+        # One still on its way would show after the widget heard it was
+        # closed, so the widget hears of it once it has it.
+        if entry["asking"]:
+            self.closed.add(ident)
+        else:
+            self.drop(ident)
+
+    def drop(self, ident):
+        """The widget lets go of a request the app gave up on."""
+        try:
+            Gio.Subprocess.new(["omarchy-shell", "joamag.files", "chooserClose", ident],
+                               Gio.SubprocessFlags.STDOUT_SILENCE | Gio.SubprocessFlags.STDERR_SILENCE)
+        except GLib.Error:
+            pass
 
     def answer(self, ident, response, chosen, paths):
-        """The widget's answer: the paths picked and the filter on screen."""
+        """The widget's answer: the paths picked and the filter on screen. A
+        path that is not absolute raises ValueError and leaves the request
+        waiting for a right answer."""
         entry = self.pending.get(ident)
         if not entry or entry["forwarded"]:
             return
-        self.pending.pop(ident)
-        self.release(entry)
         results = {}
         if response == SUCCESS:
             results["uris"] = GLib.Variant("as", [pathlib.Path(p).as_uri() for p in paths])
             if 0 <= chosen < len(entry["filters"]):
                 results["current_filter"] = GLib.Variant("(sa(us))", entry["filters"][chosen])
+        self.pending.pop(ident)
+        self.release(entry)
         entry["invocation"].return_value(GLib.Variant("(ua{sv})", (response, results)))
 
     def release(self, entry):
