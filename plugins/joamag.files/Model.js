@@ -1296,6 +1296,53 @@ function keepSelected(selected, list) {
   return out
 }
 
+// The rows a selection band from TOP to BOTTOM (either way round, in the
+// list's own terms) crosses, in a list of COUNT rows ROW high.
+function bandRows(top, bottom, row, count) {
+  var out = []
+  if (!(row > 0) || !(count > 0)) return out
+  var first = Math.max(0, Math.floor(Math.min(top, bottom) / row))
+  var last = Math.min(count - 1, Math.floor(Math.max(top, bottom) / row))
+  for (var i = first; i <= last; i++) out.push(i)
+  return out
+}
+
+// The tiles a selection band between two corners crosses, in a grid of
+// COLUMNS cells WIDTH by HEIGHT holding COUNT tiles, each tile MARGIN in
+// from the edges of its cell; in order.
+function bandTiles(x0, y0, x1, y1, width, height, columns, count, margin) {
+  var out = []
+  if (!(width > 0) || !(height > 0) || !(columns > 0)) return out
+  var m = margin || 0
+  var left = Math.min(x0, x1)
+  var right = Math.max(x0, x1)
+  var top = Math.min(y0, y1)
+  var bottom = Math.max(y0, y1)
+  var firstRow = Math.max(0, Math.floor(top / height))
+  var lastRow = Math.floor(bottom / height)
+  var firstColumn = Math.max(0, Math.floor(left / width))
+  var lastColumn = Math.min(columns - 1, Math.floor(right / width))
+  for (var r = firstRow; r <= lastRow; r++) {
+    for (var c = firstColumn; c <= lastColumn; c++) {
+      var i = r * columns + c
+      if (i >= (count || 0)) continue
+      if (c * width + width - m > left && c * width + m < right && r * height + height - m > top && r * height + m < bottom) out.push(i)
+    }
+  }
+  return out
+}
+
+// The selection a band leaves over LIST: BASE (what was selected as it
+// started, kept with Ctrl), then the paths at INDEXES, each once.
+function bandSelection(list, indexes, base) {
+  var out = (base || []).slice()
+  for (var i = 0; i < (indexes || []).length; i++) {
+    var e = list && list[indexes[i]]
+    if (e && out.indexOf(e.path) < 0) out.push(e.path)
+  }
+  return out
+}
+
 // Where typing the start of a name lands the cursor, the way Explorer finds
 // it: a first letter moves on to the next name after the cursor with it, so
 // typing it again steps through them; more letters keep the cursor on its

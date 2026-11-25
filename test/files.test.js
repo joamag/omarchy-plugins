@@ -1509,6 +1509,51 @@ describe("keepSelected", () => {
   })
 })
 
+describe("bandRows", () => {
+  it("lists the rows a band crosses, whichever way it was drawn", () => {
+    assert.deepEqual(Model.bandRows(30, 80, 26, 10), [1, 2, 3])
+    assert.deepEqual(Model.bandRows(80, 30, 26, 10), [1, 2, 3])
+    assert.deepEqual(Model.bandRows(5, 5, 26, 10), [0])
+  })
+
+  it("keeps to the rows there are", () => {
+    assert.deepEqual(Model.bandRows(-40, 30, 26, 3), [0, 1])
+    assert.deepEqual(Model.bandRows(60, 400, 26, 3), [2])
+    assert.deepEqual(Model.bandRows(0, 10, 26, 0), [])
+    assert.deepEqual(Model.bandRows(0, 10, 0, 3), [])
+  })
+})
+
+describe("bandTiles", () => {
+  // Three columns of 100 by 80 cells, tiles 3 in from their edges.
+  const tiles = (x0, y0, x1, y1, count = 7) => Model.bandTiles(x0, y0, x1, y1, 100, 80, 3, count, 3)
+
+  it("lists the tiles a band crosses, row by row", () => {
+    assert.deepEqual(tiles(50, 40, 150, 120), [0, 1, 3, 4])
+    assert.deepEqual(tiles(150, 120, 50, 40), [0, 1, 3, 4])
+    assert.deepEqual(tiles(10, 10, 290, 70), [0, 1, 2])
+  })
+
+  it("leaves out the gaps between tiles and the cells past the last", () => {
+    // Only the margin of tile 1 and of tile 4, between the tiles.
+    assert.deepEqual(tiles(98, 10, 102, 70), [])
+    // Cells 7 and 8 of the last row hold no tile.
+    assert.deepEqual(tiles(150, 170, 290, 230), [])
+    assert.deepEqual(tiles(10, 170, 290, 230), [6])
+    assert.deepEqual(tiles(-50, -50, 400, 400, 0), [])
+    assert.deepEqual(Model.bandTiles(0, 0, 10, 10, 0, 80, 3, 7, 3), [])
+  })
+})
+
+describe("bandSelection", () => {
+  it("selects what the band crosses, after what Ctrl kept", () => {
+    assert.deepEqual(Model.bandSelection(LISTING, [1, 2], []), [LISTING[1].path, LISTING[2].path])
+    assert.deepEqual(Model.bandSelection(LISTING, [1, 2], [LISTING[2].path, "/kept"]), [LISTING[2].path, "/kept", LISTING[1].path])
+    assert.deepEqual(Model.bandSelection(LISTING, [9], null), [])
+    assert.deepEqual(Model.bandSelection(null, null, null), [])
+  })
+})
+
 describe("typeAheadIndex", () => {
   const names = ["alpha", "apple", "banana", "Berry", "cherry"].map((n) => entry(n))
 

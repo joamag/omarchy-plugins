@@ -3923,6 +3923,12 @@ Panel {
         hasCursor: true
       }
 
+      BandBox {
+        id: listBand
+        flick: list
+        picks: function(from, to) { return Model.bandRows(from.y, to.y, listPane.rowHeight, list.count) }
+      }
+
       delegate: EntryRow {
         id: listRow
         required property int index
@@ -3931,6 +3937,7 @@ Panel {
         entry: root.entries[index] || root.blankEntry
         entryIndex: index
         foreground: listPane.foreground
+        bander: listBand
         nameWidth: listPane.nameWidth
         whereWidth: listPane.whereWidth
         typeWidth: listPane.typeWidth
@@ -3948,14 +3955,18 @@ Panel {
         transform: Translate { y: root.settle > 0 ? (root.settleShifts[listRow.entry.path] || 0) * root.settle * listPane.rowHeight : 0 }
       }
 
-      // Empty space below the rows: click clears the selection, right
-      // click opens the folder menu.
+      // Empty space below the rows: click clears the selection, a drag
+      // draws a selection band, right click opens the folder menu.
       MouseArea {
         z: -1
         width: list.width
         height: Math.max(list.height, list.contentHeight)
         acceptedButtons: Qt.LeftButton | Qt.RightButton
+        onPressed: function(mouse) { if (mouse.button === Qt.LeftButton) listBand.begin(mapToItem(listBand.parent, mouse.x, mouse.y), mouse.modifiers) }
+        onPositionChanged: function(mouse) { listBand.follow(mapToItem(listBand.parent, mouse.x, mouse.y)) }
+        onReleased: listBand.finish()
         onClicked: function(mouse) {
+          if (listBand.drew) return
           if (mouse.button === Qt.RightButton) {
             var p = mapToItem(null, mouse.x, mouse.y)
             root.openMenu(root.folderMenu(), p.x, p.y, null)
@@ -4017,14 +4028,29 @@ Panel {
     required property var entry
     required property int entryIndex
     required property Item dragItem
+    // In a list or a column, a press off the name (the size and date
+    // columns, past a short name) draws BANDER's selection band instead of
+    // dragging the files; NAMEEND is where the name stops.
+    property var bander: null
+    property real nameEnd: -1
+    property bool banding: false
 
     anchors.fill: parent
     hoverEnabled: true
     acceptedButtons: Qt.LeftButton | Qt.RightButton | Qt.MiddleButton
-    drag.target: entry.trashName || root.renamePath === entry.path || Model.isArchiveLocation(entry.path) ? null : dragItem
+    drag.target: banding || entry.trashName || root.renamePath === entry.path || Model.isArchiveLocation(entry.path) ? null : dragItem
     drag.threshold: Style.space(8)
 
+    onPressed: function(mouse) {
+      banding = bander !== null && mouse.button === Qt.LeftButton && mouse.x > nameEnd
+      if (banding) bander.begin(mapToItem(bander.parent, mouse.x, mouse.y), mouse.modifiers)
+    }
+    onPositionChanged: function(mouse) { if (banding) bander.follow(mapToItem(bander.parent, mouse.x, mouse.y)) }
+    onReleased: if (banding) bander.finish()
+
     onClicked: function(mouse) {
+      // A band drawn is not also a click on the row it started on.
+      if (banding && bander.drew) return
       // Middle click opens a folder in a new tab, as Ctrl+double click does.
       if (mouse.button === Qt.MiddleButton) {
         root.openInNewTab(entryMouse.entry)
@@ -4074,6 +4100,58 @@ Panel {
     }
   }
 
+  // A selection band drawn from blank space in a list, the grid or a
+  // column: what PICKS finds between the corner it started at and the
+  // pointer (both in its parent's terms) is selected, after what was
+  // selected with Ctrl. It shows once the pointer has moved a little, so a
+  // click stays a click, and FLICK follows the pointer past its edges.
+  component BandBox: Rectangle {
+    id: band
+    required property var picks
+    property Flickable flick: null
+    property point start
+    property point end
+    property var kept: []
+    property bool held: false
+    property bool drawn: false
+    // The last band, drawn or not, so its release is not also a click.
+    property bool drew: false
+    visible: drawn
+    z: 5
+    x: Math.min(start.x, end.x)
+    y: Math.min(start.y, end.y)
+    width: Math.abs(end.x - start.x)
+    height: Math.abs(end.y - start.y)
+    color: Qt.rgba(Color.accent.r, Color.accent.g, Color.accent.b, 0.12)
+    border.width: 1
+    border.color: Color.accent
+
+    function begin(point, modifiers) {
+      start = point
+      end = point
+      kept = (modifiers & Qt.ControlModifier) ? root.selected : []
+      held = true
+      drawn = false
+      drew = false
+    }
+
+    function follow(point) {
+      if (!held) return
+      end = point
+      if (flick && point.y < flick.contentY) flick.contentY = Math.max(0, point.y)
+      else if (flick && point.y > flick.contentY + flick.height) flick.contentY = Math.min(Math.max(0, flick.contentHeight - flick.height), point.y - flick.height)
+      if (!drawn && Math.abs(end.x - start.x) + Math.abs(end.y - start.y) < Style.space(8)) return
+      drawn = true
+      root.selected = Model.bandSelection(root.entries, picks(start, end), kept)
+    }
+
+    function finish() {
+      drew = drawn
+      held = false
+      drawn = false
+    }
+  }
+
   component EntryRow: Item {
     id: row
     required property var entry
@@ -4084,6 +4162,9 @@ Panel {
     required property real typeWidth
     required property real sizeWidth
     required property real dateWidth
+    // The list's selection band, drawn from a press off the name.
+    property var bander: null
+    readonly property real nameEnd: Style.space(8) + root.iconBox + root.iconGap + Math.min(rowName.implicitWidth, nameWidth)
 
     readonly property bool isSelected: root.selected.indexOf(entry.path) >= 0
     readonly property bool isCursor: root.cursorIndex === entryIndex
@@ -4127,6 +4208,7 @@ Panel {
           height: parent.height
 
           Text {
+            id: rowName
             visible: !row.renaming
             anchors.left: parent.left
             anchors.right: parent.right
@@ -4214,6 +4296,8 @@ Panel {
       entry: row.entry
       entryIndex: row.entryIndex
       dragItem: carrier
+      bander: row.bander
+      nameEnd: row.nameEnd
       enabled: !row.renaming
     }
 
@@ -4309,6 +4393,12 @@ Panel {
         height: grid.cellHeight - Style.space(6)
         foreground: gridPane.foreground
         hasCursor: true
+      }
+
+      BandBox {
+        id: gridBand
+        flick: grid
+        picks: function(from, to) { return Model.bandTiles(from.x, from.y, to.x, to.y, grid.cellWidth, grid.cellHeight, root.gridColumns, grid.count, Style.space(3)) }
       }
 
       delegate: Item {
@@ -4472,12 +4562,18 @@ Panel {
         }
       }
 
+      // Off the tiles: click clears the selection, a drag draws a selection
+      // band, right click opens the folder menu.
       MouseArea {
         z: -1
         width: grid.width
         height: Math.max(grid.height, grid.contentHeight)
         acceptedButtons: Qt.LeftButton | Qt.RightButton
+        onPressed: function(mouse) { if (mouse.button === Qt.LeftButton) gridBand.begin(mapToItem(gridBand.parent, mouse.x, mouse.y), mouse.modifiers) }
+        onPositionChanged: function(mouse) { gridBand.follow(mapToItem(gridBand.parent, mouse.x, mouse.y)) }
+        onReleased: gridBand.finish()
         onClicked: function(mouse) {
+          if (gridBand.drew) return
           if (mouse.button === Qt.RightButton) {
             var p = mapToItem(null, mouse.x, mouse.y)
             root.openMenu(root.folderMenu(), p.x, p.y, null)
@@ -4688,6 +4784,24 @@ Panel {
               hasCursor: true
             }
 
+            BandBox {
+              id: columnBand
+              flick: currentColumn
+              picks: function(from, to) { return Model.bandRows(from.y, to.y, columnsPane.rowHeight, currentColumn.count) }
+            }
+
+            // Empty space below the rows: click clears the selection, a
+            // drag draws a selection band.
+            MouseArea {
+              z: -1
+              width: currentColumn.width
+              height: Math.max(currentColumn.height, currentColumn.contentHeight)
+              onPressed: function(mouse) { columnBand.begin(mapToItem(columnBand.parent, mouse.x, mouse.y), mouse.modifiers) }
+              onPositionChanged: function(mouse) { columnBand.follow(mapToItem(columnBand.parent, mouse.x, mouse.y)) }
+              onReleased: columnBand.finish()
+              onClicked: if (!columnBand.drew) root.selected = []
+            }
+
             delegate: Item {
               id: cell
               required property int index
@@ -4735,10 +4849,12 @@ Panel {
                 }
 
                 Item {
+                  id: cellNameBox
                   width: parent.width - root.iconBox - Style.space(24)
                   height: parent.height
 
                   Text {
+                    id: cellName
                     visible: !cell.renaming
                     anchors.left: parent.left
                     anchors.right: parent.right
@@ -4781,6 +4897,8 @@ Panel {
                 entry: cell.entry
                 entryIndex: cell.index
                 dragItem: cellCarrier
+                bander: columnBand
+                nameEnd: Style.space(6) + root.iconBox + root.iconGap + Math.min(cellName.implicitWidth, cellNameBox.width)
                 enabled: !cell.renaming
               }
 

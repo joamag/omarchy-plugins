@@ -20,6 +20,7 @@ Things move the way Hyprland's windows do, on the same easeOutQuint curve and on
 
 - Left click on the bar: open the popup, or dock the window back into it. Right click: pop out into a window or dock. Middle click: open the folder on screen in Nautilus.
 - Click selects, Ctrl+click adds to the selection, Shift+click selects a range, double click opens. Right click on an item or on empty space opens a menu.
+- Dragging from blank space draws a rectangle that selects what it crosses: off a name in the list or a column (the size and date columns, below the rows), off the tiles in the grid. Ctrl+drag adds to the selection; dragging a name or a tile still moves the files.
 - The mouse's back and forward buttons go back and forward, as the ‹ and › buttons do.
 - A middle click or Ctrl+double click on a folder (or an archive) opens it in a new tab. In the sidebar, the path bar, the Go to card and the columns' parent folders, Ctrl+click and middle click open a new tab.
 - Ctrl+P jumps to a folder: the other open tabs, the folders opened here (the last 50, remembered across restarts), the folders used lately in any app, the bookmarks, the standard folders and the mounted drives, narrowed as you type by letters in order the way an editor's quick open matches (`dl` finds Downloads). A typed `/` or `~` path is offered last. Enter or a click opens the folder in the tab (a folder open in another tab switches to it), Ctrl+Enter, Ctrl+click or a middle click opens it in a new tab.
