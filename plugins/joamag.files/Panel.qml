@@ -51,6 +51,9 @@ Panel {
   // date stay the same, and the folder that listing is of.
   property var entryCache: ({})
   property string listedFolder: ""
+  // The folder the folder model has read since it was set: a listing from
+  // the cache may miss a file made since.
+  property string readFolder: ""
   // Listings of folders seen lately, by path, so a folder shown again (in
   // the tab or as a column) is on screen at once while it is read again.
   property var listingCache: ({})
@@ -168,9 +171,15 @@ Panel {
   property string chooserName: ""
   // Names already taken where the dialog saves: { paths, files }.
   property var chooserClash: null
+  // The folder a Save waits for the read of, to know the names taken.
+  property string chooserWaiting: ""
   // The window hides and shows again around a dialog; that is not the user
-  // closing it.
+  // closing it. Whether it shows again is up to the last one to ask.
   property bool windowSwapping: false
+  property bool windowReturns: false
+  // Times the view went from the widget to a dialog or back, so a folder
+  // check made in one never moves the other.
+  property int handovers: 0
   property var apps: []
   property string appsPath: ""
   // The action files.sh is running and what it was about.
@@ -263,7 +272,7 @@ Panel {
   // picked, the folder, or the files saved.
   readonly property string chooserSummary: {
     if (!chooser) return ""
-    var paths = Model.chooserPaths(chooser, location, chooserName, picked(), chooserFilter)
+    var paths = Model.chooserPaths(chooser, location, chooserName, chooserPicked(), chooserFilter)
     if (chooser.kind === "savefiles") return Model.itemsLabel(chooser.files.length, chooser.files[0]) + " here"
     if (chooser.kind === "folder") return paths.length > 0 ? Model.prettyPath(paths[0], home) : "Open a folder"
     return paths.length > 0 ? paths.map(Model.baseName).join(", ") : "Nothing yet: pick a file"
@@ -362,6 +371,7 @@ Panel {
     lookOpen = false
     endFind()
     lastError = ""
+    chooserWaiting = ""
   }
 
   function go(path) {
@@ -659,6 +669,12 @@ Panel {
     }
     entryCache = next
     listingCache = Model.rememberListing(listingCache, location, out)
+    readFolder = location
+    // A Save waiting for this read answers once it is on screen.
+    if (chooserWaiting === location) {
+      chooserWaiting = ""
+      Qt.callLater(root.acceptChooser)
+    }
     if (same && listedFolder === location) return
     var refresh = listedFolder === location
     listedFolder = location
@@ -1775,11 +1791,12 @@ Panel {
     }
     // One check at a time: a folder asked for meanwhile waits its turn.
     if (pathCheckProc.running) {
-      pathCheckProc.queued = { target: target, inNewTab: inNewTab === true }
+      pathCheckProc.queued = { target: target, inNewTab: inNewTab === true, handover: handovers }
       return
     }
     pathCheckProc.target = target
     pathCheckProc.inNewTab = inNewTab === true
+    pathCheckProc.handover = handovers
     pathCheckProc.command = ["test", "-d", target]
     pathCheckProc.running = true
   }
@@ -1942,6 +1959,7 @@ Panel {
   // and window come back when it ends.
   function startChooser(request) {
     if (!lent) lent = { tabs: tabs, activeTab: activeTab, dirty: tabsDirty }
+    handovers++
     if (opened) root.close()
     var shown = view
     chooser = request
@@ -1962,13 +1980,16 @@ Panel {
   // dialog or tiles it as the widget's window; or it goes.
   function remapWindow(show) {
     windowSwapping = true
+    windowReturns = show
     window.visible = false
-    Qt.callLater(function() {
-      root.windowSwapping = false
-      if (!show) return
-      window.visible = true
-      root.focusRequested(root.chooser && root.chooser.kind === "save" ? "chooser" : "view")
-    })
+    Qt.callLater(root.finishRemap)
+  }
+
+  function finishRemap() {
+    windowSwapping = false
+    if (!windowReturns) return
+    window.visible = true
+    focusRequested(chooser && chooser.kind === "save" ? "chooser" : "view")
   }
 
   // The next dialog waiting, or the widget as it was.
@@ -1984,6 +2005,7 @@ Panel {
     }
     var was = lent
     lent = null
+    handovers++
     if (was) {
       tabs = was.tabs
       activeTab = was.activeTab
@@ -2013,17 +2035,29 @@ Panel {
     if (chooser && chooser.id === id) endChooser()
   }
 
+  // What the dialog answers with when nothing is handed to it: the
+  // selection, or the entry under the cursor. A folder dialog takes only a
+  // selection, so a folder just opened answers with itself, not with the
+  // first folder in it.
+  function chooserPicked() {
+    return Model.pickedEntries(entries, selected, chooser && chooser.kind === "folder" ? -1 : cursorIndex)
+  }
+
   // Save, Open or Select: the dialog answers with LIST (or what is picked),
-  // once it can; a name already taken asks first.
+  // once it can; a name already taken asks first, once the folder is read.
   function acceptChooser(list) {
     if (!chooser) return
-    var paths = Model.chooserPaths(chooser, location, chooserName, list || picked(), chooserFilter)
+    var paths = Model.chooserPaths(chooser, location, chooserName, list || chooserPicked(), chooserFilter)
     var problem = Model.chooserProblem(chooser, location, chooserName, paths)
     if (problem !== "") {
       showToast(problem)
       return
     }
     if (chooser.kind === "save" || chooser.kind === "savefiles") {
+      if (readFolder !== location) {
+        chooserWaiting = location
+        return
+      }
       var clash = Model.chooserClash(folderEntries, paths)
       if (clash.folders.length > 0) {
         showToast(clash.folders[0] + " is a folder here")
@@ -2337,6 +2371,7 @@ Panel {
     caseSensitive: false
     // A folder just opened shows as soon as it is read.
     onStatusChanged: if (status === FolderListModel.Ready) Qt.callLater(root.snapshotFolder)
+    onFolderChanged: root.readFolder = ""
   }
 
   // Changes on disk come in bursts (a download, a build); they are read a
@@ -2548,13 +2583,17 @@ Panel {
     id: pathCheckProc
     property string target: ""
     property bool inNewTab: false
+    property int handover: 0
     property var queued: null
     onExited: function(exitCode) {
-      if (exitCode === 0) root.openFolder(target, inNewTab)
-      else root.showToast("No folder at " + Model.prettyPath(target, root.home))
+      // One typed before the view went to a dialog or back moves nothing.
+      if (handover === root.handovers) {
+        if (exitCode === 0) root.openFolder(target, inNewTab)
+        else root.showToast("No folder at " + Model.prettyPath(target, root.home))
+      }
       var next = queued
       queued = null
-      if (next) root.checkFolder(next.target, next.inNewTab)
+      if (next && next.handover === root.handovers) root.checkFolder(next.target, next.inNewTab)
     }
   }
 
