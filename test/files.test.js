@@ -3594,6 +3594,12 @@ exit 0`)
     assert.equal(s.run(["chosen", "1"], away).stdout, "error\tanswer needs an id, a response and a filter\n")
   })
 
+  it("asks the chooser service to show its dialogs again", (t) => {
+    const s = setup(t)
+    const away = { DBUS_SESSION_BUS_ADDRESS: `unix:path=${path.join(s.dir, "no-bus")}` }
+    assert.match(s.run(["resend"], away).stdout, /^error\t\S/)
+  })
+
   it("lists the window in the app launcher, and takes it out", (t) => {
     const s = setup(t)
     const m = manager(s)
@@ -3730,8 +3736,9 @@ describe("filechooser.py", () => {
   // A save the widget answers, after an answer it cannot take, an open the
   // app gives up on, one it gives up on while the widget is still taking
   // it, one with choices the GTK dialog shows until the app gives up on it
-  // too, opens and saves while the widget is down, then answers that come
-  // too late or make no sense.
+  // too, one the widget is asked for again as if the shell had restarted,
+  // opens and saves while the widget is down, then answers that come too
+  // late or make no sense.
   const DRIVER = String.raw`
 set -u
 dir=$1
@@ -3743,6 +3750,7 @@ ay() { printf '@ay [%s0x00]' "$(printf '%s' "$1" | od -An -tx1 -v | tr -s ' \n' 
 ask() { gdbus call --session --dest ${NAME} --object-path /org/freedesktop/portal/desktop --method "org.freedesktop.impl.portal.FileChooser.$1" "/org/freedesktop/portal/desktop/request/1_1/$2" com.google.Chrome "" "$3" "$4"; }
 close() { gdbus call --session --dest ${NAME} --object-path "/org/freedesktop/portal/desktop/request/1_1/$1" --method org.freedesktop.impl.portal.Request.Close >/dev/null; }
 python3 "$dir/fake_gtk_chooser.py" "$dir/gtk.log" &
+"$dir/filechooser.py" resend > "$dir/none.out"
 "$dir/filechooser.py" &
 until_true 'owned org.freedesktop.impl.portal.desktop.gtk && owned ${NAME}' || exit 1
 ask SaveFile a "Save File" "{'current_name': <'Q4 report.pdf'>, 'current_folder': <$(ay /home/u/Downloads)>, 'filters': <[('PDF', [(uint32 0, '*.pdf')]), ('All files', [(uint32 0, '*')])]>, 'current_filter': <('All files', [(uint32 0, '*')])>}" > "$dir/save.out" &
@@ -3769,6 +3777,12 @@ ask SaveFile w "Wait" "{'choices': <[('encoding', 'Encoding', [('utf8', 'UTF-8')
 until_true 'grep -q "^SaveFile Wait$" "$dir/gtk.log" 2>/dev/null' || exit 1
 close w
 until_true '[[ -s $dir/choices.out ]]' || exit 1
+ask OpenFile r "Open" "{}" > "$dir/resent.out" &
+until_true 'grep -q "^took 6$" "$dir/log"' || exit 1
+"$dir/filechooser.py" resend > "$dir/resend.out"
+until_true '[[ $(grep -c "^took 6$" "$dir/log") == 2 ]]' || exit 1
+"$dir/filechooser.py" answer 6 1 -1
+until_true '[[ -s $dir/resent.out ]]' || exit 1
 touch "$dir/down"
 ask OpenFile c "Upload" "{}" > "$dir/gtk.out"
 ask SaveFiles g "Export" "{'files': <[$(ay x.txt)]>}" > "$dir/gtk-many.out"
@@ -3838,6 +3852,11 @@ while [[ -e "${dir}/slow" ]]; do sleep 0.02; done; echo ok; printf 'took %s\\n' 
     // Choices went to the GTK dialog, closed there for the app.
     assert.ok(!after.some((l) => l.startsWith("joamag.files choose 5 ")))
     assert.equal(read("choices.out"), "(uint32 2, @a{sv} {})")
+    // Asked again, the widget got the one it had taken a second time, and
+    // none of the ones that had ended; without the service, nothing to ask.
+    assert.deepEqual(after.filter((l) => /^joamag\.files choose \d+ /.test(l)).map((l) => l.split(" ")[2]), ["1", "2", "3", "4", "6", "6", "7", "8"])
+    assert.equal(read("resent.out"), "(uint32 1, @a{sv} {})")
+    assert.equal(read("resend.out") + read("none.out"), "")
     assert.equal(read("gtk.out"), "(uint32 0, {'uris': <['file:///from/gtk/OpenFile/Upload']>})")
     assert.equal(read("gtk-many.out"), "(uint32 0, {'uris': <['file:///from/gtk/SaveFiles/Export']>})")
     assert.deepEqual(read("gtk.log").split("\n"), ["SaveFile Wait", "OpenFile Upload", "SaveFiles Export"])

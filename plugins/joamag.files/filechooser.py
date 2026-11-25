@@ -6,10 +6,12 @@
 # Files widget: it goes to the widget over its IPC, and the widget answers
 # through files.sh chosen, which runs this script with answer. Without the
 # widget (not in the bar, or the shell is down) the request goes on to the
-# GTK dialog, so an app always gets one.
+# GTK dialog, so an app always gets one. A shell started again asks through
+# files.sh resend for the requests it lost.
 #
 # Usage: filechooser.py
 #        filechooser.py answer ID RESPONSE FILTER [PATH...]
+#        filechooser.py resend
 #
 # D-Bus starts it on demand once files.sh chooser on has put its service
 # and portal files in place, and it runs until the session ends or
@@ -55,6 +57,7 @@ INTERFACE = """
       <arg type="i" name="filter" direction="in"/>
       <arg type="as" name="paths" direction="in"/>
     </method>
+    <method name="Resend"/>
   </interface>
   <interface name="org.freedesktop.impl.portal.Request">
     <method name="Close"/>
@@ -159,11 +162,14 @@ class Chooser:
 
     def call(self, connection, sender, path, interface, method, parameters, invocation):
         if interface == ANSWERS:
-            try:
-                self.answer(*parameters.unpack())
-            except ValueError as error:
-                invocation.return_dbus_error("org.freedesktop.DBus.Error.InvalidArgs", str(error))
-                return
+            if method == "Resend":
+                self.resend()
+            else:
+                try:
+                    self.answer(*parameters.unpack())
+                except ValueError as error:
+                    invocation.return_dbus_error("org.freedesktop.DBus.Error.InvalidArgs", str(error))
+                    return
             invocation.return_value(None)
             return
         handle, app_id, _parent, title, options = parameters.unpack()
@@ -178,15 +184,29 @@ class Chooser:
         if options.get("choices"):
             self.forward(ident)
             return
-        request = json.dumps(describe(ident, method, app_id, title, options, parameters.get_child_value(4)))
+        self.pending[ident]["request"] = json.dumps(describe(ident, method, app_id, title, options, parameters.get_child_value(4)))
+        self.ask(ident)
+
+    def ask(self, ident):
+        """Hands the request to the widget, or to the GTK dialog when it
+        cannot be asked."""
+        entry = self.pending[ident]
         try:
-            process = Gio.Subprocess.new(["omarchy-shell", "joamag.files", "choose", ident, request],
+            process = Gio.Subprocess.new(["omarchy-shell", "joamag.files", "choose", ident, entry["request"]],
                                          Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_SILENCE)
         except GLib.Error:
             self.forward(ident)
             return
-        self.pending[ident]["asking"] = True
+        entry["asking"] = True
         process.communicate_utf8_async(None, None, self.asked, ident)
+
+    def resend(self):
+        """The requests the widget took go to it again: a shell that started
+        again lost them, and the apps still wait. One on its way already, or
+        with the GTK dialog, stays where it is."""
+        for ident, entry in list(self.pending.items()):
+            if not entry["asking"] and not entry["forwarded"]:
+                self.ask(ident)
 
     def asked(self, process, result, ident):
         """The widget took the request, or it goes to the GTK dialog."""
@@ -286,9 +306,25 @@ def send_answer(args):
     return 0
 
 
+def send_resend():
+    """The running service's requests, shown in the widget again; without a
+    service running there are none."""
+    try:
+        bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
+        bus.call_sync(NAME, OBJECT, ANSWERS, "Resend", None, None, Gio.DBusCallFlags.NO_AUTO_START, 5000, None)
+    except GLib.Error as error:
+        if error.matches(Gio.dbus_error_quark(), Gio.DBusError.NAME_HAS_NO_OWNER) or error.matches(Gio.dbus_error_quark(), Gio.DBusError.SERVICE_UNKNOWN):
+            return 0
+        print("error\t" + error.message)
+        return 1
+    return 0
+
+
 def main(argv):
     if argv[:1] == ["answer"]:
         return send_answer(argv[1:])
+    if argv[:1] == ["resend"]:
+        return send_resend()
     nodes = Gio.DBusNodeInfo.new_for_xml(INTERFACE)
     loop = GLib.MainLoop()
 

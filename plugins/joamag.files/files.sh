@@ -46,6 +46,7 @@
 #   files.sh chooser on|off         show apps' Open and Save dialogs in the widget, or hand them back
 #                                   to the GTK dialog
 #   files.sh chosen ID RESPONSE FILTER [PATH...]   the widget's answer to one of those dialogs
+#   files.sh resend                 those dialogs the apps still wait on, shown again after a restart
 #   files.sh launcher on|off        list the widget's window in the app launcher, or take it out
 #
 # Actions print "error<TAB>message" when one item fails and carry on with the
@@ -1299,6 +1300,9 @@ case "${1:-}" in
   chosen)
     shift
     "$HERE/filechooser.py" answer "$@"
+    ;;
+  resend)
+    "$HERE/filechooser.py" resend
     ;;
   launcher)
     case "${2:-}" in

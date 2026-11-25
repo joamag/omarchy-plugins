@@ -1949,6 +1949,8 @@ Panel {
     }
     var request = Model.chooserRequest(parsed, home)
     request.id = id
+    // Sent again, a dialog on screen or waiting stays where it is.
+    if ((chooser && chooser.id === id) || chooserQueue.some(function(r) { return r.id === id })) return "ok"
     if (chooser) chooserQueue = chooserQueue.concat([request])
     else startChooser(request)
     return "ok"
@@ -2306,6 +2308,8 @@ Panel {
     // settings win over shell.json edited by hand; off with nothing set up
     // changes nothing.
     syncIntegrations()
+    // Dialogs the shell showed before it started again, still waited on.
+    if (fileChooser) Util.execArgv([root.scriptPath, "resend"])
   }
 
   onSettingsChanged: loadTabs()
