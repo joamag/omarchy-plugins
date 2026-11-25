@@ -3318,8 +3318,11 @@ Panel {
                 visible: root.chooser !== null && root.chooser.kind === "save"
                 width: chooserRow.fieldWidth
                 height: Style.spacing.controlHeight
-                // The stem stays picked while the window takes the focus.
+                // The stem stays picked while the window takes the focus,
+                // and the highlight goes once the name is left for the
+                // folder or another field.
                 persistentSelection: true
+                onActiveFocusChanged: if (!activeFocus && Window.active) deselect()
                 foreground: viewRoot.foreground
                 font.family: root.fontFamily
                 text: root.chooserName
