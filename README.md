@@ -37,13 +37,13 @@ Checks:
 ```bash
 bin/validate-all   # omarchy plugin validate + repo conventions (id namespace, README)
 bin/lint           # qmllint syntax pass over every QML file
-bin/test           # unit tests with coverage (Node's built-in runner, no dependencies)
+bin/test           # unit tests with coverage (Node's built-in runner, no npm dependencies)
 bin/package        # one installable tarball per plugin under dist/, validated after unpacking
 ```
 
 `bin/lint` also runs ShellCheck over every script when it is installed. The same four commands run on every push in the [Main Workflow](.github/workflows/main.yml): validate against the upstream Omarchy validator, lint, tests on Node 22 / 24 / 26 with junit results as artifacts, then packaging with the tarballs uploaded as the `plugins` artifact.
 
-Tests live in `test/`, one file per plugin (`test/<name>.test.js`) plus `test/helpers.js` and API fixtures under `test/fixtures/`. Each file walks the plugin's `Model.js` functions in declaration order, then drives the plugin's shell script end to end against fakes on `PATH` (`gh`, `docker`, `curl`) or an in-process HTTP server, so no network or credentials are needed. Coverage is measured over the `Model.js` libraries and the to-do widget's `mcp.js` server and gated at 90% lines and functions; the QML panels only run inside omarchy-shell and are covered by `bin/lint` plus a manual pass.
+Tests live in `test/`, one file per plugin (`test/<name>.test.js`) plus `test/helpers.js` and API fixtures under `test/fixtures/`. Each file walks the plugin's `Model.js` functions in declaration order, then drives the plugin's shell script end to end against fakes on `PATH` (`gh`, `docker`, `curl`) or an in-process HTTP server, so no network or credentials are needed. Coverage is measured over the `Model.js` libraries and the to-do widget's `mcp.js` server and gated at 90% lines and functions; the QML panels only run inside omarchy-shell and are covered by `bin/lint` plus a manual pass. The Files widget's tests also need `bsdtar` (libarchive-tools), `file` and Python 3 on `PATH`; its D-Bus test runs only with `dbus-run-session`, `gdbus` and PyGObject (python3-gi) installed, and is skipped otherwise.
 
 Editing `~/.config/omarchy/shell.json` by hand needs `omarchy-shell shell reloadConfig` before widgets see the new settings. Shell log for debugging plugin load errors: `qs log -p /usr/share/omarchy/shell`. Each plugin answers `omarchy-shell <id> version` so you can confirm which build the shell is running.
 
@@ -53,7 +53,7 @@ Editing `~/.config/omarchy/shell.json` by hand needs `omarchy-shell shell reload
 - Every plugin has a `README.md` describing interactions, settings and IPC.
 - Bar-widget plugins extend `qs.Ui` `Panel` and follow the first-party popup pattern (`KeyboardPanel` + `PanelKeyCatcher`), so keyboard navigation, tooltips and theming match the built-in widgets.
 - Helper scripts ship inside the plugin folder and are resolved from the QML file location, never from `$OMARCHY_PATH`.
-- Plugins never need root and never write outside `~/.config/omarchy/shell.json` (through the shell's own settings API).
+- Plugins never need root, and keep their settings in `~/.config/omarchy/shell.json` through the shell's own settings API. Anything else they write is what the user asked for (the Files widget copying, moving or trashing files) or an opt-in integration that takes itself out again: the Files widget's **Use as the default file manager** adds a desktop entry, a D-Bus service and two Hyprland bindings and sets the folder default in `mimeapps.list`, and turning it off removes them, puts back a service file or folder default the user had, and leaves the bindings file as it was.
 - Custom properties on `Item`-derived components avoid the built-in anchor line names (`baseline`, `left`, `top`, ...); those are FINAL and make the whole widget fail to load with "Cannot override FINAL property".
 
 ## Publishing a plugin
