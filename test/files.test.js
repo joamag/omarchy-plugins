@@ -2338,15 +2338,28 @@ exit \${FAKE_PY_STATUS:-0}`)
     assert.equal(runScript("joamag.files", "files.sh", ["clipboard-clear"], { path: bare, env: s.env }).stdout, "error\twl-copy is not installed\n")
   })
 
-  // clipboard.py against the compositor stand-in, over a real socket.
+  // clipboard.py against the compositor stand-in, over a real socket. The
+  // stand-in stops with the test; one that cannot start, exits first or
+  // never listens fails the test there rather than a later clipboard call.
   async function compositor(t, manager) {
     const dir = tmpdir(t)
     const sock = path.join(dir, "wayland-test")
     const child = spawn("python3", [fixturePath("fake_compositor.py"), sock, manager])
+    t.after(() => child.kill())
     let stdout = ""
     child.stdout.on("data", (chunk) => { stdout += chunk })
     const closed = new Promise((resolve) => child.on("close", () => resolve(stdout)))
-    for (let i = 0; i < 100 && !fs.existsSync(sock); i++) await new Promise((r) => setTimeout(r, 20))
+    await new Promise((resolve, reject) => {
+      let tries = 0
+      child.on("error", reject)
+      child.on("exit", (code) => reject(new Error(`the compositor stand-in exited with ${code} before listening`)))
+      const poll = () => {
+        if (fs.existsSync(sock)) return resolve()
+        if (++tries >= 100) return reject(new Error("the compositor stand-in never listened"))
+        setTimeout(poll, 20)
+      }
+      poll()
+    })
     const files = {}
     for (const [name, content] of [["uris", "file:///a%20b\r\n"], ["plain", "/a b"], ["png", "PNG\u0000DATA"]]) {
       files[name] = path.join(dir, name)
@@ -2415,7 +2428,8 @@ exit \${FAKE_PY_STATUS:-0}`)
     const cache = path.join(s.dir, "cache")
     const first = s.run(["thumbnail", file, "256"], { XDG_CACHE_HOME: cache })
     const made = Model.parseThumbnail(first.stdout)
-    assert.match(made, new RegExp(`^${cache}/joamag-files/thumbnails/[0-9a-f]{32}-\\d+-256\\.png$`))
+    assert.equal(path.dirname(made), `${cache}/joamag-files/thumbnails`)
+    assert.match(path.basename(made), /^[0-9a-f]{32}-\d+-256\.png$/)
     assert.equal(fs.readFileSync(made, "utf8"), "PNG")
     // Each placeholder is one argument, the & and the space in the name kept.
     const call = s.log().find((l) => l.startsWith("--size"))
