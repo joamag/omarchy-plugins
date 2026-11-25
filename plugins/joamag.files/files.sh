@@ -80,6 +80,8 @@ CHOOSER_SERVICE=${XDG_DATA_HOME:-$HOME/.local/share}/dbus-1/services/$CHOOSER_NA
 CHOOSER_PORTAL=${XDG_DATA_HOME:-$HOME/.local/share}/xdg-desktop-portal/portals/joamag-files.portal
 PORTALS_FILE=${XDG_CONFIG_HOME:-$HOME/.config}/xdg-desktop-portal/hyprland-portals.conf
 PORTAL_LINE=org.freedesktop.impl.portal.FileChooser=joamag-files
+# Any line of the preferences that sets the file chooser, spaces and all.
+CHOOSER_KEY='^[[:space:]]*org\.freedesktop\.impl\.portal\.FileChooser[[:space:]]*='
 PREVIOUS_CHOOSER=${XDG_STATE_HOME:-$HOME/.local/state}/joamag-files/previous-file-chooser
 PORTALS_MADE=${XDG_STATE_HOME:-$HOME/.local/state}/joamag-files/portals-made
 HYPRLAND_FILE=${XDG_CONFIG_HOME:-$HOME/.config}/hypr/hyprland.lua
@@ -902,10 +904,12 @@ write_changed() {
 
 # files.sh as the first word of an Exec line, quoted only for a plugin
 # folder that needs it: xdg-mime checks the app is there by the first word
-# of Exec, quotes and all, and passes over it otherwise.
+# of Exec, quotes and all, and passes over it otherwise. In the quotes a ",
+# `, $ or \ takes a backslash, and every backslash is doubled again, the
+# way the file's strings escape it; a % is doubled, or it is a field code.
 exec_word() {
   local exec="$HERE/files.sh"
-  [[ $exec == *[^A-Za-z0-9/._+-]* ]] && exec="\"$exec\""
+  [[ $exec == *[^A-Za-z0-9/._+-]* ]] && exec="\"$(printf '%s' "$exec" | sed -e 's/[\\"`$]/\\&/g' -e 's/\\/\\\\/g' -e 's/%/%%/g')\""
   printf '%s' "$exec"
 }
 
@@ -953,7 +957,17 @@ chooser_portal() {
 
 # The portal reads its preferences only when it starts.
 restart_portal() {
-  systemctl --user try-restart xdg-desktop-portal.service >/dev/null 2>&1 || true
+  systemctl --user try-restart xdg-desktop-portal.service >/dev/null 2>"$ERR_FILE" ||
+    report "cannot restart the desktop portal: $(last_error)"
+}
+
+# Whether the portal running started before its preferences last changed,
+# so it does not go by them yet.
+portal_stale() {
+  local pid age
+  pid=$(systemctl --user show -P MainPID xdg-desktop-portal.service 2>/dev/null)
+  [[ $pid =~ ^[1-9][0-9]*$ && -f $PORTALS_FILE ]] && age=$(ps -o etimes= -p "$pid" 2>/dev/null) && [[ -n ${age// /} ]] || return 1
+  (($(date +%s) - age < $(stat -c %Y "$PORTALS_FILE")))
 }
 
 # The lines of the user's Hyprland bindings that point the file manager keys
@@ -1017,36 +1031,50 @@ with_preference() {
   '
 }
 
+# The preferences the portal goes by while the user has none for Hyprland:
+# the first of its files, in the order it looks for them (but for its
+# build-time folders), or Omarchy's.
+portal_preferences() {
+  local dir name config=${XDG_CONFIG_DIRS:-/etc/xdg}
+  for dir in "${XDG_CONFIG_HOME:-$HOME/.config}" ${config//:/ } "${XDG_DATA_HOME:-$HOME/.local/share}" ${DATA_DIRS//:/ }; do
+    for name in "${PORTALS_FILE##*/}" portals.conf; do
+      [[ -f $dir/xdg-desktop-portal/$name ]] && { cat "$dir/xdg-desktop-portal/$name"; return; }
+    done
+  done
+  printf '%s\n' "[preferred]" "default=hyprland;gtk"
+}
+
 # The user's portal preferences, with the widget for file chooser dialogs
 # (on) or without it (off); true when that changed them. A file chooser of
-# the user's own is set aside and comes back; with no preferences of the
-# user's own, a copy of the system's is made, and goes again.
+# the user's own is set aside and comes back; with no preferences for
+# Hyprland of the user's own, a copy of the ones the portal goes by is
+# made, and goes again unless the user has changed it since.
 set_portal() {
-  local kept line dir
+  local kept line made=""
   if [[ $1 == on ]]; then
     if [[ ! -f $PORTALS_FILE ]]; then
-      kept=$'[preferred]\ndefault=hyprland;gtk'
-      for dir in ${DATA_DIRS//:/ }; do
-        [[ -f $dir/xdg-desktop-portal/${PORTALS_FILE##*/} ]] && { kept=$(cat "$dir/xdg-desktop-portal/${PORTALS_FILE##*/}"); break; }
-      done
-      mkdir -p "$(dirname "$PORTALS_MADE")"
-      : >"$PORTALS_MADE"
-      write_changed "$PORTALS_FILE" "$kept"
+      write_changed "$PORTALS_FILE" "$(portal_preferences)"
+      made=1
     fi
     grep -qxF "$PORTAL_LINE" "$PORTALS_FILE" && return 1
-    line=$(grep -m 1 '^org\.freedesktop\.impl\.portal\.FileChooser=' "$PORTALS_FILE")
+    line=$(grep -m 1 -E "$CHOOSER_KEY" "$PORTALS_FILE")
     if [[ -n $line ]]; then
       mkdir -p "$(dirname "$PREVIOUS_CHOOSER")"
       printf '%s\n' "$line" >"$PREVIOUS_CHOOSER"
     fi
-    kept=$(grep -v '^org\.freedesktop\.impl\.portal\.FileChooser=' "$PORTALS_FILE")
+    kept=$(grep -vE "$CHOOSER_KEY" "$PORTALS_FILE")
     with_preference "$kept" "$PORTAL_LINE" >"$PORTALS_FILE"
+    if [[ -n $made ]]; then
+      mkdir -p "$(dirname "$PORTALS_MADE")"
+      cp -- "$PORTALS_FILE" "$PORTALS_MADE"
+    fi
     return 0
   fi
-  if [[ -f $PORTALS_MADE ]]; then
+  if [[ -f $PORTALS_MADE && -f $PORTALS_FILE && $(cat "$PORTALS_FILE") == "$(cat "$PORTALS_MADE")" ]]; then
     rm -f "$PORTALS_FILE" "$PORTALS_MADE" "$PREVIOUS_CHOOSER"
     return 0
   fi
+  rm -f "$PORTALS_MADE"
   [[ -f $PORTALS_FILE ]] && grep -qxF "$PORTAL_LINE" "$PORTALS_FILE" || return 1
   kept=$(grep -vxF "$PORTAL_LINE" "$PORTALS_FILE")
   if [[ -f $PREVIOUS_CHOOSER ]]; then
@@ -1117,7 +1145,10 @@ default_off() {
 chooser_on() {
   write_changed "$CHOOSER_SERVICE" "$(chooser_service)" && dbus_reload
   write_changed "$CHOOSER_PORTAL" "$(chooser_portal)"
-  set_portal on && restart_portal
+  # A restart that failed before is made again.
+  if set_portal on || portal_stale; then
+    restart_portal
+  fi
   set_block "$HYPRLAND_FILE" "$RULE_BEGIN" "$RULE_END" on "$(rule_block)"
 }
 

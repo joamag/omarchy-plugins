@@ -2333,7 +2333,7 @@ esac`)
     fs.mkdirSync(apps)
     fs.writeFileSync(path.join(apps, "obsidian.desktop"), "[Desktop Entry]\nName=Obsidian\nName[pt]=Obsidiana\n[Desktop Action new]\nName=New vault\n")
     fs.writeFileSync(path.join(apps, "nvim.desktop"), "[Desktop Entry]\nExec=nvim\n")
-    const env = { HOME: home, XDG_DATA_HOME: data, XDG_CONFIG_HOME: config, XDG_DATA_DIRS: path.join(dir, "none"), FAKE_LOG: path.join(dir, "gio.log"), TMPDIR: dir }
+    const env = { HOME: home, XDG_DATA_HOME: data, XDG_CONFIG_HOME: config, XDG_DATA_DIRS: path.join(dir, "none"), XDG_CONFIG_DIRS: path.join(dir, "none"), FAKE_LOG: path.join(dir, "gio.log"), TMPDIR: dir }
     const run = (args, extra = {}) => runScript("joamag.files", "files.sh", args, { bin, env: { ...env, ...extra } })
     const log = () => (fs.existsSync(env.FAKE_LOG) ? fs.readFileSync(env.FAKE_LOG, "utf8").trim().split("\n") : [])
     return { dir, home, data, config, bin, env, run, log }
@@ -3464,12 +3464,14 @@ esac`)
       "hyprctl reload",
     ])
 
-    // Again, at the next start: nothing to change.
+    // Again, at the next start: nothing to change, the portal running
+    // having read them.
     fs.writeFileSync(s.env.FAKE_LOG, "")
     s.run(["chooser", "on"], m.env)
-    assert.equal(fs.readFileSync(s.env.FAKE_LOG, "utf8"), "")
+    assert.deepEqual(s.log(), ["systemctl --user show -P MainPID xdg-desktop-portal.service"])
 
     // Off: every file as it was, the service stopped.
+    fs.writeFileSync(s.env.FAKE_LOG, "")
     assert.equal(s.run(["chooser", "off"], m.env).stdout, "")
     assert.equal(fs.readFileSync(m.files.portals, "utf8"), portals)
     assert.equal(fs.readFileSync(m.files.hyprland, "utf8"), mine)
@@ -3523,6 +3525,68 @@ esac`)
     assert.equal(fs.readFileSync(m.files.portals, "utf8"), "[preferred]\norg.freedesktop.impl.portal.FileChooser=joamag-files\ndefault=hyprland;gtk\n")
   })
 
+  it("copies the preferences the portal goes by, keeps the user's changes to the copy, and finds a spaced key", (t) => {
+    const s = setup(t)
+    const m = manager(s)
+    const read = () => fs.readFileSync(m.files.portals, "utf8")
+    // Spaces round the = make the same key.
+    const spaced = "[preferred]\norg.freedesktop.impl.portal.FileChooser = gtk\ndefault=gtk\n"
+    write(m.files.portals, spaced)
+    s.run(["chooser", "on"], m.env)
+    assert.equal(read(), "[preferred]\norg.freedesktop.impl.portal.FileChooser=joamag-files\ndefault=gtk\n")
+    assert.equal(fs.readFileSync(m.files.previousChooser, "utf8"), "org.freedesktop.impl.portal.FileChooser = gtk\n")
+    s.run(["chooser", "off"], m.env)
+    assert.equal(read(), spaced)
+    // Without ones for Hyprland, the portal goes by the user's general ones.
+    fs.rmSync(m.files.portals)
+    const general = path.join(s.config, "xdg-desktop-portal", "portals.conf")
+    write(general, "[preferred]\ndefault=gtk\norg.freedesktop.impl.portal.ScreenCast=none\n")
+    s.run(["chooser", "on"], m.env)
+    assert.equal(read(), "[preferred]\norg.freedesktop.impl.portal.FileChooser=joamag-files\ndefault=gtk\norg.freedesktop.impl.portal.ScreenCast=none\n")
+    // The copy changed since stays, without the widget.
+    fs.appendFileSync(m.files.portals, "org.freedesktop.impl.portal.Screenshot=gtk\n")
+    s.run(["chooser", "off"], m.env)
+    assert.equal(read(), "[preferred]\ndefault=gtk\norg.freedesktop.impl.portal.ScreenCast=none\norg.freedesktop.impl.portal.Screenshot=gtk\n")
+    assert.ok(!fs.existsSync(m.files.portalsMade))
+    // The system's: the config folders before the data ones.
+    fs.rmSync(m.files.portals)
+    fs.rmSync(general)
+    const etc = path.join(s.dir, "etc")
+    const system = path.join(s.dir, "system")
+    write(path.join(etc, "xdg-desktop-portal", "portals.conf"), "[preferred]\ndefault=kde\n")
+    write(path.join(system, "xdg-desktop-portal", "hyprland-portals.conf"), "[preferred]\ndefault=gtk\n")
+    s.run(["chooser", "on"], { ...m.env, XDG_CONFIG_DIRS: etc, XDG_DATA_DIRS: system })
+    assert.equal(read(), "[preferred]\norg.freedesktop.impl.portal.FileChooser=joamag-files\ndefault=kde\n")
+  })
+
+  it("restarts a portal that has not read the preferences yet, and says when it cannot", (t) => {
+    const s = setup(t)
+    const m = manager(s)
+    fakeCommand(s.bin, "systemctl", `printf 'systemctl %s\\n' "$*" >> "$FAKE_LOG"
+case "$2" in
+  show) echo "\${FAKE_PORTAL_PID:-0}" ;;
+  try-restart) [[ -n \${FAKE_RESTART_FAIL:-} ]] && { echo "Failed to connect to bus" >&2; exit 1; } ;;
+esac
+exit 0`)
+    write(m.files.portals, "[preferred]\ndefault=gtk\n")
+    const restart = "systemctl --user try-restart xdg-desktop-portal.service"
+    const show = "systemctl --user show -P MainPID xdg-desktop-portal.service"
+    assert.equal(s.run(["chooser", "on"], { ...m.env, FAKE_RESTART_FAIL: "1" }).stdout, "error\tcannot restart the desktop portal: Failed to connect to bus\n")
+    // The rest is in place all the same.
+    assert.ok(fs.readFileSync(m.files.hyprland, "utf8").includes("Files chooser"))
+    // A portal that started before the preferences changed starts again;
+    // one that started after does not.
+    const running = { ...m.env, FAKE_PORTAL_PID: String(process.pid) }
+    const now = Date.now() / 1000
+    fs.utimesSync(m.files.portals, now + 60, now + 60)
+    fs.writeFileSync(s.env.FAKE_LOG, "")
+    assert.equal(s.run(["chooser", "on"], running).stdout, "")
+    fs.utimesSync(m.files.portals, now - 86400, now - 86400)
+    s.run(["chooser", "on"], running)
+    s.run(["chooser", "on"], m.env)
+    assert.deepEqual(s.log(), [show, restart, show, show])
+  })
+
   it("passes the widget's answer on to the chooser service", (t) => {
     const s = setup(t)
     const away = { DBUS_SESSION_BUS_ADDRESS: `unix:path=${path.join(s.dir, "no-bus")}` }
@@ -3544,6 +3608,22 @@ esac`)
     assert.equal(s.run(["launcher", "off"], m.env).stdout, "")
     assert.ok(!fs.existsSync(m.files.launcher))
     assert.equal(s.run(["launcher", "off"], m.env).stdout, "")
+  })
+
+  it("quotes and escapes a plugin folder with odd characters in the Exec line", (t) => {
+    const { spawnSync } = require("node:child_process")
+    const s = setup(t)
+    const m = manager(s)
+    const odd = path.join(s.dir, 'my "odd" $plugins 50% a\\b')
+    fs.mkdirSync(odd)
+    fs.copyFileSync(path.join(pluginDir("joamag.files"), "files.sh"), path.join(odd, "files.sh"))
+    fs.chmodSync(path.join(odd, "files.sh"), 0o755)
+    const result = spawnSync(path.join(odd, "files.sh"), ["launcher", "on"], { encoding: "utf8", env: { ...s.env, ...m.env, PATH: `${s.bin}:/usr/bin:/bin` } })
+    assert.equal(result.stdout, "")
+    const exec = fs.readFileSync(m.files.launcher, "utf8").match(/^Exec=(.*)$/m)[1]
+    // A ", $ or \\ takes a backslash in the quotes, each backslash doubled
+    // again as a string; a % is doubled.
+    assert.equal(exec, String.raw`"${s.dir}/my \\"odd\\" \\$plugins 50%% a\\\\b/files.sh" window`)
   })
 
   it("rejects bad invocations", (t) => {
