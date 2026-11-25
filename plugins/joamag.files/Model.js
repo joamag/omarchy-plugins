@@ -877,11 +877,16 @@ function isImage(entry) {
   return !!entry && !entry.dir && THUMBNAIL_EXTENSIONS.indexOf(extensionOf(entry.name)) >= 0
 }
 
-// Small text files get their first lines in the preview pane.
-function isTextual(entry) {
+// Text and source files, and files with no extension (a Makefile).
+function isText(entry) {
   if (!entry || entry.dir) return false
   var kind = kindOf(entry.name, false)
-  return (kind === "text" || kind === "code" || (kind === "file" && extensionOf(entry.name) === "")) && !(entry.size > 262144)
+  return kind === "text" || kind === "code" || (kind === "file" && extensionOf(entry.name) === "")
+}
+
+// Small text files get their first lines in the preview pane.
+function isTextual(entry) {
+  return isText(entry) && !(entry.size > 262144)
 }
 
 // What the preview can show for an entry: the picture itself, a PDF page
@@ -1794,13 +1799,19 @@ function chooserFilter(raw) {
   return out
 }
 
+// Whether filters A and B, as chooserFilter reads them, are one: two can
+// share a label and take other files.
+function sameFilter(a, b) {
+  return a.label === b.label && a.globs.join("\n") === b.globs.join("\n") && a.mimes.join("\n") === b.mimes.join("\n")
+}
+
 // The request's filters; its current filter goes first when the list
 // leaves it out, which filechooser.py does the same way to read the answer.
 function chooserFilters(list, current) {
   var out = (Array.isArray(list) ? list : []).map(chooserFilter)
   if (current) {
     var c = chooserFilter(current)
-    if (!out.some(function(f) { return f.label === c.label })) out.unshift(c)
+    if (!out.some(function(f) { return sameFilter(f, c) })) out.unshift(c)
   }
   return out
 }
@@ -1817,8 +1828,8 @@ function chooserRequest(raw, home) {
   var file = String(r.currentFile || "")
   var folder = String(r.currentFolder || "") || (file ? parentPath(file) : "")
   var filters = chooserFilters(r.filters, r.currentFilter)
-  var current = r.currentFilter ? chooserFilter(r.currentFilter).label : ""
-  var at = filters.map(function(f) { return f.label }).indexOf(current)
+  var current = r.currentFilter ? chooserFilter(r.currentFilter) : null
+  var at = current ? filters.map(function(f) { return sameFilter(f, current) }).indexOf(true) : -1
   var saving = kind === "save" || kind === "savefiles"
   return {
     id: String(r.id || ""),
@@ -1855,14 +1866,15 @@ function globRegExp(glob) {
 }
 
 // Whether a file's name fits MIME, as far as a name tells: image/*, a
-// known type, or one whose extension follows its slash.
+// known type, or one whose extension follows its slash. filechooser.py
+// adds the names the system's MIME database gives a type to its filter.
 function mimeFits(mime, entry) {
   var m = String(mime || "").toLowerCase()
   if (m === "*" || m === "*/*" || m === "application/octet-stream") return true
   var major = m.split("/")[0]
   var minor = m.slice(major.length + 1)
   if (minor === "*") {
-    if (major === "text") return isTextual(entry)
+    if (major === "text") return isText(entry)
     return kindOf(entry.name, false) === major
   }
   var exts = MIME_EXTENSIONS[m] || [minor.replace(/^x-/, "")]

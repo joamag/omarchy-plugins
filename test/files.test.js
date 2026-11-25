@@ -974,6 +974,17 @@ describe("isImage", () => {
   })
 })
 
+describe("isText", () => {
+  it("tells text, code and extensionless files by name, whatever their size", () => {
+    assert.equal(Model.isText(entry("a.md", { size: 300000 })), true)
+    assert.equal(Model.isText(entry("a.qml")), true)
+    assert.equal(Model.isText(entry("Makefile")), true)
+    assert.equal(Model.isText(entry("a.bin")), false)
+    assert.equal(Model.isText(entry("docs", { dir: true })), false)
+    assert.equal(Model.isText(null), false)
+  })
+})
+
 describe("isTextual", () => {
   it("previews small text, code and extensionless files", () => {
     assert.equal(Model.isTextual(entry("a.md", { size: 100 })), true)
@@ -2054,6 +2065,17 @@ describe("chooserFilter", () => {
   })
 })
 
+describe("sameFilter", () => {
+  const read = Model.chooserFilter
+
+  it("matches the label and every pattern", () => {
+    assert.ok(Model.sameFilter(read(["Document", [[0, "*.txt"], [1, "text/plain"]]]), read(["Document", [[0, "*.txt"], [1, "Text/Plain"]]])))
+    assert.ok(!Model.sameFilter(read(["Document", [[0, "*.txt"]]]), read(["Document", [[0, "*.pdf"]]])))
+    assert.ok(!Model.sameFilter(read(["Document", [[1, "text/plain"]]]), read(["Document", []])))
+    assert.ok(!Model.sameFilter(read(["Text", [[0, "*.txt"]]]), read(["Document", [[0, "*.txt"]]])))
+  })
+})
+
 describe("chooserFilters", () => {
   const pdf = ["PDF", [[0, "*.pdf"]]]
   const all = ["All files", [[0, "*"]]]
@@ -2062,6 +2084,11 @@ describe("chooserFilters", () => {
     assert.deepEqual(Model.chooserFilters([pdf, all], all).map((f) => f.label), ["PDF", "All files"])
     assert.deepEqual(Model.chooserFilters([pdf], ["Text", [[0, "*.txt"]]]).map((f) => f.label), ["Text", "PDF"])
     assert.deepEqual(Model.chooserFilters(null, null), [])
+  })
+
+  it("adds a current filter that only shares a label with one in the list", () => {
+    const out = Model.chooserFilters([["Document", [[0, "*.txt"]]]], ["Document", [[0, "*.pdf"]]])
+    assert.deepEqual(out.map((f) => f.globs), [["*.pdf"], ["*.txt"]])
   })
 })
 
@@ -2079,6 +2106,15 @@ describe("chooserRequest", () => {
     assert.deepEqual([folder.kind, folder.title, folder.accept], ["folder", "Choose a folder", "Select"])
     const many = Model.chooserRequest({ method: "SaveFiles", files: ["a.txt", "", "b.txt"], multiple: true }, HOME)
     assert.deepEqual([many.kind, many.accept, many.files, many.multiple], ["savefiles", "Save", ["a.txt", "b.txt"], false])
+  })
+
+  it("finds the current filter by its patterns, not only its label", () => {
+    const txt = ["Document", [[0, "*.txt"]]]
+    const pdf = ["Document", [[0, "*.pdf"]]]
+    assert.equal(Model.chooserRequest({ method: "OpenFile", filters: [txt, pdf], currentFilter: pdf }, HOME).filter, 1)
+    assert.equal(Model.chooserRequest({ method: "OpenFile", filters: [txt, pdf], currentFilter: txt }, HOME).filter, 0)
+    const other = Model.chooserRequest({ method: "OpenFile", filters: [txt], currentFilter: pdf }, HOME)
+    assert.deepEqual([other.filter, other.filters[0].globs], [0, ["*.pdf"]])
   })
 
   it("takes the folder and name from the current file, and falls back home", () => {
@@ -2113,6 +2149,10 @@ describe("mimeFits", () => {
     assert.ok(Model.mimeFits("image/*", entry("a.webp")))
     assert.ok(!Model.mimeFits("image/*", entry("a.pdf")))
     assert.ok(Model.mimeFits("text/*", entry("notes.md", { size: 10 })))
+    // Past the preview's limit a text file is still one.
+    assert.ok(Model.mimeFits("text/*", entry("notes.md", { size: 262144 })))
+    assert.ok(Model.mimeFits("text/*", entry("notes.md", { size: 262145 })))
+    assert.ok(!Model.mimeFits("text/*", entry("a.png")))
     assert.ok(Model.mimeFits("*/*", entry("a.bin")))
     assert.ok(Model.mimeFits("application/octet-stream", entry("a.bin")))
   })
