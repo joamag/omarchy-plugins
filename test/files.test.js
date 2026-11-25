@@ -2526,23 +2526,41 @@ exit \${FAKE_PY_STATUS:-0}`)
     assert.equal(s.run(["extract", a.zip, into]).stdout, "error\textract needs an archive, a destination and a strip count\n")
   })
 
+  // files.sh ARGS in the background, for the tests that stop it midway:
+  // progressed settles once it reports progress, and fails rather than
+  // waiting forever when it cannot start, exits first or stays silent.
+  function background(t, s, args) {
+    const child = spawn(path.join(pluginDir("joamag.files"), "files.sh"), args, { env: { ...s.env, PATH: [s.bin, "/usr/bin", "/bin"].join(":"), LANG: "C" } })
+    t.after(() => child.kill("SIGKILL"))
+    const run = { child, stdout: "" }
+    run.closed = new Promise((resolve) => child.on("close", resolve))
+    run.progressed = new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error(`no progress after 10 s: ${run.stdout}`)), 10000)
+      const settle = (fn, value) => {
+        clearTimeout(timer)
+        fn(value)
+      }
+      child.stdout.on("data", (chunk) => {
+        run.stdout += chunk
+        if (run.stdout.includes("progress\t")) settle(resolve)
+      })
+      child.on("error", (error) => settle(reject, error))
+      child.on("close", (code) => settle(reject, new Error(`exited with ${code} before any progress: ${run.stdout}`)))
+    })
+    return run
+  }
+
   it("cancels an extraction and removes the folder it made", async (t) => {
     const s = setup(t)
     const a = archives(s)
     // A bsdtar whose extraction stalls after writing a file.
     fakeCommand(s.bin, "bsdtar", 'if [[ $1 == -xkf ]]; then mkdir -p "$4"; echo x > "$4/partial"; exec sleep 30; fi; exec /usr/bin/bsdtar "$@"')
     const dest = path.join(s.home, "made")
-    const child = spawn(path.join(pluginDir("joamag.files"), "files.sh"), ["extract", a.zip, dest, "0"], { env: { ...s.env, PATH: [s.bin, "/usr/bin", "/bin"].join(":"), LANG: "C" } })
-    let stdout = ""
-    const progressed = new Promise((resolve) => child.stdout.on("data", (chunk) => {
-      stdout += chunk
-      if (stdout.includes("progress\t")) resolve()
-    }))
-    const closed = new Promise((resolve) => child.on("close", resolve))
-    await progressed
-    child.kill("SIGTERM")
-    await closed
-    assert.equal(Model.parseResult(stdout).cancelled, true)
+    const run = background(t, s, ["extract", a.zip, dest, "0"])
+    await run.progressed
+    run.child.kill("SIGTERM")
+    await run.closed
+    assert.equal(Model.parseResult(run.stdout).cancelled, true)
     assert.ok(!fs.existsSync(dest))
   })
 
@@ -2652,19 +2670,11 @@ exit \${FAKE_PY_STATUS:-0}`)
     write(path.join(s.home, "Downloads", "big.iso"), "x".repeat(4096))
     // A cp that writes part of the file, then stalls.
     fakeCommand(s.bin, "cp", 'head -c 100 "$3" > "$4"; exec sleep 30')
-    const child = spawn(path.join(pluginDir("joamag.files"), "files.sh"), ["transfer", "copy", `${s.home}/Downloads/big.iso`, `${s.home}/Music/big.iso`, "new"], {
-      env: { ...s.env, PATH: [s.bin, "/usr/bin", "/bin"].join(":"), LANG: "C" },
-    })
-    let stdout = ""
-    const progressed = new Promise((resolve) => child.stdout.on("data", (chunk) => {
-      stdout += chunk
-      if (stdout.includes("progress\t")) resolve()
-    }))
-    const closed = new Promise((resolve) => child.on("close", resolve))
-    await progressed
-    child.kill("SIGTERM")
-    await closed
-    const r = Model.parseResult(stdout)
+    const run = background(t, s, ["transfer", "copy", `${s.home}/Downloads/big.iso`, `${s.home}/Music/big.iso`, "new"])
+    await run.progressed
+    run.child.kill("SIGTERM")
+    await run.closed
+    const r = Model.parseResult(run.stdout)
     assert.equal(r.cancelled, true)
     assert.equal(r.total, 4096)
     assert.ok(!fs.existsSync(path.join(s.home, "Music", "big.iso")))
