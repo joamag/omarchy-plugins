@@ -831,8 +831,11 @@ Panel {
     openFile(entry.path)
   }
 
+  // In the app GIO picks, the default Open with marks: xdg-open, outside a
+  // desktop it knows, hands a type without a default of its own (a log,
+  // YAML, JSON) to a browser instead.
   function openFile(path) {
-    Util.execArgv(["xdg-open", path])
+    Util.execArgv(["gio", "open", path])
     if (!detached) root.close()
   }
 
@@ -853,7 +856,7 @@ Panel {
       openEntry(list[0])
       return
     }
-    for (var i = 0; i < list.length && i < 12; i++) if (!list[i].dir && !Model.isArchiveLocation(list[i].path)) Util.execArgv(["xdg-open", list[i].path])
+    for (var i = 0; i < list.length && i < 12; i++) if (!list[i].dir && !Model.isArchiveLocation(list[i].path)) Util.execArgv(["gio", "open", list[i].path])
     if (!detached) root.close()
   }
 
