@@ -1992,6 +1992,195 @@ describe("folderMenu", () => {
   })
 })
 
+describe("chooserApp", () => {
+  it("names the app from the last part of its id", () => {
+    assert.equal(Model.chooserApp("com.google.Chrome"), "Chrome")
+    assert.equal(Model.chooserApp("firefox"), "firefox")
+    assert.equal(Model.chooserApp(""), "")
+    assert.equal(Model.chooserApp(null), "")
+  })
+})
+
+describe("chooserFilter", () => {
+  it("parts the globs from the MIME types", () => {
+    assert.deepEqual(Model.chooserFilter(["Images", [[0, "*.png"], [1, "Image/JPEG"], [0, ""], "bad"]]), { label: "Images", globs: ["*.png"], mimes: ["image/jpeg"] })
+    assert.deepEqual(Model.chooserFilter(null), { label: "", globs: [], mimes: [] })
+  })
+})
+
+describe("chooserFilters", () => {
+  const pdf = ["PDF", [[0, "*.pdf"]]]
+  const all = ["All files", [[0, "*"]]]
+
+  it("keeps the list, with the current filter first when it is missing", () => {
+    assert.deepEqual(Model.chooserFilters([pdf, all], all).map((f) => f.label), ["PDF", "All files"])
+    assert.deepEqual(Model.chooserFilters([pdf], ["Text", [[0, "*.txt"]]]).map((f) => f.label), ["Text", "PDF"])
+    assert.deepEqual(Model.chooserFilters(null, null), [])
+  })
+})
+
+describe("chooserRequest", () => {
+  it("reads a save request", () => {
+    const r = Model.chooserRequest({ id: "4", method: "SaveFile", app: "com.google.Chrome", title: "Save File", acceptLabel: "_Save", currentName: "Q4 report.pdf", currentFolder: "/home/joamag//Downloads/", filters: [["PDF", [[0, "*.pdf"]]], ["All files", [[0, "*"]]]], currentFilter: ["All files", [[0, "*"]]] }, HOME)
+    assert.deepEqual(r, { id: "4", kind: "save", title: "Save File", app: "Chrome", accept: "Save", name: "Q4 report.pdf", folder: `${HOME}/Downloads`, files: [], filters: r.filters, filter: 1, multiple: false })
+    assert.equal(r.filters.length, 2)
+  })
+
+  it("tells open, folder and several-files requests apart", () => {
+    const open = Model.chooserRequest({ method: "OpenFile", multiple: true }, HOME)
+    assert.deepEqual([open.kind, open.title, open.accept, open.folder, open.multiple, open.filter], ["open", "Open", "Open", HOME, true, 0])
+    const folder = Model.chooserRequest({ method: "OpenFile", directory: true }, HOME)
+    assert.deepEqual([folder.kind, folder.title, folder.accept], ["folder", "Choose a folder", "Select"])
+    const many = Model.chooserRequest({ method: "SaveFiles", files: ["a.txt", "", "b.txt"], multiple: true }, HOME)
+    assert.deepEqual([many.kind, many.accept, many.files, many.multiple], ["savefiles", "Save", ["a.txt", "b.txt"], false])
+  })
+
+  it("takes the folder and name from the current file, and falls back home", () => {
+    const r = Model.chooserRequest({ method: "SaveFile", currentFile: "/srv/notes/todo.md" }, HOME)
+    assert.deepEqual([r.folder, r.name], ["/srv/notes", "todo.md"])
+    assert.equal(Model.chooserRequest({ currentFolder: "relative/x" }, HOME).folder, HOME)
+    assert.equal(Model.chooserRequest(null, "").folder, "/")
+  })
+})
+
+describe("globRegExp", () => {
+  it("matches stars, question marks and sets, ignoring case", () => {
+    assert.ok(Model.globRegExp("*.pdf").test("Q4 report.PDF"))
+    assert.ok(!Model.globRegExp("*.pdf").test("report.pdf.txt"))
+    assert.ok(Model.globRegExp("photo-??.[jp]ng").test("photo-01.png"))
+    assert.ok(!Model.globRegExp("photo-??.[!p]ng").test("photo-01.png"))
+    assert.ok(Model.globRegExp("a+b(1).txt").test("a+b(1).txt"))
+    assert.ok(Model.globRegExp("[x").test("[x"))
+  })
+})
+
+describe("mimeFits", () => {
+  it("knows types by their extension", () => {
+    assert.ok(Model.mimeFits("image/png", entry("a.png")))
+    assert.ok(Model.mimeFits("image/jpeg", entry("a.JPG")))
+    assert.ok(Model.mimeFits("application/pdf", entry("a.pdf")))
+    assert.ok(Model.mimeFits("application/x-tar", entry("a.tar")))
+    assert.ok(!Model.mimeFits("image/png", entry("a.jpg")))
+  })
+
+  it("takes whole families and anything", () => {
+    assert.ok(Model.mimeFits("image/*", entry("a.webp")))
+    assert.ok(!Model.mimeFits("image/*", entry("a.pdf")))
+    assert.ok(Model.mimeFits("text/*", entry("notes.md", { size: 10 })))
+    assert.ok(Model.mimeFits("*/*", entry("a.bin")))
+    assert.ok(Model.mimeFits("application/octet-stream", entry("a.bin")))
+  })
+})
+
+describe("filterTakes", () => {
+  const images = Model.chooserFilter(["Images", [[0, "*.png"], [1, "image/jpeg"]]])
+
+  it("takes a file one of the patterns or types fits", () => {
+    assert.ok(Model.filterTakes(images, entry("a.png")))
+    assert.ok(Model.filterTakes(images, entry("a.jpeg")))
+    assert.ok(!Model.filterTakes(images, entry("a.pdf")))
+  })
+
+  it("takes everything without a filter or patterns", () => {
+    assert.ok(Model.filterTakes(null, entry("a.pdf")))
+    assert.ok(Model.filterTakes(Model.chooserFilter(["Empty", []]), entry("a.pdf")))
+  })
+})
+
+describe("chooserPicks", () => {
+  const open = Model.chooserRequest({ method: "OpenFile", filters: [["PDF", [[0, "*.pdf"]]], ["All", [[0, "*"]]]] }, HOME)
+  const folder = Model.chooserRequest({ method: "OpenFile", directory: true }, HOME)
+  const many = Model.chooserRequest({ method: "SaveFiles", files: ["a"] }, HOME)
+
+  it("picks files the filter on screen takes, and folders only when asked for", () => {
+    assert.ok(Model.chooserPicks(open, 0, entry("a.pdf")))
+    assert.ok(!Model.chooserPicks(open, 0, entry("a.png")))
+    assert.ok(Model.chooserPicks(open, 1, entry("a.png")))
+    assert.ok(!Model.chooserPicks(open, 0, entry("d", { dir: true })))
+    assert.ok(Model.chooserPicks(folder, 0, entry("d", { dir: true })))
+    assert.ok(!Model.chooserPicks(folder, 0, entry("a.pdf")))
+    assert.ok(!Model.chooserPicks(many, 0, entry("a.pdf")))
+  })
+
+  it("never picks what is in the Trash or inside an archive", () => {
+    assert.ok(!Model.chooserPicks(open, 1, Model.makeEntry({ path: `${HOME}/.local/share/Trash/files/a.pdf`, trashName: "a.pdf" })))
+    assert.ok(!Model.chooserPicks(open, 1, Model.makeEntry({ path: Model.archiveLocation(ZIP, "a.pdf") })))
+    assert.ok(!Model.chooserPicks(null, 0, entry("a.pdf")))
+    assert.ok(!Model.chooserPicks(open, 0, null))
+  })
+})
+
+describe("chooserPlaces", () => {
+  it("lists the folder on screen, the recent ones and the desktop, once each", () => {
+    assert.deepEqual(Model.chooserPlaces(`${HOME}/Downloads`, [`${HOME}/Documents`, `${HOME}/Downloads`, Model.TRASH, "", `${HOME}/Music`], HOME), [`${HOME}/Downloads`, `${HOME}/Documents`, `${HOME}/Music`, `${HOME}/Desktop`])
+    assert.equal(Model.chooserPlaces(HOME, ["/a", "/b", "/c", "/d", "/e"], HOME, 3).length, 3)
+    assert.deepEqual(Model.chooserPlaces(Model.RECENT, null, HOME), [`${HOME}/Desktop`])
+  })
+})
+
+describe("chooserPaths", () => {
+  const save = Model.chooserRequest({ method: "SaveFile" }, HOME)
+  const many = Model.chooserRequest({ method: "SaveFiles", files: ["a.txt", "b.txt"] }, HOME)
+  const open = Model.chooserRequest({ method: "OpenFile", filters: [["PDF", [[0, "*.pdf"]]]] }, HOME)
+  const several = Model.chooserRequest({ method: "OpenFile", multiple: true }, HOME)
+  const folder = Model.chooserRequest({ method: "OpenFile", directory: true }, HOME)
+  const files = [entry("a.pdf"), entry("b.png"), entry("c.pdf"), entry("d", { dir: true })]
+
+  it("saves under the name typed, or the names asked for", () => {
+    assert.deepEqual(Model.chooserPaths(save, "/srv", "  out.pdf ", [], 0), ["/srv/out.pdf"])
+    assert.deepEqual(Model.chooserPaths(many, "/srv", "", [], 0), ["/srv/a.txt", "/srv/b.txt"])
+  })
+
+  it("opens what was picked that the request takes", () => {
+    assert.deepEqual(Model.chooserPaths(open, "/srv", "", files, 0), [`${HOME}/Downloads/a.pdf`])
+    assert.deepEqual(Model.chooserPaths(several, "/srv", "", files, 0), [`${HOME}/Downloads/a.pdf`, `${HOME}/Downloads/b.png`, `${HOME}/Downloads/c.pdf`])
+  })
+
+  it("answers a folder request with the folder picked, or the one on screen", () => {
+    assert.deepEqual(Model.chooserPaths(folder, "/srv", "", files, 0), [`${HOME}/Downloads/d`])
+    assert.deepEqual(Model.chooserPaths(folder, "/srv", "", [files[0]], 0), ["/srv"])
+    assert.deepEqual(Model.chooserPaths(folder, Model.TRASH, "", [], 0), [])
+    assert.deepEqual(Model.chooserPaths(null, "/srv", "", files, 0), [])
+  })
+})
+
+describe("chooserProblem", () => {
+  const save = Model.chooserRequest({ method: "SaveFile" }, HOME)
+  const open = Model.chooserRequest({ method: "OpenFile" }, HOME)
+  const folder = Model.chooserRequest({ method: "OpenFile", directory: true }, HOME)
+
+  it("asks for a name that can be saved under", () => {
+    assert.equal(Model.chooserProblem(save, HOME, "a.pdf", []), "")
+    assert.equal(Model.chooserProblem(save, HOME, "  ", []), "Type a name")
+    assert.equal(Model.chooserProblem(save, HOME, "a/b", []), "A name cannot hold /")
+    assert.equal(Model.chooserProblem(save, HOME, "..", []), "Type another name")
+  })
+
+  it("wants a real folder to save in, and something picked to open", () => {
+    assert.equal(Model.chooserProblem(save, Model.TRASH, "a.pdf", []), "Open a folder to save in")
+    assert.equal(Model.chooserProblem(folder, Model.RECENT, "", []), "Open a folder first")
+    assert.equal(Model.chooserProblem(open, HOME, "", []), "Pick a file")
+    assert.equal(Model.chooserProblem(open, Model.RECENT, "", ["/a"]), "")
+    assert.equal(Model.chooserProblem(null, HOME, "", []), "")
+  })
+})
+
+describe("chooserClash", () => {
+  it("finds the files and folders already called that", () => {
+    const listed = [entry("a.pdf"), entry("d", { dir: true })]
+    assert.deepEqual(Model.chooserClash(listed, [`${HOME}/Downloads/a.pdf`, `${HOME}/Downloads/d`, `${HOME}/Downloads/new.pdf`]), { files: ["a.pdf"], folders: ["d"] })
+    assert.deepEqual(Model.chooserClash(null, null), { files: [], folders: [] })
+  })
+})
+
+describe("chooserKeepBoth", () => {
+  it("gives taken names a free (copy) one and keeps the rest", () => {
+    const listed = [entry("a.pdf"), entry("a (copy).pdf")]
+    assert.deepEqual(Model.chooserKeepBoth(listed, [`${HOME}/Downloads/a.pdf`, `${HOME}/Downloads/b.pdf`]), [`${HOME}/Downloads/a (copy 2).pdf`, `${HOME}/Downloads/b.pdf`])
+    assert.deepEqual(Model.chooserKeepBoth(null, ["/x/a"]), ["/x/a"])
+  })
+})
+
 describe("files.sh", () => {
   // A scratch home with the standard folders, a data dir, a config dir and
   // stand-ins for the commands that would touch the real machine. gio does
