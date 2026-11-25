@@ -628,20 +628,20 @@ function jumpCandidates(tabs, active, visited, recent, bookmarks, places, drives
 // open matches: a letter starting a word or following the last one counts
 // most, a long gap costs, spaces in QUERY are skipped. Every place the
 // first letter appears is tried and the best fit kept. -1 when the letters
-// do not all appear.
+// do not all appear, and never below 0 when they do.
 function fuzzyScore(query, text) {
   var q = String(query || "").toLowerCase().replace(/\s+/g, "")
   var t = String(text || "").toLowerCase()
   if (q === "") return 0
   // The fit from the first letter at START, each next letter taken as soon
-  // as it shows up; -1 when one is missing.
+  // as it shows up; null when one is missing.
   function fit(start) {
     var score = 0
     var from = 0
     var last = -2
     for (var i = 0; i < q.length; i++) {
       var at = i === 0 ? start : t.indexOf(q.charAt(i), from)
-      if (at < 0) return -1
+      if (at < 0) return null
       score += 1
       if (at === last + 1) score += 5
       if (at === 0 || "/ -_.".indexOf(t.charAt(at - 1)) >= 0) score += 8
@@ -651,18 +651,18 @@ function fuzzyScore(query, text) {
     }
     return score
   }
-  var best = -1
+  var best = null
   for (var start = t.indexOf(q.charAt(0)); start >= 0; start = t.indexOf(q.charAt(0), start + 1)) {
     var score = fit(start)
     // A later start cannot find letters an earlier one missed.
-    if (score < 0) break
-    if (score > best) best = score
+    if (score === null) break
+    if (best === null || score > best) best = score
   }
-  return best
+  return best === null ? -1 : Math.max(0, best)
 }
 
-// The candidates QUERY fits, best first; a fit inside the folder's own name
-// beats one spread over the path, and ties keep the candidates' order.
+// The candidates QUERY fits, best first; any fit inside the folder's own
+// name beats one spread over the path, and ties keep the candidates' order.
 function jumpMatches(candidates, query, home, limit) {
   var list = candidates || []
   var max = limit || 50
@@ -673,10 +673,9 @@ function jumpMatches(candidates, query, home, limit) {
     var score = fuzzyScore(query, prettyPath(list[i].path, home))
     if (score < 0) score = named
     if (score < 0) continue
-    if (named >= 0) score += 20
-    scored.push({ item: list[i], score: score, index: i })
+    scored.push({ item: list[i], named: named >= 0 ? 1 : 0, score: score, index: i })
   }
-  scored.sort(function(a, b) { return b.score - a.score || a.index - b.index })
+  scored.sort(function(a, b) { return b.named - a.named || b.score - a.score || a.index - b.index })
   return scored.slice(0, max).map(function(s) { return s.item })
 }
 
@@ -1009,10 +1008,14 @@ function padNumber(n) {
 }
 
 // Natural, case-insensitive order as a plain string: every run of digits
-// is padded to one width, so "file2" sorts before "file10".
+// is padded to one width, so "file2" sorts before "file10". The digits are
+// kept as text, so long runs keep their order; one longer than the width
+// sorts after every padded run, by its length first.
 function naturalKey(text) {
   return String(text || "").toLowerCase().replace(/\d+/g, function(digits) {
-    return padNumber(Number(digits))
+    var d = digits.replace(/^0+(?=\d)/, "")
+    if (d.length <= ZEROS.length) return ZEROS.slice(d.length) + d
+    return ":" + ("000" + d.length).slice(-3) + d
   })
 }
 

@@ -608,6 +608,12 @@ describe("fuzzyScore", () => {
     assert.equal(Model.fuzzyScore("a", ""), -1)
   })
 
+  it("fits letters even where the gaps cost more than they score", () => {
+    // The first c scores below zero; the later ones are still tried.
+    assert.ok(Model.fuzzyScore("c", "/tmp/xxxxxcat-c") > 0)
+    assert.equal(Model.fuzzyScore("z", "xxxxxxxxxxz"), 0)
+  })
+
   it("ranks word starts and runs above scattered letters", () => {
     assert.ok(Model.fuzzyScore("dl", "~/Downloads") > 0)
     assert.ok(Model.fuzzyScore("down", "~/Downloads") > Model.fuzzyScore("dwns", "~/Downloads"))
@@ -643,6 +649,9 @@ describe("jumpMatches", () => {
     // A run in the folder's own name beats letters spread over the path.
     const spread = [{ path: "/p/i/c/x", label: "x" }, { path: "/srv/pics", label: "pics" }]
     assert.deepEqual(Model.jumpMatches(spread, "pic", HOME).map((c) => c.path), ["/srv/pics", "/p/i/c/x"])
+    // However well the path fits, any fit in a name comes first.
+    const loose = [{ path: "/a/b/c/d/q", label: "q" }, { path: "/q", label: "axxxxxbxxxxxcxxxxxd" }]
+    assert.deepEqual(Model.jumpMatches(loose, "abcd", HOME).map((c) => c.path), ["/q", "/a/b/c/d/q"])
     assert.deepEqual(Model.jumpMatches(candidates, "qqq", HOME), [])
     assert.equal(Model.jumpMatches(candidates, "t7", HOME)[0].path, "/run/media/joamag/T7")
   })
@@ -1156,6 +1165,14 @@ describe("naturalKey", () => {
     assert.ok(Model.naturalKey("file2") < Model.naturalKey("file10"))
     assert.equal(Model.naturalKey("a007"), Model.naturalKey("a7"))
     assert.equal(Model.naturalKey(null), "")
+  })
+
+  it("keeps long runs of digits in order, past what a number holds", () => {
+    assert.ok(Model.naturalKey("file9999999999999999") < Model.naturalKey("file10000000000000000"))
+    assert.ok(Model.naturalKey("file9007199254740993") > Model.naturalKey("file9007199254740992"))
+    assert.ok(Model.naturalKey("file10000000000000000") < Model.naturalKey("file100000000000000000"))
+    assert.ok(Model.naturalKey("file10000000000000000") < Model.naturalKey("file10000000000000001"))
+    assert.equal(Model.naturalKey("file00000000000000000007"), Model.naturalKey("file7"))
   })
 })
 
