@@ -225,7 +225,9 @@ Panel {
   readonly property bool reading: inFolder && listedFolder !== location
   readonly property bool columnsShown: view === "columns" && inFolder && !deep
   readonly property var cursorEntry: cursorIndex >= 0 && cursorIndex < entries.length ? entries[cursorIndex] : null
-  readonly property bool busy: actionProc.running || transferProc.running || namesProc.running
+  // One long job at a time, from its first question (the names in the
+  // way, a conflict to answer, an archive's listing) until it exits.
+  readonly property bool busy: actionProc.running || transferProc.running || namesProc.running || conflictJob !== null || extractJob !== null
   readonly property var conflictJob: transferJob ? transferJob.jobs[Model.conflictIndex(transferJob.jobs)] || null : null
   readonly property string hintMode: {
     if (prompt) return "prompt"
@@ -935,8 +937,7 @@ Panel {
       copyOutOfArchive(clipboard.paths, pasteDest)
       return
     }
-    pastingCut = clipboard.mode === "cut"
-    transfer(clipboard.paths, pasteDest, pastingCut ? "move" : "copy")
+    transfer(clipboard.paths, pasteDest, clipboard.mode === "cut" ? "move" : "copy", clipboard.mode === "cut")
   }
 
   function clearClipboard() {
@@ -988,18 +989,18 @@ Panel {
   }
 
   // First the names already in the destination, so every conflict can be
-  // asked about before anything is written.
-  function transfer(paths, dest, mode) {
+  // asked about before anything is written. CUT, a paste of cut files that
+  // leave the clipboard once moved, belongs to the transfer once accepted.
+  function transfer(paths, dest, mode, cut) {
     if (Model.isVirtual(dest) || !dest) {
-      pastingCut = false
       showToast("Open a folder to paste into")
       return
     }
     if (!paths || paths.length === 0 || busy) {
-      pastingCut = false
       if (busy) showToast("Wait for the running copy or move to finish")
       return
     }
+    pastingCut = cut === true
     var dirs = {}
     for (var i = 0; i < paths.length; i++) {
       var idx = Model.indexOfPath(entries, paths[i])
