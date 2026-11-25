@@ -109,6 +109,9 @@ Panel {
   // through the usual paste, conflicts and all.
   property string stagingDir: ""
   property string stagingDest: ""
+  // Where the members being copied out land in the staging folder, kept as
+  // the copy starts: the clipboard may change while they are extracted.
+  property var stagingPaths: []
   // The window's content is built on the first pop out and kept after.
   property bool windowBuilt: false
   // A path to put the cursor on (and to rename) as soon as it is listed:
@@ -965,6 +968,7 @@ Panel {
     var stage = cacheHome + "/joamag-files/staging/" + Date.now()
     stagingDir = stage
     stagingDest = dest
+    stagingPaths = members.map(function(m) { return Model.joinPath(stage, Model.baseName(m)) })
     var label = "Extracting " + Model.itemsLabel(members.length, Model.baseName(members[0])) + " from " + Model.baseName(first.archive)
     startJob("stage", dest, label, ["extract", first.archive, stage, String(Model.stripCount(Model.parentPath("/" + members[0]).slice(1)))].concat(members))
   }
@@ -1059,6 +1063,7 @@ Panel {
     Util.execArgv([root.scriptPath, "delete", stagingDir])
     stagingDir = ""
     stagingDest = ""
+    stagingPaths = []
   }
 
   function applyTransferLine(line) {
@@ -1316,7 +1321,7 @@ Panel {
         return
       }
       // The members are staged under their own names; they move into place.
-      var staged = clipboard ? clipboard.paths.map(function(p) { return Model.joinPath(root.stagingDir, Model.baseName(Model.splitArchive(p).inner)) }) : []
+      var staged = stagingPaths
       // After the extraction's process has fully let go.
       Qt.callLater(function() { root.transfer(staged, root.stagingDest, "move") })
       return
