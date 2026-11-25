@@ -1771,11 +1771,12 @@ var INTEGRATION_SETTINGS = [
   { key: "launcherEntry", label: "Show Files in the app launcher", icon: "󰀻" }
 ]
 
-// The Settings menu: each integration, ticked while ON (by setting name)
-// has it on.
+// The Settings menu: each integration, checked while ON (by setting name)
+// has it on. The tick goes where a shortcut would, so a long label cut
+// short never takes it along.
 function settingsMenu(on) {
   return INTEGRATION_SETTINGS.map(function(s) {
-    return { id: "setting:" + s.key, label: s.label + (on && on[s.key] === true ? "  ✓" : ""), icon: s.icon }
+    return { id: "setting:" + s.key, label: s.label, icon: s.icon, checked: !!on && on[s.key] === true }
   })
 }
 

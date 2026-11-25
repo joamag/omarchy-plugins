@@ -2056,16 +2056,17 @@ describe("folderMenu", () => {
 })
 
 describe("settingsMenu", () => {
-  it("lists the integrations, ticked while on", () => {
+  it("lists the integrations, checked while on, the tick apart from the label", () => {
     const menu = Model.settingsMenu({ defaultFileManager: true, fileChooser: false })
     assert.deepEqual(menu.map((i) => i.id), ["setting:defaultFileManager", "setting:fileChooser", "setting:launcherEntry"])
-    assert.deepEqual(menu.map((i) => i.label), ["Use as the default file manager  ✓", "Show apps' Open and Save dialogs in Files", "Show Files in the app launcher"])
+    assert.deepEqual(menu.map((i) => i.checked), [true, false, false])
+    assert.ok(!menu.some((i) => i.label.includes("✓")))
     assert.ok(menu.every((i) => i.icon !== ""))
   })
 
-  it("ticks nothing without settings, nor for a value that is not true", () => {
-    assert.ok(!Model.settingsMenu(null).some((i) => i.label.endsWith("✓")))
-    assert.ok(!Model.settingsMenu({ launcherEntry: "true" }).some((i) => i.label.endsWith("✓")))
+  it("checks nothing without settings, nor for a value that is not true", () => {
+    assert.ok(!Model.settingsMenu(null).some((i) => i.checked))
+    assert.ok(!Model.settingsMenu({ launcherEntry: "true" }).some((i) => i.checked))
   })
 
   it("labels each one as the manifest does", () => {

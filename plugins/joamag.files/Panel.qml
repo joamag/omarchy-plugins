@@ -6295,13 +6295,14 @@ Panel {
                 elide: Text.ElideRight
               }
 
+              // The shortcut, or the tick of a setting that is on.
               Text {
                 id: menuShortcut
                 anchors.verticalCenter: parent.verticalCenter
                 textFormat: Text.PlainText
-                text: menuItem.modelData.shortcut || ""
+                text: menuItem.modelData.checked ? "✓" : menuItem.modelData.shortcut || ""
                 color: menuLayer.foreground
-                opacity: 0.45
+                opacity: menuItem.modelData.checked ? 1 : 0.45
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.caption
               }
