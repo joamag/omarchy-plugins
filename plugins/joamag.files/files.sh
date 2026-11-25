@@ -63,6 +63,7 @@ DBUS_FILE=${XDG_DATA_HOME:-$HOME/.local/share}/dbus-1/services/org.freedesktop.F
 BINDINGS_FILE=${XDG_CONFIG_HOME:-$HOME/.config}/hypr/bindings.lua
 MIMEAPPS_FILE=${XDG_CONFIG_HOME:-$HOME/.config}/mimeapps.list
 PREVIOUS_FILE=${XDG_STATE_HOME:-$HOME/.local/state}/joamag-files/previous-file-manager
+PREVIOUS_SERVICE=${XDG_STATE_HOME:-$HOME/.local/state}/joamag-files/previous-file-manager.service
 KEYS_BEGIN="-- joamag.files: the file manager keys open the Files widget (its Default file manager setting adds and removes these lines)"
 KEYS_END="-- joamag.files: end"
 # Where apps and thumbnailers are registered, the spec's default when unset.
@@ -940,7 +941,7 @@ set_keys() {
 # Folders from other apps, Show in folder and the file manager keys come to
 # the widget. The FileManager1 service starts once; while another file
 # manager holds the name (Nautilus does while a window of it is open) it
-# waits in line for it.
+# waits in line for it. A service file of the user's own is set aside.
 default_on() {
   local current
   current=$(xdg-mime query default inode/directory 2>/dev/null)
@@ -952,6 +953,10 @@ default_on() {
   if [[ $current != "$APP_ID" ]]; then
     xdg-mime default "$APP_ID" inode/directory 2>"$ERR_FILE" || fail "$(last_error)"
   fi
+  if [[ -f $DBUS_FILE ]] && ! grep -qF "$HERE/filemanager1.py" "$DBUS_FILE"; then
+    mkdir -p "$(dirname "$PREVIOUS_SERVICE")"
+    mv -f -- "$DBUS_FILE" "$PREVIOUS_SERVICE"
+  fi
   write_changed "$DBUS_FILE" "$(dbus_service)" && dbus_reload
   set_keys on
   pgrep -f -x -- "$(service_pattern)" >/dev/null && return 0
@@ -961,7 +966,8 @@ default_on() {
 # All of it back to the previous file manager. The widget's line leaves the
 # user's mimeapps.list, so a default that came from the system (Omarchy's)
 # shows through again and follows its updates; one the user had picked is
-# set back. A D-Bus service file that is not the widget's stays.
+# set back. The D-Bus service file set aside comes back in place of the
+# widget's; one that is not the widget's stays.
 default_off() {
   local id kept was=""
   if [[ -f $MIMEAPPS_FILE ]] && grep -qxF "inode/directory=$APP_ID" "$MIMEAPPS_FILE"; then
@@ -974,11 +980,12 @@ default_off() {
     xdg-mime default "$id" inode/directory 2>"$ERR_FILE" || fail "$(last_error)"
   fi
   rm -f "$APP_FILE" "$PREVIOUS_FILE"
-  rmdir "$(dirname "$PREVIOUS_FILE")" 2>/dev/null
   if [[ -f $DBUS_FILE ]] && grep -qF "$HERE/filemanager1.py" "$DBUS_FILE"; then
     rm -f "$DBUS_FILE"
+    [[ -f $PREVIOUS_SERVICE ]] && mv -f -- "$PREVIOUS_SERVICE" "$DBUS_FILE"
     dbus_reload
   fi
+  rmdir "$(dirname "$PREVIOUS_FILE")" 2>/dev/null
   set_keys off
   pkill -f -x -- "$(service_pattern)" >/dev/null 2>&1 || true
 }

@@ -2732,6 +2732,7 @@ esac`)
       dbus: path.join(s.data, "dbus-1", "services", "org.freedesktop.FileManager1.service"),
       bindings: path.join(s.config, "hypr", "bindings.lua"),
       previous: path.join(s.home, ".local", "state", "joamag-files", "previous-file-manager"),
+      previousService: path.join(s.home, ".local", "state", "joamag-files", "previous-file-manager.service"),
       mimeapps: path.join(s.config, "mimeapps.list"),
     }
     // The service's whole command line, as files.sh looks for it.
@@ -2920,6 +2921,25 @@ esac`)
     s.run(["default", "off"], m.env)
     assert.equal(fs.readFileSync(m.files.mimeapps, "utf8"), "[Default Applications]\n")
     assert.deepEqual(s.log(), ["gdbus call --session --dest org.freedesktop.DBus --object-path /org/freedesktop/DBus --method org.freedesktop.DBus.ReloadConfig", "hyprctl reload", `pkill -f -x -- ${m.service}`])
+  })
+
+  it("sets the user's own D-Bus service aside, and puts it back", (t) => {
+    const s = setup(t)
+    const m = manager(s)
+    const here = pluginDir("joamag.files")
+    const theirs = "[D-BUS Service]\nName=org.freedesktop.FileManager1\nExec=/usr/bin/flea --dbus\n"
+    write(m.files.dbus, theirs)
+    s.run(["default", "on"], m.env)
+    assert.equal(fs.readFileSync(m.files.dbus, "utf8"), `[D-BUS Service]\nName=org.freedesktop.FileManager1\nExec=${here}/filemanager1.py\n`)
+    assert.equal(fs.readFileSync(m.files.previousService, "utf8"), theirs)
+    // Again, at the next start: the one set aside stays as it was.
+    s.run(["default", "on"], m.env)
+    assert.equal(fs.readFileSync(m.files.previousService, "utf8"), theirs)
+    fs.writeFileSync(s.env.FAKE_LOG, "")
+    s.run(["default", "off"], m.env)
+    assert.equal(fs.readFileSync(m.files.dbus, "utf8"), theirs)
+    assert.ok(!fs.existsSync(path.dirname(m.files.previousService)))
+    assert.ok(s.log().includes("gdbus call --session --dest org.freedesktop.DBus --object-path /org/freedesktop/DBus --method org.freedesktop.DBus.ReloadConfig"))
   })
 
   it("keeps another file manager's D-Bus service, minds missing bindings, and reports xdg-mime", (t) => {

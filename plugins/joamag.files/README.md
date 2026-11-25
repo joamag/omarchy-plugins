@@ -113,7 +113,7 @@ Turn on **Use as the default file manager** in the widget's settings and the wid
 
 A folder from another app shows in the popup, or in the window when the widget is popped out, brought to the front on its workspace. When the widget is not running (not in the bar, or the shell is restarting), the previous file manager opens it.
 
-Switching it on adds a hidden app, `~/.local/share/applications/joamag-files.desktop`, and makes it the folder default with `xdg-mime`, remembering the previous one. It also adds the D-Bus service file in `~/.local/share/dbus-1/services/` and a marked block of two `o.rebind` lines at the end of `~/.config/hypr/bindings.lua`. Switching it off takes all of that out again: the folder default goes back to the system's, or to the one you had picked, and your bindings file is left as it was. The setting is applied again at every start, so a `shell.json` edited by hand is followed too. Turn it off before removing the widget.
+Switching it on adds a hidden app, `~/.local/share/applications/joamag-files.desktop`, and makes it the folder default with `xdg-mime`, remembering the previous one. It also adds the D-Bus service file in `~/.local/share/dbus-1/services/` (setting aside one you already had there) and a marked block of two `o.rebind` lines at the end of `~/.config/hypr/bindings.lua`. Switching it off takes all of that out again: the folder default goes back to the system's, or to the one you had picked, a D-Bus service file you had comes back, and your bindings file is left as it was. The setting is applied again at every start, so a `shell.json` edited by hand is followed too. Turn it off before removing the widget.
 
 ## IPC
 
