@@ -1323,6 +1323,34 @@ function longestNames(entries, count) {
     .slice(0, count || 8)
 }
 
+// Width of the window's places sidebar, and of the preview pane in the
+// popup and in the window, before the shell's spacing scale. Dragging a
+// pane's edge sets them; a double click on it puts the default back.
+var SIDEBAR_WIDTH = 210
+var SIDEBAR_MIN = 150
+var SIDEBAR_MAX = 360
+var PREVIEW_WIDTH = 240
+var PREVIEW_WINDOW_WIDTH = 290
+var PREVIEW_MIN = 180
+var PREVIEW_MAX = 560
+
+// A pane width from settings or a dragged edge, whole and between MIN and
+// MAX, or FALLBACK for anything that is not a number.
+function paneWidth(value, min, max, fallback) {
+  var n = Math.round(Number(value))
+  if (!isFinite(n)) return fallback
+  return Math.max(min, Math.min(max, n))
+}
+
+function sidebarWidth(value) {
+  return paneWidth(value, SIDEBAR_MIN, SIDEBAR_MAX, SIDEBAR_WIDTH)
+}
+
+// FALLBACK is the popup's default or the window's.
+function previewWidth(value, fallback) {
+  return paneWidth(value, PREVIEW_MIN, PREVIEW_MAX, fallback || PREVIEW_WIDTH)
+}
+
 // The scroll offset that brings START to END into a view VIEW wide,
 // moving from OFFSET only as far as that needs and never past LAST; when
 // both ends do not fit, the start shows.

@@ -1507,6 +1507,41 @@ describe("longestNames", () => {
   })
 })
 
+describe("paneWidth", () => {
+  it("keeps a whole width inside the range", () => {
+    assert.equal(Model.paneWidth(250, 100, 300, 200), 250)
+    assert.equal(Model.paneWidth(200.6, 100, 300, 200), 201)
+    assert.equal(Model.paneWidth("150", 100, 300, 200), 150)
+    assert.equal(Model.paneWidth(10, 100, 300, 200), 100)
+    assert.equal(Model.paneWidth(5000, 100, 300, 200), 300)
+  })
+
+  it("falls back for anything that is not a number", () => {
+    assert.equal(Model.paneWidth(undefined, 100, 300, 200), 200)
+    assert.equal(Model.paneWidth("wide", 100, 300, 200), 200)
+    assert.equal(Model.paneWidth(-Infinity, 100, 300, 200), 200)
+  })
+})
+
+describe("sidebarWidth", () => {
+  it("keeps the sidebar between its bounds, its default when unset", () => {
+    assert.equal(Model.sidebarWidth(260), 260)
+    assert.equal(Model.sidebarWidth(40), Model.SIDEBAR_MIN)
+    assert.equal(Model.sidebarWidth(900), Model.SIDEBAR_MAX)
+    assert.equal(Model.sidebarWidth(undefined), Model.SIDEBAR_WIDTH)
+  })
+})
+
+describe("previewWidth", () => {
+  it("keeps the preview between its bounds, the popup's or the window's default when unset", () => {
+    assert.equal(Model.previewWidth(320), 320)
+    assert.equal(Model.previewWidth(20), Model.PREVIEW_MIN)
+    assert.equal(Model.previewWidth(2000), Model.PREVIEW_MAX)
+    assert.equal(Model.previewWidth(undefined), Model.PREVIEW_WIDTH)
+    assert.equal(Model.previewWidth("x", Model.PREVIEW_WINDOW_WIDTH), Model.PREVIEW_WINDOW_WIDTH)
+  })
+})
+
 describe("revealOffset", () => {
   it("does not move when the span is in view", () => {
     assert.equal(Model.revealOffset(100, 150, 400, 600, 400), 100)
