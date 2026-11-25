@@ -1906,6 +1906,7 @@ describe("hints", () => {
     assert.equal(Model.hints("prompt")[0].key, "Enter")
     assert.equal(Model.hints("jump")[3].key, "Ctrl+Enter")
     assert.equal(Model.hints("find")[0].label, "the start of a name")
+    assert.equal(Model.hints("chooser")[2].key, "Ctrl+S")
     assert.equal(Model.hints("whatever"), Model.HINTS.browse)
   })
 })
@@ -2178,6 +2179,16 @@ describe("chooserKeepBoth", () => {
     const listed = [entry("a.pdf"), entry("a (copy).pdf")]
     assert.deepEqual(Model.chooserKeepBoth(listed, [`${HOME}/Downloads/a.pdf`, `${HOME}/Downloads/b.pdf`]), [`${HOME}/Downloads/a (copy 2).pdf`, `${HOME}/Downloads/b.pdf`])
     assert.deepEqual(Model.chooserKeepBoth(null, ["/x/a"]), ["/x/a"])
+  })
+})
+
+describe("nextIntegration", () => {
+  it("applies each integration in order until all are as wanted", () => {
+    assert.deepEqual(Model.nextIntegration({ default: true }, {}), { name: "default", state: "on" })
+    assert.deepEqual(Model.nextIntegration({ default: true, launcher: true }, { default: "on" }), { name: "chooser", state: "off" })
+    assert.deepEqual(Model.nextIntegration({ default: true, launcher: true }, { default: "on", chooser: "off" }), { name: "launcher", state: "on" })
+    assert.equal(Model.nextIntegration({ chooser: true }, { default: "off", chooser: "on", launcher: "off" }), null)
+    assert.deepEqual(Model.nextIntegration(null, null), { name: "default", state: "off" })
   })
 })
 

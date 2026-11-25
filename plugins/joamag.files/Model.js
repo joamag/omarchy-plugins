@@ -120,7 +120,8 @@ var HINTS = {
   ],
   prompt: [{ key: "Enter", label: "go ahead" }, { key: "Esc", label: "cancel" }],
   path: [{ key: "Enter", label: "go" }, { key: "Esc", label: "cancel" }],
-  jump: [{ key: "type", label: "to find" }, { key: "↑↓", label: "choose" }, { key: "Enter", label: "open" }, { key: "Ctrl+Enter", label: "in a new tab" }, { key: "Esc", label: "close" }]
+  jump: [{ key: "type", label: "to find" }, { key: "↑↓", label: "choose" }, { key: "Enter", label: "open" }, { key: "Ctrl+Enter", label: "in a new tab" }, { key: "Esc", label: "close" }],
+  chooser: [{ key: "Enter", label: "open, pick" }, { key: "Tab", label: "name" }, { key: "Ctrl+S", label: "done" }, { key: "Ctrl+Space", label: "select" }, { key: "Ctrl+P", label: "jump" }, { key: "Esc", label: "cancel" }]
 }
 
 // Every key, for the `?` sheet: the panel keys of the other widgets and the
@@ -1907,4 +1908,23 @@ function chooserKeepBoth(entries, paths) {
     names.push(name)
     return joinPath(parentPath(p), name)
   })
+}
+
+// ---------- Integrations ----------
+
+// What the widget sets up outside shell.json, in the order files.sh
+// applies it: the default file manager, the file chooser and the launcher
+// entry.
+var INTEGRATIONS = ["default", "chooser", "launcher"]
+
+// The next one files.sh should apply, as { name, state } (on or off), from
+// what the settings WANT (by name, true or false) and what was last
+// APPLIED (by name, on or off); null once all are in place.
+function nextIntegration(want, applied) {
+  for (var i = 0; i < INTEGRATIONS.length; i++) {
+    var name = INTEGRATIONS[i]
+    var state = want && want[name] ? "on" : "off"
+    if (!applied || applied[name] !== state) return { name: name, state: state }
+  }
+  return null
 }

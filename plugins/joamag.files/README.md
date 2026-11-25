@@ -99,6 +99,8 @@ Inline on the widget entry in `~/.config/omarchy/shell.json`; the widget writes 
 | `previewWidth` | `240` | Width of the preview pane in the popup, 180 to 560, set by dragging its edge |
 | `windowPreviewWidth` | `290` | Width of the preview pane in the window, 180 to 560, set by dragging its edge |
 | `defaultFileManager` | `false` | Open folders from other apps, Show in folder and Super+Shift+F in the widget (see [Default file manager](#default-file-manager)) |
+| `fileChooser` | `false` | Show apps' Open and Save dialogs in the widget (see [File chooser](#file-chooser)) |
+| `launcherEntry` | `false` | List Files in the app launcher; picking it opens the window |
 | `tabs` | `[]` | The open tabs as `{ "path": …, "view": "list" \| "grid" \| "columns" }`; empty opens home |
 | `activeTab` | `0` | The tab on screen |
 | `recentFolders` | `[]` | The folders opened here, newest first, for Ctrl+P |
@@ -115,6 +117,19 @@ A folder from another app shows in the popup, or in the window when the widget i
 
 Switching it on adds a hidden app, `~/.local/share/applications/joamag-files.desktop`, and makes it the folder default with `xdg-mime`, remembering the previous one. It also adds the D-Bus service file in `~/.local/share/dbus-1/services/` (setting aside one you already had there) and a marked block of two `o.rebind` lines at the end of `~/.config/hypr/bindings.lua`. Switching it off takes all of that out again: the folder default goes back to the system's, or to the one you had picked, a D-Bus service file you had comes back, and your bindings file is left as it was. The setting is applied again at every start, so a `shell.json` edited by hand is followed too. Turn it off before removing the widget.
 
+## File chooser
+
+Turn on **Show apps' Open and Save dialogs in Files** and the dialogs apps ask the desktop portal for (Chrome's Save as and upload buttons, Firefox, Flatpak apps) show in the widget's window instead of the GTK dialog: the sidebar, tabs, list, grid or columns, preview and Ctrl+P, floated over the app with a band at the bottom. The band has a row of the places saved in lately, the name to save as (its stem picked, ready to type over), the app's file types, Cancel and the app's own word for going ahead (Save, Open, Upload).
+
+- Saving: type a name and press Enter, or Ctrl+S, or pick a place in the row first. Enter on a file takes its name. A name already there asks to go back, keep both (the new file gets a "(copy)" name) or replace it.
+- Opening: Enter or a double click on a file opens it; Ctrl+Space, Ctrl+click and Shift pick several when the app takes several. Files the chosen type leaves out are faded.
+- Picking a folder: go into it and press Ctrl+S, or select it.
+- Tab goes to the name, Esc cancels, and closing the window cancels too.
+
+While a dialog is on, it borrows the widget's view: the popup stays shut and a popped out window turns into the dialog; the folders and tabs you had come back when it ends. When the widget is not running, the request goes on to the GTK dialog, so apps always get one.
+
+Switching it on adds a small service, `filechooser.py`, as `org.freedesktop.impl.portal.desktop.joamag.files` (its D-Bus service file in `~/.local/share/dbus-1/services/` and a portal file in `~/.local/share/xdg-desktop-portal/portals/`), prefers it for file chooser dialogs in `~/.config/xdg-desktop-portal/hyprland-portals.conf` (setting aside a file chooser you had picked there, or making that file from the system's when you had none), restarts the desktop portal so it reads that, and adds a marked block at the end of `~/.config/hypr/hyprland.lua` with the rule that floats the dialog. Switching it off takes all of that out again and puts back what you had. Turn it off before removing the widget.
+
 ## IPC
 
 ```
@@ -124,13 +139,14 @@ omarchy-shell joamag.files reveal ~/Downloads/report.pdf
 omarchy-shell joamag.files summon
 omarchy-shell joamag.files popOut
 omarchy-shell joamag.files dock
+omarchy-shell joamag.files window
 omarchy-shell joamag.files version
 ```
 
-`reveal` opens the folder holding an item with the cursor on it. `summon` is what Super+Shift+F runs as the default file manager: it opens or closes the popup, or brings the popped out window to the front.
+`reveal` opens the folder holding an item with the cursor on it. `summon` is what Super+Shift+F runs as the default file manager: it opens or closes the popup, or brings the popped out window to the front. `window` is what the launcher entry runs: it pops the window out, or brings it to the front. `filechooser.py` uses `choose ID REQUEST` and `chooserClose ID` to hand dialogs to the widget.
 
 ## Data source
 
-Qt's folder model (`Qt.labs.folderlistmodel`) lists the folder on screen and follows changes on disk. Everything else goes through `files.sh`: the standard folders (`xdg-user-dir`), the GTK bookmarks file Nautilus uses, drives from `lsblk` and `df`, Recent from `recently-used.xbel`, the Trash from `~/.local/share/Trash` (items trashed on other drives stay in that drive's own trash), search with `find`, "Open with" from `gio mime`, and thumbnails from the `.thumbnailer` files the system registers, made once per version of a file and kept in `~/.cache/joamag-files/thumbnails` (pictures unused for three months are dropped). PDF pages are drawn by Qt's PDF reader when it is installed (`qt6-webengine` ships it), and by the PDF thumbnailer otherwise. Archives are listed, extracted and made with `bsdtar` (libarchive, which pacman itself depends on); members looked at inside an archive are kept in `~/.cache/joamag-files/archives` for a week. The clipboard is set by `clipboard.py`, a small standard-library Python helper that speaks Wayland's data-control protocol to offer several formats at once and serves pastes in the background until something else is copied; without Python it falls back to `wl-copy` with the file managers' form only, and reading goes through `wl-paste`. Without wl-clipboard the widget keeps its own clipboard. Copies run `cp -a` and moves `mv`, with the progress measured as the copy lands; Cancel stops the item in flight, and a cancelled copy removes what it wrote. The Trash, restore, mount and eject go through `gio`. As the default file manager, the folder default is set with `xdg-mime`, and `filemanager1.py` (Python with PyGObject, which Omarchy installs) answers `org.freedesktop.FileManager1` on the session bus. Nothing needs root.
+Qt's folder model (`Qt.labs.folderlistmodel`) lists the folder on screen and follows changes on disk. Everything else goes through `files.sh`: the standard folders (`xdg-user-dir`), the GTK bookmarks file Nautilus uses, drives from `lsblk` and `df`, Recent from `recently-used.xbel`, the Trash from `~/.local/share/Trash` (items trashed on other drives stay in that drive's own trash), search with `find`, "Open with" from `gio mime`, and thumbnails from the `.thumbnailer` files the system registers, made once per version of a file and kept in `~/.cache/joamag-files/thumbnails` (pictures unused for three months are dropped). PDF pages are drawn by Qt's PDF reader when it is installed (`qt6-webengine` ships it), and by the PDF thumbnailer otherwise. Archives are listed, extracted and made with `bsdtar` (libarchive, which pacman itself depends on); members looked at inside an archive are kept in `~/.cache/joamag-files/archives` for a week. The clipboard is set by `clipboard.py`, a small standard-library Python helper that speaks Wayland's data-control protocol to offer several formats at once and serves pastes in the background until something else is copied; without Python it falls back to `wl-copy` with the file managers' form only, and reading goes through `wl-paste`. Without wl-clipboard the widget keeps its own clipboard. Copies run `cp -a` and moves `mv`, with the progress measured as the copy lands; Cancel stops the item in flight, and a cancelled copy removes what it wrote. The Trash, restore, mount and eject go through `gio`. As the default file manager, the folder default is set with `xdg-mime`, and `filemanager1.py` (Python with PyGObject, which Omarchy installs) answers `org.freedesktop.FileManager1` on the session bus; as the file chooser, `filechooser.py` answers the desktop portal's `org.freedesktop.impl.portal.FileChooser` the same way. Nothing needs root.
 
 Network shares, editing inside archives and file properties stay with Nautilus.

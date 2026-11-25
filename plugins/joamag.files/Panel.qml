@@ -155,9 +155,22 @@ Panel {
   property var lastTrashed: []
   property string lastError: ""
   property bool detached: false
-  // The default file manager setting files.sh last applied: on, off, or
-  // nothing yet this start.
-  property string defaultApplied: ""
+  // What files.sh last applied of each integration (Model.INTEGRATIONS):
+  // on, off, or nothing yet this start.
+  property var applied: ({})
+  // An app's Open or Save dialog on screen (Model.chooserRequest), the ones
+  // waiting for it, and what it borrowed from the widget: its tabs, given
+  // back when the dialog ends.
+  property var chooser: null
+  property var chooserQueue: []
+  property var lent: null
+  property int chooserFilter: 0
+  property string chooserName: ""
+  // Names already taken where the dialog saves: { paths, files }.
+  property var chooserClash: null
+  // The window hides and shows again around a dialog; that is not the user
+  // closing it.
+  property bool windowSwapping: false
   property var apps: []
   property string appsPath: ""
   // The action files.sh is running and what it was about.
@@ -175,6 +188,8 @@ Panel {
   readonly property int previewWidth: Model.previewWidth(setting("previewWidth", Model.PREVIEW_WIDTH))
   readonly property int windowPreviewWidth: Model.previewWidth(setting("windowPreviewWidth", Model.PREVIEW_WINDOW_WIDTH), Model.PREVIEW_WINDOW_WIDTH)
   readonly property bool defaultManager: setting("defaultFileManager", false) === true
+  readonly property bool fileChooser: setting("fileChooser", false) === true
+  readonly property bool launcherEntry: setting("launcherEntry", false) === true
   readonly property string scriptPath: String(Qt.resolvedUrl("files.sh")).replace(/^file:\/\//, "")
 
   readonly property var tab: tabs[Math.max(0, Math.min(tabs.length - 1, activeTab))]
@@ -239,8 +254,19 @@ Panel {
     if (renamePath !== "") return "rename"
     if (editingPath) return "path"
     if (filtering && filterFocused) return "filter"
+    if (chooser) return "chooser"
     if (inArchive) return "archive"
     return inTrash ? "trash" : "browse"
+  }
+
+  // What a dialog answers with as things stand, in words: the files
+  // picked, the folder, or the files saved.
+  readonly property string chooserSummary: {
+    if (!chooser) return ""
+    var paths = Model.chooserPaths(chooser, location, chooserName, picked(), chooserFilter)
+    if (chooser.kind === "savefiles") return Model.itemsLabel(chooser.files.length, chooser.files[0]) + " here"
+    if (chooser.kind === "folder") return paths.length > 0 ? Model.prettyPath(paths[0], home) : "Open a folder"
+    return paths.length > 0 ? paths.map(Model.baseName).join(", ") : "Nothing yet: pick a file"
   }
 
   readonly property bool vertical: bar ? bar.vertical : false
@@ -513,24 +539,31 @@ Panel {
   }
 
   // Folders from other apps, Show in folder and the file manager keys come
-  // here while the setting is on, and go back to the previous file manager
-  // when it is turned off. One run at a time; the last word wins.
-  function syncDefault() {
-    var want = defaultManager ? "on" : "off"
-    if (defaultProc.running || want === defaultApplied) return
-    defaultApplied = want
-    defaultProc.command = [root.scriptPath, "default", want]
-    defaultProc.running = true
+  // here while the default file manager setting is on, apps' Open and Save
+  // dialogs while the file chooser one is, and the window is in the app
+  // launcher while that one is; each goes back when turned off. One run of
+  // files.sh at a time; the last word wins.
+  function syncIntegrations() {
+    if (integrationProc.running) return
+    var next = Model.nextIntegration({ "default": defaultManager, chooser: fileChooser, launcher: launcherEntry }, applied)
+    if (!next) return
+    var done = Object.assign({}, applied)
+    done[next.name] = next.state
+    applied = done
+    integrationProc.command = [root.scriptPath, next.name, next.state]
+    integrationProc.running = true
   }
 
   function saveTabs() {
+    // A dialog's own tab is never saved; the widget's come back after it.
+    if (chooser) return
     tabsDirty = false
     persistSettings({ tabs: Model.serializeTabs(tabs), activeTab: activeTab, recentFolders: visited })
   }
 
   // The saved tabs come back on start, and when shell.json is edited by hand.
   function loadTabs() {
-    if (tabsDirty) return
+    if (tabsDirty || chooser) return
     visited = Model.addVisited(setting("recentFolders", []), "", Model.VISITED_MAX)
     var saved = Model.parseTabs(setting("tabs", []), home)
     if (JSON.stringify(Model.serializeTabs(saved)) === JSON.stringify(Model.serializeTabs(tabs)) && Number(setting("activeTab", 0)) === activeTab) return
@@ -762,6 +795,7 @@ Panel {
     else if (clipboard) clearClipboard()
     else if (selected.length > 0) selected = []
     else if (filtering || query !== "") clearFilter()
+    else if (chooser) cancelChooser()
     else if (!detached) root.close()
   }
 
@@ -769,6 +803,10 @@ Panel {
 
   function openEntry(entry) {
     if (!entry) return
+    if (chooser && !entry.dir) {
+      pickForChooser(entry)
+      return
+    }
     if (entry.trashName) {
       restore([entry])
       return
@@ -803,6 +841,10 @@ Panel {
   function openPicked(chosen) {
     var list = chosen || picked()
     if (list.length === 0) return
+    if (chooser && !list[0].dir) {
+      pickForChooser(list[0])
+      return
+    }
     if (list[0].trashName) {
       restore(list)
       return
@@ -1874,6 +1916,156 @@ Panel {
     if (!detached) open()
   }
 
+  // ---- File chooser -----------------------------------------------------
+
+  // An app's Open or Save dialog from filechooser.py: shown now, or after
+  // the one on screen. "ok" tells the service the widget took it.
+  function chooseFor(id, raw) {
+    var parsed
+    try {
+      parsed = JSON.parse(raw)
+    } catch (e) {
+      return "error: " + e.message
+    }
+    var request = Model.chooserRequest(parsed, home)
+    request.id = id
+    if (chooser) chooserQueue = chooserQueue.concat([request])
+    else startChooser(request)
+    return "ok"
+  }
+
+  // The dialog borrows the widget's view: a tab of its own at the folder
+  // the app suggests, in the window floated over the app. The widget's tabs
+  // and window come back when it ends.
+  function startChooser(request) {
+    if (!lent) lent = { tabs: tabs, activeTab: activeTab, dirty: tabsDirty }
+    if (opened) root.close()
+    var shown = view
+    chooser = request
+    chooserFilter = request.filter
+    chooserName = request.name
+    chooserClash = null
+    lastError = ""
+    tabs = [Model.newTab(request.folder, shown)]
+    activeTab = 0
+    tabsDirty = false
+    resetFolderState()
+    refreshLocation()
+    windowBuilt = true
+    remapWindow(true)
+  }
+
+  // The window shows again under its new title, so Hyprland floats it as a
+  // dialog or tiles it as the widget's window; or it goes.
+  function remapWindow(show) {
+    windowSwapping = true
+    window.visible = false
+    Qt.callLater(function() {
+      root.windowSwapping = false
+      if (!show) return
+      window.visible = true
+      root.focusRequested(root.chooser && root.chooser.kind === "save" ? "chooser" : "view")
+    })
+  }
+
+  // The next dialog waiting, or the widget as it was.
+  function endChooser() {
+    chooser = null
+    chooserClash = null
+    lastError = ""
+    if (chooserQueue.length > 0) {
+      var next = chooserQueue[0]
+      chooserQueue = chooserQueue.slice(1)
+      startChooser(next)
+      return
+    }
+    var was = lent
+    lent = null
+    if (was) {
+      tabs = was.tabs
+      activeTab = was.activeTab
+      tabsDirty = was.dirty
+    }
+    resetFolderState()
+    refreshLocation()
+    remapWindow(detached)
+  }
+
+  // The answer goes back to the app through files.sh: the paths, with the
+  // filter on screen, or nothing when cancelled.
+  function answerChooser(response, paths) {
+    if (!chooser) return
+    var filter = response === 0 && chooser.filters.length > 0 ? chooserFilter : -1
+    Util.execArgv([root.scriptPath, "chosen", chooser.id, String(response), String(filter)].concat(paths || []))
+    endChooser()
+  }
+
+  function cancelChooser() {
+    answerChooser(1, [])
+  }
+
+  // The app closed its dialog: it ends without an answer.
+  function closeChooser(id) {
+    chooserQueue = chooserQueue.filter(function(r) { return r.id !== id })
+    if (chooser && chooser.id === id) endChooser()
+  }
+
+  // Save, Open or Select: the dialog answers with LIST (or what is picked),
+  // once it can; a name already taken asks first.
+  function acceptChooser(list) {
+    if (!chooser) return
+    var paths = Model.chooserPaths(chooser, location, chooserName, list || picked(), chooserFilter)
+    var problem = Model.chooserProblem(chooser, location, chooserName, paths)
+    if (problem !== "") {
+      showToast(problem)
+      return
+    }
+    if (chooser.kind === "save" || chooser.kind === "savefiles") {
+      var clash = Model.chooserClash(folderEntries, paths)
+      if (clash.folders.length > 0) {
+        showToast(clash.folders[0] + " is a folder here")
+        return
+      }
+      if (clash.files.length > 0) {
+        chooserClash = { paths: paths, files: clash.files }
+        return
+      }
+    }
+    answerChooser(0, paths)
+  }
+
+  // A name taken where the dialog saves: back to the dialog (skip), keep
+  // both (the new ones get free names) or replace.
+  function resolveChooserClash(how) {
+    var clash = chooserClash
+    chooserClash = null
+    if (!clash || how === "skip") return
+    answerChooser(0, how === "keep" ? Model.chooserKeepBoth(folderEntries, clash.paths) : clash.paths)
+  }
+
+  // Enter or a double click on a file: in a Save dialog its name is the one
+  // to save as; otherwise it is what the dialog answers with, along with
+  // the rest of the selection when it is part of it.
+  function pickForChooser(entry) {
+    if (chooser.kind === "save") {
+      chooserName = entry.name
+      focusRequested("chooser")
+    } else if (Model.chooserPicks(chooser, chooserFilter, entry)) {
+      acceptChooser(Model.entriesFor(picked(), entry))
+    } else {
+      showToast(chooser.kind === "folder" ? "Pick a folder" : "This dialog does not take " + entry.name)
+    }
+  }
+
+  function nextChooserFilter() {
+    if (chooser && chooser.filters.length > 0) chooserFilter = (chooserFilter + 1) % chooser.filters.length
+  }
+
+  // Files the dialog cannot take, faded the way hidden ones are.
+  function chooserDims(entry) {
+    return chooser !== null && !entry.dir && !Model.chooserPicks(chooser, chooserFilter, entry)
+  }
+
   // ---- Keyboard ---------------------------------------------------------
 
   // The panel keys of the other widgets (j/k, h/l, Enter, Esc, g, the hint
@@ -1888,6 +2080,11 @@ Panel {
     var columns = view === "grid" ? Math.max(1, gridColumns) : 1
 
     if (finding && findKey(event)) return true
+    // In a Save dialog, Tab goes to the name.
+    if (chooser && key === Qt.Key_Tab && !ctrl && chooser.kind === "save") {
+      focusRequested("chooser")
+      return true
+    }
     if (keysOpen) {
       if (key === Qt.Key_Escape || text === "?" || key === Qt.Key_Return) keysOpen = false
       return true
@@ -1923,6 +2120,7 @@ Panel {
       case Qt.Key_PageUp: switchTab(activeTab - 1); return true
       case Qt.Key_L: startPathEdit(); return true
       case Qt.Key_P: openJump(); return true
+      case Qt.Key_S: if (chooser) acceptChooser(null); return chooser !== null
       case Qt.Key_Space: toggleCursorSelection(); return true
       case Qt.Key_H: toggleHidden(); return true
       case Qt.Key_F: startFilter(); return true
@@ -2003,7 +2201,7 @@ Panel {
     case "e": startPathEdit(); return true
     case "i": togglePreview(); return true
     case ".": toggleHidden(); return true
-    case "w": toggleDetached(); return true
+    case "w": if (!chooser) toggleDetached(); return true
     case "v": setView(Model.nextView(view)); return true
     case "s": sortBy(Model.cycleSortKey(sortKey)); return true
     case "t": newTab(""); return true
@@ -2046,23 +2244,40 @@ Panel {
     }
     function popOut(): void { root.popOut() }
     function dock(): void { root.dock() }
+    // From the app launcher: the window, shown or brought to the front.
+    function window(): void {
+      if (root.detached || root.chooser) root.raiseWindow()
+      else root.popOut()
+    }
+    // An app's Open or Save dialog from filechooser.py, and the app closing
+    // it; "ok" once the widget took it.
+    function choose(id: string, request: string): string { return root.chooseFor(id, request) }
+    function chooserClose(id: string): void { root.closeChooser(id) }
     function version(): string { return "0.1.0" }
   }
 
   Component.onCompleted: {
     loadTabs()
     refreshPlaces()
-    // Applied again at every start, so the FileManager1 service runs from
-    // then and the setting wins over shell.json edited by hand; off with
-    // nothing set up changes nothing.
-    syncDefault()
+    // Applied again at every start, so the services run from then and the
+    // settings win over shell.json edited by hand; off with nothing set up
+    // changes nothing.
+    syncIntegrations()
   }
 
   onSettingsChanged: loadTabs()
 
-  onDefaultManagerChanged: syncDefault()
+  onDefaultManagerChanged: syncIntegrations()
+  onFileChooserChanged: syncIntegrations()
+  onLauncherEntryChanged: syncIntegrations()
 
   onOpenedChanged: {
+    // A dialog has the view: it comes to the front instead.
+    if (opened && chooser) {
+      root.close()
+      raiseWindow()
+      return
+    }
     if (opened) {
       if (detached) {
         // The window and the popup never show at once.
@@ -2340,7 +2555,7 @@ Panel {
   }
 
   Process {
-    id: defaultProc
+    id: integrationProc
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {
@@ -2350,8 +2565,8 @@ Panel {
         root.showToast(root.lastError)
       }
     }
-    // The setting may have changed again while this ran.
-    onExited: root.syncDefault()
+    // The next integration, or a setting changed again while this ran.
+    onExited: root.syncIntegrations()
   }
 
   Process {
@@ -2431,15 +2646,22 @@ Panel {
   FloatingWindow {
     id: window
     visible: false
-    title: "Files · " + root.locationLabel
+    // Under a dialog's title, the File chooser setting's rule has Hyprland
+    // float it over the app that asked.
+    title: root.chooser ? "Files chooser · " + root.chooser.title + (root.chooser.app ? " · " + root.chooser.app : "") : "Files · " + root.locationLabel
     color: Color.background
     implicitWidth: 1120
     implicitHeight: 700
     minimumSize: Qt.size(640, 420)
 
-    // Closed from Hyprland rather than docked: the tabs stay for next time.
+    // Closed from Hyprland rather than docked: the tabs stay for next time;
+    // a dialog on screen is cancelled.
     onVisibleChanged: {
-      if (visible) return
+      if (visible || root.windowSwapping) return
+      if (root.chooser) {
+        root.cancelChooser()
+        return
+      }
       root.detached = false
       if (root.tabsDirty) root.saveTabs()
     }
@@ -2456,7 +2678,7 @@ Panel {
           windowed: true
           foreground: Color.foreground
           background: Color.background
-          active: root.detached
+          active: root.detached || root.chooser !== null
           focus: true
         }
       }
@@ -2473,7 +2695,7 @@ Panel {
     required property color background
     required property bool active
 
-    readonly property bool typing: pathField.activeFocus || filterField.activeFocus || root.renamePath !== "" || root.prompt !== null || root.jumpOpen
+    readonly property bool typing: pathField.activeFocus || filterField.activeFocus || chooserField.activeFocus || root.renamePath !== "" || root.prompt !== null || root.jumpOpen
     readonly property real rowHeight: Style.space(26)
     // The widest the sidebar and the preview may be on screen, so the files
     // always keep some room.
@@ -2487,7 +2709,7 @@ Panel {
         else event.accepted = event.key !== Qt.Key_Tab
         return
       }
-      if (root.conflictJob) {
+      if (root.conflictJob || root.chooserClash) {
         if (conflictCard.handleKey(event)) event.accepted = true
         return
       }
@@ -2508,6 +2730,12 @@ Panel {
           pathField.text = root.inFolder ? Model.prettyPath(root.location, root.home) : "~"
           pathField.forceActiveFocus()
           pathField.selectAll()
+        } else if (what === "chooser") {
+          // The name with its stem picked, ready to be typed over.
+          chooserField.text = root.chooserName
+          chooserField.forceActiveFocus()
+          var dot = root.chooserName.lastIndexOf(".")
+          chooserField.select(0, dot > 0 ? dot : root.chooserName.length)
         } else if (what === "prompt") promptCard.focusField()
         else if (what === "jump") jumpCard.focusField()
         else if (what === "view") viewRoot.forceActiveFocus()
@@ -2678,6 +2906,7 @@ Panel {
           }
           IconButton { glyph: "󰋽"; tip: "Preview pane (i)"; selected: root.showPreview; onClicked: root.togglePreview() }
           IconButton {
+            visible: !root.chooser
             glyph: viewRoot.windowed ? "󰘕" : "󰘖"
             tip: viewRoot.windowed ? "Dock back into the bar (w)" : "Pop out into a window (w)"
             onClicked: root.toggleDetached()
@@ -2977,6 +3206,7 @@ Panel {
 
           Row {
             id: actionRow
+            visible: root.chooser === null
             width: parent.width
             spacing: Style.space(6)
 
@@ -3021,6 +3251,130 @@ Panel {
                 enabled: modelData.id !== "paste" || root.clipboard !== null
                 opacity: enabled ? 1 : 0.4
                 onClicked: root.run(modelData.id, null)
+              }
+            }
+          }
+
+          // An app's Open or Save dialog: the places saved in lately, then
+          // the name (or what is picked), the file type, Cancel and the
+          // app's own word for going ahead.
+          Column {
+            id: chooserBand
+            visible: root.chooser !== null
+            width: parent.width
+            spacing: Style.space(6)
+
+            Flow {
+              width: parent.width
+              spacing: Style.space(6)
+
+              Repeater {
+                model: chooserBand.visible ? Model.chooserPlaces(root.location, root.visited, root.home) : []
+
+                Button {
+                  required property string modelData
+                  height: Style.spacing.controlHeight
+                  iconText: Model.placeIcon(modelData, root.home, root.places, root.drives)
+                  iconSize: Style.font.body
+                  text: Model.placeLabel(modelData, root.home, root.places, root.drives)
+                  fontSize: Style.font.bodySmall
+                  foreground: viewRoot.foreground
+                  fontFamily: root.fontFamily
+                  horizontalPadding: Style.spacing.sm
+                  bordered: true
+                  hasCursor: modelData === root.location
+                  onClicked: root.go(modelData)
+                }
+              }
+            }
+
+            Row {
+              id: chooserRow
+              width: parent.width
+              spacing: Style.space(6)
+
+              readonly property real buttonWidth: Style.space(96)
+              readonly property real fieldWidth: width - chooserLabel.width - (filterButton.visible ? filterButton.width + spacing : 0) - (buttonWidth + spacing) * 2 - spacing
+
+              Text {
+                id: chooserLabel
+                anchors.verticalCenter: parent.verticalCenter
+                textFormat: Text.PlainText
+                text: !root.chooser ? "" : root.chooser.kind === "save" ? "Name" : root.chooser.kind === "folder" ? "Folder" : root.chooser.kind === "savefiles" ? "Saving" : "Picked"
+                color: viewRoot.foreground
+                opacity: 0.6
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.bodySmall
+              }
+
+              TextField {
+                id: chooserField
+                visible: root.chooser !== null && root.chooser.kind === "save"
+                width: chooserRow.fieldWidth
+                height: Style.spacing.controlHeight
+                foreground: viewRoot.foreground
+                font.family: root.fontFamily
+                text: root.chooserName
+                onTextChanged: if (text !== root.chooserName) root.chooserName = text
+                Keys.onPressed: function(event) {
+                  if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
+                    root.acceptChooser(null)
+                    event.accepted = true
+                  } else if (event.key === Qt.Key_Escape) {
+                    root.cancelChooser()
+                    event.accepted = true
+                  } else if (event.key === Qt.Key_Tab || event.key === Qt.Key_Down) {
+                    viewRoot.forceActiveFocus()
+                    event.accepted = true
+                  }
+                }
+              }
+
+              Text {
+                visible: !chooserField.visible
+                width: chooserRow.fieldWidth
+                anchors.verticalCenter: parent.verticalCenter
+                textFormat: Text.PlainText
+                text: root.chooserSummary
+                color: viewRoot.foreground
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.bodySmall
+                elide: Text.ElideMiddle
+              }
+
+              Button {
+                id: filterButton
+                visible: root.chooser !== null && root.chooser.filters.length > 0
+                width: Style.space(150)
+                height: Style.spacing.controlHeight
+                text: visible ? root.chooser.filters[root.chooserFilter].label + " ▾" : ""
+                fontSize: Style.font.bodySmall
+                foreground: viewRoot.foreground
+                fontFamily: root.fontFamily
+                bordered: true
+                onClicked: root.nextChooserFilter()
+              }
+
+              Button {
+                width: chooserRow.buttonWidth
+                height: Style.spacing.controlHeight
+                text: "Cancel"
+                fontSize: Style.font.bodySmall
+                foreground: viewRoot.foreground
+                fontFamily: root.fontFamily
+                bordered: true
+                onClicked: root.cancelChooser()
+              }
+
+              Button {
+                width: chooserRow.buttonWidth
+                height: Style.spacing.controlHeight
+                text: root.chooser ? root.chooser.accept : ""
+                fontSize: Style.font.bodySmall
+                foreground: Color.accent
+                fontFamily: root.fontFamily
+                bordered: true
+                onClicked: root.acceptChooser(null)
               }
             }
           }
@@ -3673,7 +4027,7 @@ Panel {
       anchors.leftMargin: Style.space(8)
       anchors.rightMargin: Style.space(8)
       spacing: Style.space(10)
-      opacity: row.isCut ? 0.45 : (row.entry.hidden ? 0.7 : 1)
+      opacity: (row.isCut ? 0.45 : (row.entry.hidden ? 0.7 : 1)) * (root.chooserDims(row.entry) ? 0.4 : 1)
 
       // The icon and the name as a pair, the gap between them the one
       // every icon has.
@@ -3929,7 +4283,7 @@ Panel {
           anchors.fill: parent
           anchors.margins: Style.space(8)
           spacing: Style.space(4)
-          opacity: tile.isCut ? 0.45 : (tile.entry.hidden ? 0.7 : 1)
+          opacity: (tile.isCut ? 0.45 : (tile.entry.hidden ? 0.7 : 1)) * (root.chooserDims(tile.entry) ? 0.4 : 1)
 
           Item {
             width: parent.width
@@ -4291,7 +4645,7 @@ Panel {
                 anchors.leftMargin: Style.space(6)
                 anchors.rightMargin: Style.space(6)
                 spacing: root.iconGap
-                opacity: cell.entry.hidden ? 0.7 : 1
+                opacity: (cell.entry.hidden ? 0.7 : 1) * (root.chooserDims(cell.entry) ? 0.4 : 1)
 
                 Text {
                   anchors.verticalCenter: parent.verticalCenter
@@ -6762,14 +7116,14 @@ Panel {
     id: conflict
     required property color foreground
     required property color background
-    visible: root.conflictJob !== null
+    visible: root.conflictJob !== null || root.chooserClash !== null
     z: 15
 
     property int choice: 1
     property bool all: false
 
     readonly property var choices: [
-      { how: "skip", label: "Skip" },
+      { how: "skip", label: root.chooserClash ? "Back" : "Skip" },
       { how: "keep", label: "Keep both" },
       { how: "replace", label: "Replace" }
     ]
@@ -6779,11 +7133,19 @@ Panel {
       var rest = all
       choice = 1
       all = false
-      root.resolveConflict(how, rest)
+      if (root.chooserClash) root.resolveChooserClash(how)
+      else root.resolveConflict(how, rest)
+    }
+
+    // Esc or a click beside the card: a dialog goes back to its name, a
+    // copy stops.
+    function back() {
+      if (root.chooserClash) root.chooserClash = null
+      else root.cancelConflicts()
     }
 
     function handleKey(event) {
-      if (event.key === Qt.Key_Escape) root.cancelConflicts()
+      if (event.key === Qt.Key_Escape) back()
       else if (event.key === Qt.Key_Left || event.text === "h") choice = Math.max(0, choice - 1)
       else if (event.key === Qt.Key_Right || event.text === "l" || event.key === Qt.Key_Tab) choice = Math.min(2, choice + 1)
       else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) decide(choice)
@@ -6797,7 +7159,7 @@ Panel {
     Rectangle {
       anchors.fill: parent
       color: Qt.rgba(conflict.background.r, conflict.background.g, conflict.background.b, 0.7)
-      MouseArea { anchors.fill: parent; onClicked: root.cancelConflicts() }
+      MouseArea { anchors.fill: parent; onClicked: conflict.back() }
     }
 
     BorderSurface {
@@ -6821,7 +7183,8 @@ Panel {
         Text {
           width: parent.width
           textFormat: Text.PlainText
-          text: root.conflictJob ? root.conflictJob.name + " already exists in " + Model.placeLabel(root.transferJob.dest, root.home, root.places, root.drives) : ""
+          text: root.chooserClash ? Model.itemsLabel(root.chooserClash.files.length, root.chooserClash.files[0]) + (root.chooserClash.files.length === 1 ? " already exists in " : " already exist in ") + Model.placeLabel(root.location, root.home, root.places, root.drives)
+            : root.conflictJob ? root.conflictJob.name + " already exists in " + Model.placeLabel(root.transferJob.dest, root.home, root.places, root.drives) : ""
           color: conflict.foreground
           font.family: root.fontFamily
           font.pixelSize: Style.font.title
@@ -6831,7 +7194,8 @@ Panel {
         Text {
           width: parent.width
           textFormat: Text.PlainText
-          text: "Skip this one, keep both (the new one is renamed), or replace it (the old one goes to the Trash)."
+          text: root.chooserClash ? "Go back, keep both (the new one gets another name), or replace what is there."
+            : "Skip this one, keep both (the new one is renamed), or replace it (the old one goes to the Trash)."
           color: conflict.foreground
           opacity: 0.6
           font.family: root.fontFamily
@@ -6840,6 +7204,7 @@ Panel {
         }
 
         Item {
+          visible: !root.chooserClash
           width: allRow.implicitWidth
           height: allRow.implicitHeight
 
